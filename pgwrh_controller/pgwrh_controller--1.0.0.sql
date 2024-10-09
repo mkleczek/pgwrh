@@ -296,7 +296,9 @@ Each member sees all shards with the following information for each shard:
 -------- metadata
 
 -- 
-CREATE OR REPLACE FUNCTION sync_publications() RETURNS void LANGUAGE plpgsql AS
+CREATE OR REPLACE FUNCTION sync_publications() RETURNS void
+SET SEARCH_PATH FROM CURRENT
+LANGUAGE plpgsql AS
 $$DECLARE
     r record;
 BEGIN
@@ -315,13 +317,13 @@ BEGIN
     ON CONFLICT DO NOTHING;
     FOR r IN
         WITH deleted AS (
-            DELETE FROM pg_wrh_publication WHERE NOT EXISTS (
+            DELETE FROM pg_wrh_publication p WHERE NOT EXISTS (
                 SELECT 1 FROM pg_partition_ancestors(p.published_shard) a JOIN sharded_table st ON a.oid = to_regclass(st)
             )
             RETURNING *
         )
         SELECT
-            format('DROP PUBLICATION %I CASCADE', p.publication_name) stmt
+            format('DROP PUBLICATION %I CASCADE', d.publication_name) stmt
         FROM deleted d JOIN pg_publication p ON d.publication_name = p.pubname
     LOOP
         EXECUTE r.stmt;
