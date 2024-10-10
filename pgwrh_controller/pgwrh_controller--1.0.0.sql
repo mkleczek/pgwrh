@@ -1,5 +1,7 @@
 GRANT USAGE ON SCHEMA @extschema@ TO PUBLIC;
 
+ALTER DEFAULT PRIVILEGES GRANT EXECUTE ON ROUTINES TO PUBLIC;
+
 CREATE TYPE config_version AS ENUM ('FLIP', 'FLOP');
 
 CREATE OR REPLACE FUNCTION next_version(version config_version) RETURNS config_version IMMUTABLE LANGUAGE sql AS
@@ -49,6 +51,33 @@ replicas installed and configured successfully. The shards assigned to replicas 
 Version marked as "pending" (pending = true) is a configuration version that is under installaction/configuration by the replicas.
 
 A replica keeps all shards from "ready" configuration even if a shard might be no longer assigned to it in "pending" configuration version.';
+
+CREATE OR REPLACE FUNCTION next_pending_version(group_id text) RETURNS config_version LANGUAGE sql AS
+$$
+    WITH v AS (
+        SELECT group_id, coalesce(pending.version, next_version(ready.version), 'FLIP') AS version, TRUE
+        FROM
+            replication_group g
+                LEFT JOIN replication_group_config pending ON g.replication_group_id = pending.replication_group_id AND pending.pending
+                LEFT JOIN replication_group_config ready ON g.replication_group_id = ready.replication_group_id AND NOT ready.pending
+        WHERE
+            g.replication_group_id = group_id
+    ),
+    _ AS (
+        INSERT INTO replication_group_config (replication_group_id, version, pending)
+        SELECT * FROM v
+        ON CONFLICT DO NOTHING
+    )
+    SELECT version FROM v
+$$;
+COMMENT ON FUNCTION next_pending_version(group_id text) IS
+'Inserts next pending version into replication_group_config and returns it.';
+
+CREATE OR REPLACE FUNCTION next_pending_version_trigger() RETURNS TRIGGER LANGUAGE plpgsql AS
+$$BEGIN
+    NEW.version := @extschema@.next_pending_version(NEW.replication_group_id);
+    RETURN NEW;
+END$$;
 
 CREATE TABLE IF NOT EXISTS replication_group_member (
     replication_group_id text NOT NULL REFERENCES replication_group(replication_group_id),
@@ -104,6 +133,23 @@ SELECT pg_catalog.pg_extension_config_dump('shard_host_weight', '');
 COMMENT ON TABLE shard_host_weight IS
 'Weight of a shard host in a specific configuration version';
 
+CREATE OR REPLACE TRIGGER shard_host_weight_version BEFORE INSERT ON shard_host_weight
+FOR EACH ROW EXECUTE FUNCTION next_pending_version_trigger();
+
+CREATE OR REPLACE FUNCTION add_shard_host(_replication_group_id text, _host_id text, _host_name text, _port int, _member_role regrole DEFAULT NULL, _availability_zone text DEFAULT 'default', _weight int DEFAULT 100) RETURNS void LANGUAGE sql AS
+$$
+    WITH m AS (
+        INSERT INTO replication_group_member (replication_group_id, host_id, member_role, availability_zone)
+        VALUES (_replication_group_id, _host_id, coalesce(_member_role::text, _host_id::regrole::text), _availability_zone)
+    ),
+    h AS (
+        INSERT INTO shard_host (replication_group_id, host_id, host_name, port)
+        VALUES (_replication_group_id, _host_id, _host_name, _port)
+    )
+    INSERT INTO shard_host_weight (replication_group_id, host_id, weight)
+    VALUES (_replication_group_id, _host_id, _weight)
+$$;
+
 CREATE TABLE IF NOT EXISTS sharded_table (
     replication_group_id text NOT NULL,
     sharded_table_schema text NOT NULL,
@@ -116,16 +162,22 @@ CREATE TABLE IF NOT EXISTS sharded_table (
 );
 SELECT pg_catalog.pg_extension_config_dump('sharded_table', '');
 
+CREATE OR REPLACE TRIGGER sharded_table_version BEFORE INSERT ON sharded_table
+FOR EACH ROW EXECUTE FUNCTION next_pending_version_trigger();
+
 CREATE TABLE IF NOT EXISTS index_template (
     replication_group_id text NOT NULL,
+    version config_version,
     schema_name text NOT NULL,
     table_name text NOT NULL,
     index_name name NOT NULL,
     index_template text NOT NULL,
 
-    PRIMARY KEY (replication_group_id, schema_name, table_name, index_name)
+    PRIMARY KEY (replication_group_id, schema_name, table_name, index_name),
+    FOREIGN KEY (replication_group_id, version) REFERENCES replication_group_config(replication_group_id, version)
 );
-GRANT SELECT ON index_template TO PUBLIC;
+SELECT pg_catalog.pg_extension_config_dump('index_template', '');
+--GRANT SELECT ON index_template TO PUBLIC;
 
 CREATE TABLE IF NOT EXISTS pg_wrh_publication (
     publication_name text NOT NULL PRIMARY KEY,
@@ -152,6 +204,7 @@ RETURNS TABLE (
     min_pending_score double precision,
     ready_score double precision)
 STABLE
+SECURITY DEFINER -- TODO try to somehow make it usable in views without this
 LANGUAGE sql AS
 $$WITH shv AS (
     SELECT
@@ -285,6 +338,9 @@ FROM
             WHERE host_id <> m.host_id
         ) rem
 WHERE member_role = CURRENT_ROLE;
+
+GRANT SELECT ON shard_assignment TO PUBLIC;
+
 COMMENT ON VIEW shard_assignment IS
 'Main view implementing shard assignment logic.
 
@@ -331,9 +387,9 @@ BEGIN
     FOR r IN
         SELECT format('CREATE PUBLICATION %I FOR TABLE %s WITH ( publish = %L )',
                         p.publication_name,
-                        p.published_shard,
+                        p.published_shard::regclass,
                         'insert,update,delete') stmt
-        FROM pg_wrh_publication p
+        FROM pg_wrh_publication p JOIN pg_class ON published_shard = oid
         WHERE NOT EXISTS (
                 SELECT 1 FROM pg_publication WHERE pubname = p.publication_name
             )
@@ -347,6 +403,7 @@ $$;
 CREATE OR REPLACE FUNCTION sync_publications_trigger() RETURNS TRIGGER LANGUAGE plpgsql AS
 $$BEGIN
     PERFORM sync_publications();
+    RETURN NULL;
 END$$;
 
 -- CREATE OR REPLACE FUNCTION sync_publications_event_trigger RETURNS event_trigger LANGUAGE pgsql AS
@@ -354,13 +411,12 @@ END$$;
 --     PERFORM sync_publications();
 -- END$$;
 
--- CREATE OR REPLACE TRIGGER sync_publications AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON sharded_table
--- FOR EACH STATEMENT EXECUTE FUNCTION sync_publications_trigger();
+CREATE OR REPLACE TRIGGER sync_publications AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON sharded_table
+FOR EACH STATEMENT EXECUTE FUNCTION sync_publications_trigger();
 
 -- CREATE EVENT TRIGGER sync_publications ON ddl_command_end
 -- WHEN TAG IN ('CREATE TABLE', 'ALTER TABLE', 'DROP TABLE')
 -- EXECUTE FUNCTION sync_publications_event_trigger();
-
 
 -- -- Impl helper
 -- CREATE OR REPLACE FUNTION version_snapshot(group_id text) RETURNS config_version LANGUAGE sql AS
@@ -446,3 +502,63 @@ END$$;
 -- FROM
 --     config
 -- $$;
+
+-- CREATE OR REPLACE VIEW shard_structure AS
+-- WITH stc AS (
+--     SELECT
+--         st.replication_group_id,
+--         c.oid::regclass 
+--     FROM
+--         pg_class c
+--             JOIN pg_namespace n ON relnamespace = n.oid
+--             JOIN sharded_table st ON (nspname, relname) = (sharded_table_schema, sharded_table_name)
+-- ),
+-- roots AS (
+--     SELECT *
+--     FROM stc r
+--     WHERE NOT EXISTS (SELECT 1 FROM stc WHERE replication_group_id = r.replication_group_id AND oid <> r.oid AND oid = ANY (SELECT * FROM pg_partition_ancestors(r.oid)))
+-- )
+-- SELECT
+--     replication_group_id,
+--     n.nspname AS schema_name,
+--     c.relname AS table_name,
+--     level,
+--     format('CREATE TABLE IF NOT EXISTS %I.%I %s%s',
+--         n.nspname, c.relname,
+--         CASE WHEN level = 0
+--             THEN
+--                 '(' ||
+--                     (
+--                         SELECT string_agg(format('%I %s', attname, atttypid::regtype), ',')
+--                         FROM pg_attribute WHERE attrelid = t.relid AND attnum >= 1
+--                     ) ||
+--                     coalesce(
+--                         ', ' || (SELECT string_agg(pg_get_constraintdef(c.oid), ', ') FROM pg_constraint c WHERE conrelid = t.relid AND conislocal),
+--                         ''
+--                     ) ||
+--                 ')'
+--             ELSE
+--                 format('PARTITION OF %I.%I%s %s',
+--                     pn.nspname, p.relname,
+--                     coalesce(
+--                         ' (' || (SELECT string_agg(pg_get_constraintdef(c.oid), ', ') FROM pg_constraint c WHERE conrelid = t.relid AND conislocal) || ')',
+--                         ''
+--                     ),
+--                     pg_get_expr(c.relpartbound, c.oid))
+--         END,
+--         CASE WHEN t.isleaf
+--             THEN
+--                 ''
+--             ELSE
+--                 ' PARTITION BY ' || pg_get_partkeydef(t.relid)
+--         END
+--     ) AS create_table
+-- FROM
+--     roots r, pg_partition_tree(oid) t
+--         JOIN replication_group_member m USING (replication_group_id)
+--         JOIN pg_class c ON t.relid = c.oid JOIN pg_namespace n ON c.relnamespace = n.oid
+--         LEFT JOIN pg_class p ON t.parentrelid = p.oid LEFT JOIN pg_namespace pn ON p.relnamespace = pn.oid
+-- WHERE
+--     member_role = CURRENT_ROLE;
+
+-- GRANT SELECT ON shard_structure TO PUBLIC;
