@@ -220,7 +220,7 @@ $$WITH shv AS (
     SELECT
         host_id,
         max(weight) AS max_pending_weight,
-        least(min(weight), coalesce(min(weight) FILTER ( WHERE NOT pending ), 0)) AS min_pending_weight,
+        min(weight) AS min_pending_weight,
         coalesce(min(weight) FILTER ( WHERE NOT pending ), 0) AS ready_weight
     FROM
         shard_host_weight JOIN replication_group_config USING (replication_group_id, version)
