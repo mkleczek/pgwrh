@@ -4,7 +4,10 @@ ALTER DEFAULT PRIVILEGES GRANT EXECUTE ON ROUTINES TO PUBLIC;
 
 CREATE TYPE config_version AS ENUM ('FLIP', 'FLOP');
 
-CREATE OR REPLACE FUNCTION next_version(version config_version) RETURNS config_version IMMUTABLE LANGUAGE sql AS
+CREATE OR REPLACE FUNCTION next_version(version config_version) RETURNS config_version
+IMMUTABLE
+SET SEARCH_PATH FROM CURRENT
+LANGUAGE sql AS
 $$SELECT CASE version WHEN 'FLIP' THEN 'FLOP' ELSE 'FLIP' END::config_version$$;
 
 CREATE TABLE IF NOT EXISTS replication_group (
@@ -52,7 +55,9 @@ Version marked as "pending" (pending = true) is a configuration version that is 
 
 A replica keeps all shards from "ready" configuration even if a shard might be no longer assigned to it in "pending" configuration version.';
 
-CREATE OR REPLACE FUNCTION next_pending_version(group_id text) RETURNS config_version LANGUAGE sql AS
+CREATE OR REPLACE FUNCTION next_pending_version(group_id text) RETURNS config_version
+SET SEARCH_PATH FROM CURRENT
+LANGUAGE sql AS
 $$
     WITH v AS (
         SELECT group_id, coalesce(pending.version, next_version(ready.version), 'FLIP') AS version, TRUE
@@ -73,7 +78,9 @@ $$;
 COMMENT ON FUNCTION next_pending_version(group_id text) IS
 'Inserts next pending version into replication_group_config and returns it.';
 
-CREATE OR REPLACE FUNCTION next_pending_version_trigger() RETURNS TRIGGER LANGUAGE plpgsql AS
+CREATE OR REPLACE FUNCTION next_pending_version_trigger() RETURNS TRIGGER
+SET SEARCH_PATH FROM CURRENT
+LANGUAGE plpgsql AS
 $$BEGIN
     NEW.version := @extschema@.next_pending_version(NEW.replication_group_id);
     RETURN NEW;
@@ -136,7 +143,9 @@ COMMENT ON TABLE shard_host_weight IS
 CREATE OR REPLACE TRIGGER shard_host_weight_version BEFORE INSERT ON shard_host_weight
 FOR EACH ROW EXECUTE FUNCTION next_pending_version_trigger();
 
-CREATE OR REPLACE FUNCTION add_shard_host(_replication_group_id text, _host_id text, _host_name text, _port int, _member_role regrole DEFAULT NULL, _availability_zone text DEFAULT 'default', _weight int DEFAULT 100) RETURNS void LANGUAGE sql AS
+CREATE OR REPLACE FUNCTION add_shard_host(_replication_group_id text, _host_id text, _host_name text, _port int, _member_role regrole DEFAULT NULL, _availability_zone text DEFAULT 'default', _weight int DEFAULT 100) RETURNS void
+SET SEARCH_PATH FROM CURRENT
+LANGUAGE sql AS
 $$
     WITH m AS (
         INSERT INTO replication_group_member (replication_group_id, host_id, member_role, availability_zone)
@@ -184,7 +193,7 @@ CREATE TABLE IF NOT EXISTS pg_wrh_publication (
     published_shard oid NOT NULL UNIQUE
 );
 
-CREATE OR REPLACE FUNCTION to_regclass(st sharded_table) RETURNS regclass STABLE LANGUAGE sql AS
+CREATE OR REPLACE FUNCTION to_regclass(st @extschema@.sharded_table) RETURNS regclass STABLE LANGUAGE sql AS
 $$SELECT to_regclass(st.sharded_table_schema || '.' || st.sharded_table_name)$$;
 
 CREATE OR REPLACE FUNCTION stable_hash(VARIADIC text[]) RETURNS int IMMUTABLE LANGUAGE sql AS
@@ -205,6 +214,7 @@ RETURNS TABLE (
     ready_score double precision)
 STABLE
 SECURITY DEFINER -- TODO try to somehow make it usable in views without this
+SET SEARCH_PATH FROM CURRENT
 LANGUAGE sql AS
 $$WITH shv AS (
     SELECT
@@ -400,7 +410,9 @@ BEGIN
 END
 $$;
 
-CREATE OR REPLACE FUNCTION sync_publications_trigger() RETURNS TRIGGER LANGUAGE plpgsql AS
+CREATE OR REPLACE FUNCTION sync_publications_trigger() RETURNS TRIGGER
+SET SEARCH_PATH FROM CURRENT
+LANGUAGE plpgsql AS
 $$BEGIN
     PERFORM sync_publications();
     RETURN NULL;
@@ -503,62 +515,60 @@ FOR EACH STATEMENT EXECUTE FUNCTION sync_publications_trigger();
 --     config
 -- $$;
 
--- CREATE OR REPLACE VIEW shard_structure AS
--- WITH stc AS (
---     SELECT
---         st.replication_group_id,
---         c.oid::regclass 
---     FROM
---         pg_class c
---             JOIN pg_namespace n ON relnamespace = n.oid
---             JOIN sharded_table st ON (nspname, relname) = (sharded_table_schema, sharded_table_name)
--- ),
--- roots AS (
---     SELECT *
---     FROM stc r
---     WHERE NOT EXISTS (SELECT 1 FROM stc WHERE replication_group_id = r.replication_group_id AND oid <> r.oid AND oid = ANY (SELECT * FROM pg_partition_ancestors(r.oid)))
--- )
--- SELECT
---     replication_group_id,
---     n.nspname AS schema_name,
---     c.relname AS table_name,
---     level,
---     format('CREATE TABLE IF NOT EXISTS %I.%I %s%s',
---         n.nspname, c.relname,
---         CASE WHEN level = 0
---             THEN
---                 '(' ||
---                     (
---                         SELECT string_agg(format('%I %s', attname, atttypid::regtype), ',')
---                         FROM pg_attribute WHERE attrelid = t.relid AND attnum >= 1
---                     ) ||
---                     coalesce(
---                         ', ' || (SELECT string_agg(pg_get_constraintdef(c.oid), ', ') FROM pg_constraint c WHERE conrelid = t.relid AND conislocal),
---                         ''
---                     ) ||
---                 ')'
---             ELSE
---                 format('PARTITION OF %I.%I%s %s',
---                     pn.nspname, p.relname,
---                     coalesce(
---                         ' (' || (SELECT string_agg(pg_get_constraintdef(c.oid), ', ') FROM pg_constraint c WHERE conrelid = t.relid AND conislocal) || ')',
---                         ''
---                     ),
---                     pg_get_expr(c.relpartbound, c.oid))
---         END,
---         CASE WHEN t.isleaf
---             THEN
---                 ''
---             ELSE
---                 ' PARTITION BY ' || pg_get_partkeydef(t.relid)
---         END
---     ) AS create_table
--- FROM
---     roots r, pg_partition_tree(oid) t
---         JOIN replication_group_member m USING (replication_group_id)
---         JOIN pg_class c ON t.relid = c.oid JOIN pg_namespace n ON c.relnamespace = n.oid
---         LEFT JOIN pg_class p ON t.parentrelid = p.oid LEFT JOIN pg_namespace pn ON p.relnamespace = pn.oid
--- WHERE
---     member_role = CURRENT_ROLE;
+CREATE OR REPLACE VIEW shard_structure AS
+WITH stc AS (
+    SELECT
+        st.replication_group_id,
+        c.oid::regclass 
+    FROM
+        pg_class c
+            JOIN pg_namespace n ON relnamespace = n.oid
+            JOIN sharded_table st ON (nspname, relname) = (sharded_table_schema, sharded_table_name)
+),
+roots AS (
+    SELECT *
+    FROM stc r
+    WHERE NOT EXISTS (SELECT 1 FROM stc WHERE replication_group_id = r.replication_group_id AND oid <> r.oid AND oid = ANY (SELECT * FROM pg_partition_ancestors(r.oid)))
+)
+SELECT
+    n.nspname AS schema_name,
+    c.relname AS table_name,
+    level,
+    format('CREATE TABLE IF NOT EXISTS %I.%I %s%s',
+        n.nspname, c.relname,
+        CASE WHEN level = 0
+            THEN
+                '(' ||
+                    (
+                        SELECT string_agg(format('%I %s', attname, atttypid::regtype), ',')
+                        FROM pg_attribute WHERE attrelid = t.relid AND attnum >= 1
+                    ) ||
+                    coalesce(
+                        ', ' || (SELECT string_agg(pg_get_constraintdef(c.oid), ', ') FROM pg_constraint c WHERE conrelid = t.relid AND conislocal),
+                        ''
+                    ) ||
+                ')'
+            ELSE
+                format('PARTITION OF %I.%I%s %s',
+                    pn.nspname, p.relname,
+                    coalesce(
+                        ' (' || (SELECT string_agg(pg_get_constraintdef(c.oid), ', ') FROM pg_constraint c WHERE conrelid = t.relid AND conislocal) || ')',
+                        ''
+                    ),
+                    pg_get_expr(c.relpartbound, c.oid))
+        END,
+        CASE WHEN t.isleaf
+            THEN
+                ''
+            ELSE
+                ' PARTITION BY ' || pg_get_partkeydef(t.relid)
+        END
+    ) AS create_table
+FROM
+    roots r JOIN replication_group_member m USING (replication_group_id), pg_partition_tree(oid) t
+        JOIN pg_class c ON t.relid = c.oid JOIN pg_namespace n ON c.relnamespace = n.oid
+        LEFT JOIN pg_class p ON t.parentrelid = p.oid LEFT JOIN pg_namespace pn ON p.relnamespace = pn.oid
+WHERE
+    member_role = CURRENT_ROLE;
 
--- GRANT SELECT ON shard_structure TO PUBLIC;
+GRANT SELECT ON shard_structure TO PUBLIC;
