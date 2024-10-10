@@ -59,8 +59,9 @@ CREATE OR REPLACE FUNCTION next_pending_version(group_id text) RETURNS config_ve
 SET SEARCH_PATH FROM CURRENT
 LANGUAGE sql AS
 $$
+    -- calculate next version
     WITH v AS (
-        SELECT group_id, coalesce(pending.version, next_version(ready.version), 'FLIP') AS version, TRUE
+        SELECT g.replication_group_id, coalesce(pending.version, next_version(ready.version), 'FLIP') AS pending_version, ready.version AS version, TRUE
         FROM
             replication_group g
                 LEFT JOIN replication_group_config pending ON g.replication_group_id = pending.replication_group_id AND pending.pending
@@ -68,12 +69,31 @@ $$
         WHERE
             g.replication_group_id = group_id
     ),
+    -- insert next config if necessary
     _ AS (
         INSERT INTO replication_group_config (replication_group_id, version, pending)
-        SELECT * FROM v
+        SELECT replication_group_id, pending_version, TRUE FROM v
+        ON CONFLICT DO NOTHING
+    ),
+    -- clone weights if necessary
+    __ AS (
+        INSERT INTO shard_host_weight (replication_group_id, host_id, version, weight)
+        SELECT
+            replication_group_id, host_id, pending_version, weight
+        FROM
+            shard_host_weight w
+                JOIN v USING (replication_group_id, version)
+        ON CONFLICT DO NOTHING
+    ),
+    -- clone shards if necessary
+    ___ AS (
+        INSERT INTO sharded_table (replication_group_id, sharded_table_schema, sharded_table_name, version, replica_count)
+        SELECT replication_group_id, sharded_table_schema, sharded_table_name, pending_version, replica_count
+        FROM
+            sharded_table JOIN v USING (replication_group_id, version)
         ON CONFLICT DO NOTHING
     )
-    SELECT version FROM v
+    SELECT pending_version FROM v
 $$;
 COMMENT ON FUNCTION next_pending_version(group_id text) IS
 'Inserts next pending version into replication_group_config and returns it.';
