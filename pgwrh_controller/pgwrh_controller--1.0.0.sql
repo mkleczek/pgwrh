@@ -110,7 +110,7 @@ CREATE TABLE IF NOT EXISTS shard_host (
     host_name text NOT NULL,
     port int NOT NULL CHECK ( port > 0 ),
 
-    offline boolean NOT NULL DEFAULT FALSE,
+    online boolean NOT NULL DEFAULT TRUE,
 
     PRIMARY KEY (replication_group_id, host_id),
     FOREIGN KEY (replication_group_id, host_id) REFERENCES replication_group_member(replication_group_id, host_id),
@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS shard_host (
 SELECT pg_catalog.pg_extension_config_dump('shard_host', '');
 COMMENT ON TABLE shard_host IS
 'Represents a data replicating node in a cluster (replication group).';
-COMMENT ON COLUMN shard_host.offline IS
+COMMENT ON COLUMN shard_host.online IS
 'Shard host marked as offline is not going to receive any requests for data from other nodes.
 It is still replicating shards assigned to it.
 
@@ -327,9 +327,9 @@ FROM
         -- take "ready" values of weight and replica_count
         CROSS JOIN LATERAL (
             SELECT
-                md5(string_agg(host_name || ':' || port, ',') FILTER ( WHERE NOT offline )) AS shard_server_name,
-                string_agg(host_name, ',') FILTER ( WHERE NOT offline ) AS host,
-                string_agg(port::text, ',') FILTER ( WHERE NOT offline ) AS port
+                md5(string_agg(host_name || ':' || port, ',') FILTER ( WHERE online )) AS shard_server_name,
+                string_agg(host_name, ',') FILTER ( WHERE online ) AS host,
+                string_agg(port::text, ',') FILTER ( WHERE online ) AS port
             FROM (
                 SELECT
                     sc.replication_group_id,
