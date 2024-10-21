@@ -2,6 +2,8 @@
 
 An extension implementing scale out sharding for PostgreSQL based on logical replication and postgres_fdw.
 
+See [Architecture](https://github.com/mkleczek/pgwrh/wiki/Architecture) for more information on inner workings.
+
 # Installation
 
 ## Prerequisites
