@@ -34,3 +34,16 @@ SELECT add_shard_host('g1', 'h1', 'localhost', 5533);
 SELECT add_shard_host('g1', 'h2', 'localhost', 5534);
 SELECT add_shard_host('g1', 'h3', 'localhost', 5535);
 SELECT add_shard_host('g1', 'h4', 'localhost', 5536);
+
+DO$$
+DECLARE
+    r record;
+BEGIN
+    FOR r IN
+        SELECT
+            format('CREATE TABLE test.my_data_%1$s_%2$s PARTITION OF test.my_data_%1$s (PRIMARY KEY (col1)) FOR VALUES WITH (MODULUS 16, REMAINDER %2$s)', year, rem) stmt
+        FROM generate_series(2022, 2023) year, generate_series(0, 15) rem
+    LOOP
+        EXECUTE r.stmt;
+    END LOOP;
+END$$;
