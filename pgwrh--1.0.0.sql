@@ -2,6 +2,24 @@ GRANT USAGE ON SCHEMA @extschema@ TO PUBLIC;
 
 ALTER DEFAULT PRIVILEGES GRANT EXECUTE ON ROUTINES TO PUBLIC;
 
+--------------------
+-- Global (controller and replica) helpers
+--------------------
+CREATE OR REPLACE FUNCTION add_ext_dependency(_classid regclass, _objid oid) RETURNS void LANGUAGE sql AS
+$$INSERT INTO pg_depend (classid, objid, refclassid, refobjid, deptype, objsubid, refobjsubid)
+SELECT _classid, _objid, 'pg_extension'::regclass, e.oid, 'n', 0 ,0
+FROM pg_extension e WHERE e.extname = 'pgwrh'$$;
+
+CREATE OR REPLACE FUNCTION select_add_ext_dependency(_classid regclass, oidexpr text) RETURNS text LANGUAGE sql AS
+$$SELECT format('SELECT @extschema@.add_ext_dependency(%L, %s)', _classid, oidexpr)$$;
+
+CREATE OR REPLACE FUNCTION select_add_ext_dependency(_classid regclass, name_attr text, name text) RETURNS text LANGUAGE sql AS
+$$SELECT format('SELECT @extschema@.add_ext_dependency(%1$L, (SELECT oid FROM %1$s WHERE %I = %L))', _classid, name_attr, name)$$;
+
+-------------------
+-- End Global (controller and replica) helpers
+-------------------
+
 CREATE TYPE config_version AS ENUM ('FLIP', 'FLOP');
 
 CREATE OR REPLACE FUNCTION next_version(version config_version) RETURNS config_version
@@ -467,13 +485,15 @@ BEGIN
         SELECT format('CREATE PUBLICATION %I FOR TABLE %s WITH ( publish = %L )',
                         p.publication_name,
                         p.published_shard::regclass,
-                        'insert,update,delete') stmt
+                        'insert,update,delete') stmt,
+                p.publication_name AS publication_name
         FROM pg_wrh_publication p JOIN pg_class ON published_shard = oid
         WHERE NOT EXISTS (
                 SELECT 1 FROM pg_publication WHERE pubname = p.publication_name
             )
     LOOP
         EXECUTE r.stmt;
+        PERFORM add_ext_dependency('pg_publication'::regclass, (SELECT oid FROM pg_publication WHERE pubname = r.publication_name));
     END LOOP;
     RETURN;
 END
@@ -607,20 +627,6 @@ CREATE TYPE  rel_id AS (schema_name text, table_name text);
 ----------------
 -- Helpers
 ----------------
-
-CREATE OR REPLACE FUNCTION add_ext_dependency(_classid regclass, _objid oid) RETURNS void LANGUAGE sql AS
-$$INSERT INTO pg_depend (classid, objid, refclassid, refobjid, deptype, objsubid, refobjsubid)
-SELECT _classid, _objid, 'pg_extension'::regclass, e.oid, 'n', 0 ,0
-FROM pg_extension e WHERE e.extname = 'pgwrh_controller'$$;
-
-CREATE OR REPLACE FUNCTION select_add_ext_dependency(_classid regclass, oidexpr text) RETURNS text LANGUAGE sql AS
-$$SELECT format('SELECT @extschema@.add_ext_dependency(%L, %s)', _classid, oidexpr)$$;
-
-CREATE OR REPLACE FUNCTION select_add_ext_dependency(_classid regclass, name_attr text, name text) RETURNS text LANGUAGE sql AS
-$$SELECT format('SELECT @extschema@.add_ext_dependency(%1$L, (SELECT oid FROM %1$s WHERE %I = %L))', _classid, name_attr, name)$$;
-
-CREATE OR REPLACE FUNCTION replica_controller_subscription_name() RETURNS text LANGUAGE sql AS
-$$SELECT current_database() || '_replica_controller_subscription'$$;
 
 -- options parsing
 CREATE OR REPLACE FUNCTION opts(arr text[]) RETURNS TABLE(key text, value text, vals text[]) LANGUAGE sql AS
