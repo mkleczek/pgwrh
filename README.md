@@ -52,7 +52,7 @@ BEGIN
     FOR r IN
         SELECT
             format('CREATE TABLE test_shards.my_data_%1$s_%2$s PARTITION OF test.my_data_%1$s (PRIMARY KEY (col1)) FOR VALUES WITH (MODULUS 16, REMAINDER %2$s)', year, rem) stmt
-        FROM generate_series(2022, 2023) year, generate_series(0, 15) rem
+        FROM generate_series(2023, 2025) year, generate_series(0, 15) rem
     LOOP
         EXECUTE r.stmt;
     END LOOP;
@@ -60,6 +60,8 @@ END$$;
 ```
 
 That gives 48 (16 * 3) shards in total.
+
+**Note** that there are no specific requirements for the partitioning hierarchy and any partitioned table can be sharded - the above is only for ilustration purposes.
 
 ### Create a replication group
 
