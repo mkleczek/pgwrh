@@ -591,7 +591,7 @@ CREATE USER MAPPING FOR PUBLIC SERVER replica_controller;
 CREATE OR REPLACE FUNCTION sub_num_modulus_exponent() RETURNS int LANGUAGE sql AS
 $$SELECT 2$$; -- FIXME GUC
 CREATE OR REPLACE FUNCTION sub_num() RETURNS int LANGUAGE sql AS
-$$SELECT (2 ^ sub_num_modulus_exponent())$$;
+$$SELECT (2 ^ @extschema@.sub_num_modulus_exponent())$$;
 
 CREATE TABLE IF NOT EXISTS dependent_subscription (
     subname text NOT NULL PRIMARY KEY
@@ -1106,14 +1106,14 @@ UNION ALL
 SELECT
     FALSE,
     TRUE,
-    format('Found local shard schema [%I] without proper access rights for other replicas', (rel_id).schema_name),
+    format('Found local shard schema [%I] without proper access rights for other replicas', schema_name),
     ARRAY[
-        format('GRANT USAGE ON SCHEMA %I TO %s', (rel_id).schema_name, shard_server_user::regrole)
+        format('GRANT USAGE ON SCHEMA %I TO %I', schema_name, rolname)
     ]
 FROM
-    local_shard JOIN pg_roles ON shard_server_user = rolname
+    pg_roles JOIN (SELECT DISTINCT (rel_id).schema_name, shard_server_user FROM local_shard) s ON rolname = shard_server_user
 WHERE
-    NOT has_schema_privilege(shard_server_user, (rel_id).schema_name, 'USAGE')
+    NOT has_schema_privilege(rolname, schema_name, 'USAGE')
 
 UNION ALL
 -- Grant SELECT on local shards
@@ -1122,12 +1122,12 @@ SELECT
     TRUE,
     format('Found local shard [%s] without proper access rights for other replicas', reg_class),
     ARRAY[
-        format('GRANT SELECT ON %s TO %s', reg_class, shard_server_user::regrole)
+        format('GRANT SELECT ON %s TO %I', reg_class, rolname)
     ]
 FROM
     local_shard JOIN pg_roles ON shard_server_user = rolname
 WHERE
-    NOT has_table_privilege(shard_server_user, reg_class, 'SELECT')
+    NOT has_table_privilege(rolname, reg_class, 'SELECT')
 
 UNION ALL
 -- Create single table infrastructure: slot and remote tables
@@ -1512,7 +1512,7 @@ $$;
 CREATE OR REPLACE PROCEDURE sync_replica_worker() LANGUAGE plpgsql AS
 $$
 BEGIN
-    IF pg_try_advisory_lock('pgwrh-sync') THEN
+    IF pg_try_advisory_lock(2895359559) THEN
         WHILE r FROM pg_background_result(pg_background_launch('SELECT @extschema@.sync_step()')) AS r(r boolean) LOOP
         END LOOP;
     END IF;
