@@ -327,8 +327,9 @@ FROM
             SELECT 1
             FROM sharded_pg_class des
             WHERE
-                des.oid <> st.oid AND
-                st.oid = ANY (SELECT * FROM pg_partition_ancestors(des.oid)) 
+                des.oid = ANY (SELECT * FROM pg_partition_ancestors(c.oid))
+                AND des.oid <> st.oid
+                AND st.oid = ANY (SELECT * FROM pg_partition_ancestors(des.oid)) 
         )
         JOIN replication_group_config USING (replication_group_id, version)
 WHERE
