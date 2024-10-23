@@ -2,9 +2,10 @@ CREATE ROLE test_replica;
 
 CREATE SCHEMA IF NOT EXISTS test;
 CREATE SCHEMA IF NOT EXISTS test_shards;
+ALTER SCHEMA test_shards OWNER TO test_replica;
 
-GRANT USAGE ON SCHEMA test TO test_replica;
-ALTER DEFAULT PRIVILEGES IN SCHEMA test GRANT SELECT ON TABLES TO test_replica;
+--GRANT USAGE ON SCHEMA test_shards TO test_replica;
+--ALTER DEFAULT PRIVILEGES IN SCHEMA test_shards GRANT SELECT ON TABLES TO test_replica;
 
 CREATE TABLE test.my_data (col1 text, col2 text, col3 date) PARTITION BY RANGE (col3);
 
@@ -20,10 +21,12 @@ DECLARE
 BEGIN
     FOR r IN
         SELECT
-            format('CREATE TABLE test_shards.my_data_%1$s_%2$s PARTITION OF test.my_data_%1$s (PRIMARY KEY (col1)) FOR VALUES WITH (MODULUS 16, REMAINDER %2$s)', year, rem) stmt
+            format('CREATE TABLE test_shards.my_data_%1$s_%2$s PARTITION OF test.my_data_%1$s (PRIMARY KEY (col1)) FOR VALUES WITH (MODULUS 16, REMAINDER %2$s)', year, rem) stmt,
+            format('ALTER TABLE test_shards.my_data_%1$s_%2$s OWNER TO test_replica', year, rem) own
         FROM generate_series(2022, 2025) year, generate_series(0, 15) rem
     LOOP
         EXECUTE r.stmt;
+        EXECUTE r.own;
     END LOOP;
 END
 $$;
