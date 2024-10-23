@@ -1086,6 +1086,50 @@ WHERE
     
 
 UNION ALL
+-- Make sure user accounts for local shards is created
+SELECT
+    FALSE,
+    TRUE,
+    format('User account %I to access local shards needs to be created.', shard_server_user),
+    ARRAY[
+        format('CREATE USER %I PASSWORD %L', shard_server_user, shard_server_password)
+    ]
+FROM
+    (
+        SELECT DISTINCT shard_server_user, shard_server_password
+        FROM local_shard WHERE
+            NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = shard_server_user)
+    )
+
+UNION ALL
+-- Grant USAGE on local shards schemas
+SELECT
+    FALSE,
+    TRUE,
+    format('Found local shard schema [%I] without proper access rights for other replicas', (rel_id).schema_name),
+    ARRAY[
+        format('GRANT USAGE ON SCHEMA %I TO %s', (rel_id).schema_name, shard_server_user::regrole)
+    ]
+FROM
+    local_shard JOIN pg_roles ON shard_server_user = rolname
+WHERE
+    NOT has_schema_privilege(shard_server_user, (rel_id).schema_name, 'USAGE')
+
+UNION ALL
+-- Grant SELECT on local shards
+SELECT
+    FALSE,
+    TRUE,
+    format('Found local shard [%s] without proper access rights for other replicas', reg_class),
+    ARRAY[
+        format('GRANT SELECT ON %s TO %s', reg_class, shard_server_user::regrole)
+    ]
+FROM
+    local_shard JOIN pg_roles ON shard_server_user = rolname
+WHERE
+    NOT has_table_privilege(shard_server_user, reg_class, 'SELECT')
+
+UNION ALL
 -- Create single table infrastructure: slot and remote tables
 SELECT
     FALSE,
