@@ -1,4 +1,9 @@
 CREATE ROLE test_replica;
+CREATE USER h1 PASSWORD 'h1' REPLICATION IN ROLE test_replica;
+CREATE USER h2 PASSWORD 'h2' REPLICATION IN ROLE test_replica;
+CREATE USER h3 PASSWORD 'h3' REPLICATION IN ROLE test_replica;
+CREATE USER h4 PASSWORD 'h4' REPLICATION IN ROLE test_replica;
+
 
 CREATE SCHEMA IF NOT EXISTS test;
 CREATE SCHEMA IF NOT EXISTS test_shards;
@@ -38,12 +43,8 @@ INSERT INTO pgwrh.replication_group
 INSERT INTO pgwrh.sharded_table
         (replication_group_id, sharded_table_schema, sharded_table_name, replica_count)
     VALUES
-        ('g1','test', 'my_data', 2);
-
-CREATE USER h1 PASSWORD 'h1' REPLICATION IN ROLE test_replica;
-CREATE USER h2 PASSWORD 'h2' REPLICATION IN ROLE test_replica;
-CREATE USER h3 PASSWORD 'h3' REPLICATION IN ROLE test_replica;
-CREATE USER h4 PASSWORD 'h4' REPLICATION IN ROLE test_replica;
+        ('g1', 'test', 'my_data', 2),
+        ('g1', 'test', 'my_data_2025', 4);
 
 SELECT pgwrh.add_shard_host('g1', 'h1', 'localhost', 5533);
 SELECT pgwrh.add_shard_host('g1', 'h2', 'localhost', 5534);
