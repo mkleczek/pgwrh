@@ -28,6 +28,12 @@ SET SEARCH_PATH FROM CURRENT
 LANGUAGE sql AS
 $$SELECT CASE version WHEN 'FLIP' THEN 'FLOP' ELSE 'FLIP' END::config_version$$;
 
+CREATE OR REPLACE FUNCTION prev_version(version config_version) RETURNS config_version
+IMMUTABLE
+LANGUAGE sql AS
+$$SELECT @extschema@.next_version(version)$$;
+
+
 CREATE TABLE IF NOT EXISTS replication_group (
     replication_group_id text NOT NULL PRIMARY KEY,
     username text NOT NULL,
@@ -73,6 +79,13 @@ Version marked as "pending" (pending = true) is a configuration version that is 
 
 A replica keeps all shards from "ready" configuration even if a shard might be no longer assigned to it in "pending" configuration version.';
 
+CREATE OR REPLACE FUNCTION is_ready(group_id text, version config_version) RETURNS boolean
+SET SEARCH_PATH FROM CURRENT
+LANGUAGE sql STABLE AS
+$$
+SELECT EXISTS (SELECT 1 FROM replication_group_config WHERE replication_group_id = group_id AND version = $2 AND NOT pending)
+$$;
+
 CREATE OR REPLACE FUNCTION next_pending_version(group_id text) RETURNS config_version
 SET SEARCH_PATH FROM CURRENT
 LANGUAGE sql AS
@@ -92,32 +105,6 @@ $$
         INSERT INTO replication_group_config (replication_group_id, version, pending)
         SELECT replication_group_id, pending_version, TRUE FROM v
         ON CONFLICT DO NOTHING
-    ),
-    -- clone weights if necessary
-    __ AS (
-        INSERT INTO shard_host_weight (replication_group_id, host_id, version, weight)
-        SELECT
-            replication_group_id, host_id, pending_version, weight
-        FROM
-            shard_host_weight w
-                JOIN v USING (replication_group_id, version)
-        ON CONFLICT DO NOTHING
-    ),
-    -- clone shards if necessary
-    ___ AS (
-        INSERT INTO sharded_table (replication_group_id, sharded_table_schema, sharded_table_name, version, replica_count)
-        SELECT replication_group_id, sharded_table_schema, sharded_table_name, pending_version, replica_count
-        FROM
-            sharded_table JOIN v USING (replication_group_id, version)
-        ON CONFLICT DO NOTHING
-    ),
-    -- clone inex templates if necessary
-    ____ AS (
-        INSERT INTO shard_index_template (replication_group_id, version, schema_name, table_name, index_name, index_template)
-        SELECT replication_group_id, pending_version, schema_name, table_name, index_name, index_template
-        FROM
-            shard_index_template JOIN v USING (replication_group_id, version)
-        ON CONFLICT DO NOTHING
     )
     SELECT pending_version FROM v
 $$;
@@ -127,12 +114,84 @@ COMMENT ON FUNCTION next_pending_version(group_id text) IS
 Clones existing non-pending configuration.';
 
 CREATE OR REPLACE FUNCTION next_pending_version_trigger() RETURNS TRIGGER
-SET SEARCH_PATH FROM CURRENT
 LANGUAGE plpgsql AS
 $$BEGIN
     NEW.version := @extschema@.next_pending_version(NEW.replication_group_id);
     RETURN NEW;
 END$$;
+
+CREATE OR REPLACE FUNCTION forbid_not_pending_version_modifications() RETURNS TRIGGER
+SET SEARCH_PATH FROM CURRENT
+LANGUAGE plpgsql AS
+$$
+BEGIN
+    RAISE 'Modifications of non-pending config in % is forbidden', TG_RELID::regclass;
+    RETURN NULL;
+END
+$$;
+
+CREATE OR REPLACE TRIGGER forbid_not_pending_version_insert BEFORE INSERT ON replication_group_config
+FOR EACH ROW
+WHEN (NOT NEW.pending)
+EXECUTE FUNCTION forbid_not_pending_version_modifications();
+CREATE OR REPLACE TRIGGER forbid_not_pending_version_delete BEFORE DELETE ON replication_group_config
+FOR EACH ROW
+WHEN (NOT OLD.pending)
+EXECUTE FUNCTION forbid_not_pending_version_modifications();
+
+CREATE OR REPLACE FUNCTION clone_config(group_id text, target_version config_version) RETURNS void
+SET SEARCH_PATH FROM CURRENT
+LANGUAGE sql AS
+$$
+    -- calculate next version
+    WITH _ AS (
+        INSERT INTO shard_host_weight (replication_group_id, host_id, version, weight)
+        SELECT
+            replication_group_id, host_id, target_version, weight
+        FROM
+            shard_host_weight w
+        WHERE
+            (replication_group_id, version) = (group_id, prev_version(target_version))
+        ON CONFLICT DO NOTHING
+    ),
+    -- clone shards if necessary
+    __ AS (
+        INSERT INTO sharded_table (replication_group_id, sharded_table_schema, sharded_table_name, version, replica_count)
+        SELECT replication_group_id, sharded_table_schema, sharded_table_name, target_version, replica_count
+        FROM
+            sharded_table
+        WHERE
+            (replication_group_id, version) = (group_id, prev_version(target_version))
+        ON CONFLICT DO NOTHING
+    )
+    -- clone inex templates if necessary
+    INSERT INTO shard_index_template (replication_group_id, version, schema_name, table_name, index_name, index_template)
+    SELECT replication_group_id, target_version, schema_name, table_name, index_name, index_template
+    FROM
+        shard_index_template
+    WHERE
+        (replication_group_id, version) = (group_id, prev_version(target_version))
+    ON CONFLICT DO NOTHING
+$$;
+
+CREATE OR REPLACE FUNCTION clone_config_trigger() RETURNS TRIGGER
+SET SEARCH_PATH FROM CURRENT
+LANGUAGE plpgsql AS
+$$BEGIN
+    PERFORM clone_config(NEW.replication_group_id, NEW.version);
+    RETURN NULL;
+END$$;
+
+CREATE OR REPLACE FUNCTION mark_pending_version_ready(group_id text) RETURNS void
+SET SEARCH_PATH FROM CURRENT
+LANGUAGE sql AS
+$$
+WITH new_ready AS (
+    UPDATE @extschema@.replication_group_config SET pending = FALSE WHERE replication_group_id = group_id AND pending
+    RETURNING *
+)
+UPDATE @extschema@.replication_group_config SET pending = TRUE WHERE replication_group_id = group_id AND version <> ALL (SELECT version FROM new_ready)
+$$;
 
 CREATE TABLE IF NOT EXISTS replication_group_member (
     replication_group_id text NOT NULL REFERENCES replication_group(replication_group_id),
@@ -182,14 +241,30 @@ CREATE TABLE IF NOT EXISTS shard_host_weight (
 
     PRIMARY KEY (replication_group_id, host_id, version),
     FOREIGN KEY (replication_group_id, host_id) REFERENCES shard_host(replication_group_id, host_id),
-    FOREIGN KEY (replication_group_id, version) REFERENCES replication_group_config(replication_group_id, version)
+    FOREIGN KEY (replication_group_id, version) REFERENCES replication_group_config(replication_group_id, version) ON DELETE CASCADE
 );
 SELECT pg_catalog.pg_extension_config_dump('shard_host_weight', '');
 COMMENT ON TABLE shard_host_weight IS
 'Weight of a shard host in a specific configuration version';
 
-CREATE OR REPLACE TRIGGER shard_host_weight_version BEFORE INSERT ON shard_host_weight
+CREATE OR REPLACE TRIGGER forbid_not_pending_version_insert BEFORE INSERT ON shard_host_weight
+FOR EACH ROW
+WHEN (is_ready(NEW.replication_group_id, NEW.version))
+EXECUTE FUNCTION forbid_not_pending_version_modifications();
+CREATE OR REPLACE TRIGGER forbid_not_pending_version_update BEFORE UPDATE ON shard_host_weight
+FOR EACH ROW
+WHEN (is_ready(OLD.replication_group_id, OLD.version) OR is_ready(NEW.replication_group_id, NEW.version))
+EXECUTE FUNCTION forbid_not_pending_version_modifications();
+CREATE OR REPLACE TRIGGER forbid_not_pending_version_delete BEFORE DELETE ON shard_host_weight
+FOR EACH ROW
+WHEN (is_ready(OLD.replication_group_id, OLD.version))
+EXECUTE FUNCTION forbid_not_pending_version_modifications();
+
+CREATE OR REPLACE TRIGGER next_pending_version BEFORE INSERT ON shard_host_weight
 FOR EACH ROW EXECUTE FUNCTION next_pending_version_trigger();
+
+CREATE OR REPLACE TRIGGER clone_config AFTER INSERT ON shard_host_weight
+FOR EACH ROW EXECUTE FUNCTION clone_config_trigger();
 
 CREATE OR REPLACE FUNCTION add_shard_host(_replication_group_id text, _host_id text, _host_name text, _port int, _member_role regrole DEFAULT NULL, _availability_zone text DEFAULT 'default', _weight int DEFAULT 100) RETURNS void
 SET SEARCH_PATH FROM CURRENT
@@ -215,12 +290,28 @@ CREATE TABLE IF NOT EXISTS sharded_table (
     replica_count smallint NOT NULL CHECK ( replica_count >= 0 ),
 
     PRIMARY KEY (replication_group_id, sharded_table_schema, sharded_table_name, version),
-    FOREIGN KEY (replication_group_id, version) REFERENCES replication_group_config(replication_group_id, version)
+    FOREIGN KEY (replication_group_id, version) REFERENCES replication_group_config(replication_group_id, version) ON DELETE CASCADE
 );
 SELECT pg_catalog.pg_extension_config_dump('sharded_table', '');
 
-CREATE OR REPLACE TRIGGER sharded_table_version BEFORE INSERT ON sharded_table
+CREATE OR REPLACE TRIGGER forbid_not_pending_version_insert BEFORE INSERT ON sharded_table
+FOR EACH ROW
+WHEN (is_ready(NEW.replication_group_id, NEW.version))
+EXECUTE FUNCTION forbid_not_pending_version_modifications();
+CREATE OR REPLACE TRIGGER forbid_not_pending_version_update BEFORE UPDATE ON sharded_table
+FOR EACH ROW
+WHEN (is_ready(OLD.replication_group_id, OLD.version) OR is_ready(NEW.replication_group_id, NEW.version))
+EXECUTE FUNCTION forbid_not_pending_version_modifications();
+CREATE OR REPLACE TRIGGER forbid_not_pending_version_delete BEFORE DELETE ON sharded_table
+FOR EACH ROW
+WHEN (is_ready(OLD.replication_group_id, OLD.version))
+EXECUTE FUNCTION forbid_not_pending_version_modifications();
+
+CREATE OR REPLACE TRIGGER next_pending_version BEFORE INSERT ON sharded_table
 FOR EACH ROW EXECUTE FUNCTION next_pending_version_trigger();
+
+CREATE OR REPLACE TRIGGER clone_config AFTER INSERT ON sharded_table
+FOR EACH ROW EXECUTE FUNCTION clone_config_trigger();
 
 CREATE TABLE IF NOT EXISTS shard_index_template (
     replication_group_id text NOT NULL,
@@ -231,9 +322,28 @@ CREATE TABLE IF NOT EXISTS shard_index_template (
     index_template text NOT NULL,
 
     PRIMARY KEY (replication_group_id, schema_name, table_name, index_name),
-    FOREIGN KEY (replication_group_id, version) REFERENCES replication_group_config(replication_group_id, version)
+    FOREIGN KEY (replication_group_id, version) REFERENCES replication_group_config(replication_group_id, version) ON DELETE CASCADE
 );
 SELECT pg_catalog.pg_extension_config_dump('shard_index_template', '');
+
+CREATE OR REPLACE TRIGGER forbid_not_pending_version_insert BEFORE INSERT ON shard_index_template
+FOR EACH ROW
+WHEN (is_ready(NEW.replication_group_id, NEW.version))
+EXECUTE FUNCTION forbid_not_pending_version_modifications();
+CREATE OR REPLACE TRIGGER forbid_not_pending_version_update BEFORE UPDATE ON shard_index_template
+FOR EACH ROW
+WHEN (is_ready(OLD.replication_group_id, OLD.version) OR is_ready(NEW.replication_group_id, NEW.version))
+EXECUTE FUNCTION forbid_not_pending_version_modifications();
+CREATE OR REPLACE TRIGGER forbid_not_pending_version_delete BEFORE DELETE ON shard_index_template
+FOR EACH ROW
+WHEN (is_ready(OLD.replication_group_id, OLD.version))
+EXECUTE FUNCTION forbid_not_pending_version_modifications();
+
+CREATE OR REPLACE TRIGGER next_pending_version BEFORE INSERT ON shard_index_template
+FOR EACH ROW EXECUTE FUNCTION next_pending_version_trigger();
+
+CREATE OR REPLACE TRIGGER clone_config AFTER INSERT ON shard_index_template
+FOR EACH ROW EXECUTE FUNCTION clone_config_trigger();
 
 CREATE TABLE IF NOT EXISTS pg_wrh_publication (
     publication_name text NOT NULL PRIMARY KEY,
