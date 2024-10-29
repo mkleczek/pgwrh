@@ -43,10 +43,11 @@ INSERT INTO pgwrh.replication_group
 INSERT INTO pgwrh.sharded_table
         (replication_group_id, sharded_table_schema, sharded_table_name, replica_count)
     VALUES
-        ('g1', 'test', 'my_data', 2),
-        ('g1', 'test', 'my_data_2025', 4);
+        ('g1', 'test', 'my_data', 1),
+        ('g1', 'test', 'my_data_2025', 4),
+        ('g1', 'test', 'my_data_2024', 2);
 
 SELECT pgwrh.add_shard_host('g1', 'h1', 'localhost', 5533);
 SELECT pgwrh.add_shard_host('g1', 'h2', 'localhost', 5534);
 SELECT pgwrh.add_shard_host('g1', 'h3', 'localhost', 5535);
-SELECT pgwrh.add_shard_host('g1', 'h4', 'localhost', 5536);
+SELECT pgwrh.add_shard_host('g1', 'h4', 'localhost', 5535);
