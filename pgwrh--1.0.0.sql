@@ -186,12 +186,18 @@ CREATE OR REPLACE FUNCTION mark_pending_version_ready(group_id text) RETURNS voi
 SET SEARCH_PATH FROM CURRENT
 LANGUAGE sql AS
 $$
-WITH new_ready AS (
-    UPDATE @extschema@.replication_group_config SET pending = FALSE WHERE replication_group_id = group_id AND pending
-    RETURNING *
-)
-UPDATE @extschema@.replication_group_config SET pending = TRUE WHERE replication_group_id = group_id AND version <> ALL (SELECT version FROM new_ready)
+UPDATE @extschema@.replication_group_config dst SET pending = NOT pending
+WHERE
+    replication_group_id = group_id
+    AND EXISTS (
+        SELECT 1
+        FROM @extschema@.replication_group_config
+        WHERE replication_group_id = dst.replication_group_id
+            AND pending)
 $$;
+COMMENT ON FUNCTION mark_pending_version_ready(group_id text) IS
+'Swaps pending and ready configuration versions for a group.
+Does not do anything if there is no pending version present';
 
 CREATE TABLE IF NOT EXISTS replication_group_member (
     replication_group_id text NOT NULL REFERENCES replication_group(replication_group_id),
