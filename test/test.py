@@ -9,9 +9,6 @@ from unittest import TestCase
 class TestRemoteOperations(TestCase):
 
     def test_temp(self):
-        """
-        Test exec_command for successful command execution.
-        """
         logfile = tempfile.NamedTemporaryFile('w', delete=True)
         with scoped_config(use_python_logging=True):
             with get_new_node().init(allow_logical=True) as master:
