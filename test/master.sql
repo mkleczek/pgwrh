@@ -36,6 +36,9 @@ BEGIN
 END
 $$;
 
+INSERT INTO test.my_data
+SELECT 'col1: ' || n, 'col2: ' || n, make_date(2022, 1, 1) + n FROM generate_series(1, 1000, 1) as n;
+
 INSERT INTO pgwrh.replication_group
         (replication_group_id, username, password)
     VALUES
@@ -47,7 +50,7 @@ INSERT INTO pgwrh.sharded_table
         ('g1', 'test', 'my_data_2025', 4),
         ('g1', 'test', 'my_data_2024', 2);
 
-SELECT pgwrh.add_shard_host('g1', 'h1', 'localhost', 5533);
-SELECT pgwrh.add_shard_host('g1', 'h2', 'localhost', 5534);
-SELECT pgwrh.add_shard_host('g1', 'h3', 'localhost', 5535);
-SELECT pgwrh.add_shard_host('g1', 'h4', 'localhost', 5535);
+-- SELECT pgwrh.add_shard_host('g1', 'h1', 'localhost', 5533);
+-- SELECT pgwrh.add_shard_host('g1', 'h2', 'localhost', 5534);
+-- SELECT pgwrh.add_shard_host('g1', 'h3', 'localhost', 5535);
+-- SELECT pgwrh.add_shard_host('g1', 'h4', 'localhost', 5536);

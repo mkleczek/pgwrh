@@ -706,7 +706,7 @@ CREATE SERVER IF NOT EXISTS replica_controller FOREIGN DATA WRAPPER postgres_fdw
 CREATE USER MAPPING FOR PUBLIC SERVER replica_controller;
 
 CREATE OR REPLACE FUNCTION sub_num_modulus_exponent() RETURNS int LANGUAGE sql AS
-$$SELECT 2$$; -- FIXME GUC
+$$SELECT 0$$; -- FIXME GUC
 CREATE OR REPLACE FUNCTION sub_num() RETURNS int LANGUAGE sql AS
 $$SELECT (2 ^ @extschema@.sub_num_modulus_exponent())$$;
 
@@ -1556,12 +1556,28 @@ GROUP BY 1
 -- -- FIXME???
 GRANT SELECT ON sync TO PUBLIC;
 
-CREATE OR REPLACE FUNCTION launch_sync() RETURNS void LANGUAGE sql AS
-$$
-    SELECT pg_background_detach(pg_background_launch('
+CREATE OR REPLACE FUNCTION launch_sync() RETURNS void LANGUAGE plpgsql AS
+$$DECLARE
+    pid int;
+BEGIN
+    pid := (select pg_background_launch('
         CAll @extschema@.sync_replica_worker();
     '));
-$$;
+    PERFORM pg_sleep(0.1);
+    PERFORM pg_background_detach(pid);
+END$$;
+CREATE OR REPLACE FUNCTION sync_daemon(seconds real) RETURNS void LANGUAGE plpgsql AS
+$$DECLARE
+    pid int;
+BEGIN
+    pid := (select pg_background_launch(format('
+        CAll @extschema@.sync_replica_worker();
+        SELECT pg_sleep(%1$s);
+        SELECT pgwrh.sync_daemon(%1$s);
+    ', seconds)));
+    PERFORM pg_sleep(0.1);
+    PERFORM pg_background_detach(pid);
+END$$;
 
 CREATE OR REPLACE FUNCTION exec_script(script text) RETURNS boolean LANGUAGE plpgsql AS
 $$BEGIN
