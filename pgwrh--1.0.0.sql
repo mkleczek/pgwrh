@@ -1432,7 +1432,7 @@ SELECT
         ),
         format('ALTER SUBSCRIPTION %I ADD PUBLICATION %s',
             s.subname,
-            string_agg(sc.publication_name, ', ')
+            string_agg(quote_ident(sc.publication_name), ', ')
         )
     ]
 FROM
