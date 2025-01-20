@@ -1,9 +1,4 @@
 CREATE ROLE test_replica;
-CREATE USER h1 PASSWORD 'h1' REPLICATION IN ROLE test_replica;
-CREATE USER h2 PASSWORD 'h2' REPLICATION IN ROLE test_replica;
-CREATE USER h3 PASSWORD 'h3' REPLICATION IN ROLE test_replica;
-CREATE USER h4 PASSWORD 'h4' REPLICATION IN ROLE test_replica;
-
 
 CREATE SCHEMA IF NOT EXISTS test;
 CREATE SCHEMA IF NOT EXISTS test_shards;
@@ -14,21 +9,17 @@ ALTER SCHEMA test_shards OWNER TO test_replica;
 
 CREATE TABLE test.my_data (col1 text, col2 text, col3 date) PARTITION BY RANGE (col3);
 
-CREATE TABLE test.my_data_2025 PARTITION OF test.my_data FOR VALUES FROM (make_date(2025, 1, 1)) TO (make_date(2026, 1, 1)) PARTITION BY HASH (col2);
-CREATE TABLE test.my_data_2024 PARTITION OF test.my_data FOR VALUES FROM (make_date(2024, 1, 1)) TO (make_date(2025, 1, 1)) PARTITION BY HASH (col2);
-CREATE TABLE test.my_data_2023 PARTITION OF test.my_data FOR VALUES FROM (make_date(2023, 1, 1)) TO (make_date(2024, 1, 1))  PARTITION BY HASH (col2);
-CREATE TABLE test.my_data_2022 PARTITION OF test.my_data FOR VALUES FROM (make_date(2022, 1, 1)) TO (make_date(2023, 1, 1))  PARTITION BY HASH (col2);
-
-DO
+CREATE OR REPLACE PROCEDURE test.create_year_shard(year int) LANGUAGE plpgsql AS
 $$
 DECLARE
     r record;
 BEGIN
+    EXECUTE format('CREATE TABLE test.my_data_%1$s PARTITION OF test.my_data FOR VALUES FROM (make_date(%1$s, 1, 1)) TO (make_date(%2$s, 1, 1))  PARTITION BY HASH (col2)', year, year + 1);
     FOR r IN
         SELECT
             format('CREATE TABLE test_shards.my_data_%1$s_%2$s PARTITION OF test.my_data_%1$s (PRIMARY KEY (col1)) FOR VALUES WITH (MODULUS 16, REMAINDER %2$s)', year, rem) stmt,
             format('ALTER TABLE test_shards.my_data_%1$s_%2$s OWNER TO test_replica', year, rem) own
-        FROM generate_series(2022, 2025) year, generate_series(0, 15) rem
+        FROM generate_series(0, 15) rem
     LOOP
         EXECUTE r.stmt;
         EXECUTE r.own;
@@ -36,8 +27,24 @@ BEGIN
 END
 $$;
 
+DO
+$$
+DECLARE
+    year int;
+BEGIN
+    FOR year IN 2022..2025 LOOP
+        CALL test.create_year_shard(year);
+    END LOOP;
+END
+$$;
+
+CREATE OR REPLACE PROCEDURE test.insert_test_data(years VARIADIC int[]) LANGUAGE sql AS
+$$
 INSERT INTO test.my_data
-SELECT 'col1: ' || n, 'col2: ' || n, make_date(2022, 1, 1) + n FROM generate_series(1, 1000, 1) as n;
+SELECT 'col1: ' || n, 'col2: ' || n, make_date(year, 1, 1) + n FROM unnest(years) AS year, generate_series(1, 300, 1) as n;
+$$;
+
+CALL test.insert_test_data(2022, 2023, 2024, 2025);
 
 INSERT INTO pgwrh.replication_group
         (replication_group_id, username, password)

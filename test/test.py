@@ -47,8 +47,9 @@ class TestRemoteOperations(TestCase):
                     # Register replicas in master pgwrh configuration
                     with master.connect() as mc:
                         mc.begin()
-                        for replica in replicas:
-                            mc.execute(f'SELECT pgwrh.add_shard_host(\'g1\', \'{replica[1]}\', \'localhost\', {replica[0].port})')
+                        for (replica, user) in replicas:
+                            mc.execute(f'CREATE USER {user} PASSWORD \'{user}\' REPLICATION IN ROLE test_replica;')
+                            mc.execute(f'SELECT pgwrh.add_shard_host(\'g1\', \'{user}\', \'localhost\', {replica.port})')
                         mc.commit()
 
                     # Initialize replicas
