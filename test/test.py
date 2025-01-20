@@ -70,3 +70,16 @@ class TestRemoteOperations(TestCase):
                     # Perform some queries on replicas
                     for (replica, _) in replicas:
                         print(f'my_data count: {replica.execute('select count(*) from test.my_data')}')
+
+                    with master.connect() as mc:
+                        mc.begin()
+                        mc.execute('CALL test.create_year_shard(2026)')
+                        mc.execute('SELECT pgwrh.sync_publications()')
+                        mc.commit()
+
+                    master.execute('CALL test.insert_test_data(2026)')
+
+                    time.sleep(5)
+                    # Perform some queries on replicas
+                    for (replica, _) in replicas:
+                        print(f'my_data count: {replica.execute('select count(*) from test.my_data')}')
