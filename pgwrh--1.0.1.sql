@@ -1506,7 +1506,7 @@ SELECT
     ARRAY[
         format('ALTER SUBSCRIPTION %I DROP PUBLICATION %s',
             s.subname,
-            string_agg(pub.name, ', ')
+            string_agg(quote_ident(pub.name), ', ')
         ),
         (
             SELECT format('TRUNCATE %s', string_agg(srrelid::regclass::text, ', '))
