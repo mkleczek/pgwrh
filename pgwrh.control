@@ -1,4 +1,4 @@
 relocatable = false
-default_version = '1.0.1'
+default_version = '1.0.2'
 schema = pgwrh
 requires = 'postgres_fdw,pg_background'
