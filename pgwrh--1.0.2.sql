@@ -363,56 +363,9 @@ CREATE OR REPLACE FUNCTION stable_hash(VARIADIC text[]) RETURNS int IMMUTABLE LA
 $$SELECT ('x' || substr(md5(array_to_string($1, '', '')), 1, 8))::bit(32)::int$$;
 
 CREATE OR REPLACE FUNCTION score(weight int, VARIADIC text[]) RETURNS double precision IMMUTABLE LANGUAGE sql AS
-$$SELECT weight / -ln(stable_hash(VARIADIC $2)::double precision / ((2147483649)::bigint - (-2147483648)::bigint) + 0.5::double precision)$$;
+$$SELECT weight / -ln(pgwrh.stable_hash(VARIADIC $2)::double precision / ((2147483649)::bigint - (-2147483648)::bigint) + 0.5::double precision)$$;
 
-
-CREATE OR REPLACE FUNCTION scores(group_id text, schema_name text, table_name text)
-RETURNS TABLE (
-    host_id text,
-    availability_zone text,
-    member_role text,
-    az_score double precision,
-    max_pending_score double precision,
-    min_pending_score double precision,
-    ready_score double precision)
-STABLE
-SECURITY DEFINER -- TODO try to somehow make it usable in views without this
-SET SEARCH_PATH FROM CURRENT
-LANGUAGE sql AS
-$$WITH shv AS (
-    SELECT
-        host_id,
-        max(weight) AS max_pending_weight,
-        min(weight) AS min_pending_weight,
-        coalesce(min(weight) FILTER ( WHERE NOT pending ), 0) AS ready_weight
-    FROM
-        shard_host_weight JOIN replication_group_config USING (replication_group_id, version)
-    WHERE
-        replication_group_id = group_id
-    GROUP BY
-    	host_id
-),
-rgm AS (
-    SELECT
-        *
-    FROM
-        replication_group_member
-    WHERE
-        replication_group_id = group_id
-)
-SELECT
-    host_id,
-    availability_zone,
-    member_role,
-    score(100, schema_name, table_name, availability_zone) AS az_score,
-    score(max_pending_weight, schema_name, table_name, host_id) AS max_pending_score,
-    score(min_pending_weight, schema_name, table_name, host_id) AS min_pending_score,
-    score(ready_weight, schema_name, table_name, host_id) AS ready_score
-FROM
-    shv JOIN rgm USING (host_id)
-$$;
-
-CREATE OR REPLACE VIEW shard_counts AS
+CREATE OR REPLACE VIEW published_shard AS
 WITH sharded_pg_class AS (
     SELECT
         st.replication_group_id,
@@ -426,10 +379,10 @@ WITH sharded_pg_class AS (
 )
 SELECT
     replication_group_id,
+    version,
     nspname AS schema_name,
     relname AS table_name,
-    max(replica_count) AS pending_count,
-    coalesce(min(replica_count) FILTER ( WHERE NOT pending ), 0) AS ready_count,
+    replica_count,
     publication_name
 FROM
     pg_class c
@@ -447,13 +400,9 @@ FROM
                 AND des.oid <> st.oid
                 AND st.oid = ANY (SELECT * FROM pg_partition_ancestors(des.oid)) 
         )
-        JOIN replication_group_config USING (replication_group_id, version)
 WHERE
-    c.relkind = 'r'
-GROUP BY
-    replication_group_id, nspname, relname, publication_name;
-
-COMMENT ON VIEW shard_counts IS
+    c.relkind = 'r';
+COMMENT ON VIEW published_shard IS
 'Provides shards and their number of pending and ready copies based on configuration in sharded_table.
 A shard is a non-partitioned table which ancestor (can be the table iself) is in sharded_table.
 The desired number of copies is specified per the whole hierarchy (ie. all partitions of a given table).
@@ -461,13 +410,59 @@ The desired number of copies is specified per the whole hierarchy (ie. all parti
 Only shards for which there is a publication are present here.';
 
 CREATE OR REPLACE VIEW shard_assignment AS
+WITH shard_assigned_host AS (
+    SELECT
+        replication_group_id,
+        version,
+        schema_name,
+        table_name,
+        publication_name,
+        availability_zone,
+        host_id,
+        host_name,
+        port,
+        online
+    FROM
+        published_shard s
+            CROSS JOIN LATERAL (
+                SELECT
+                    availability_zone,
+                    host_id,
+                    host_name,
+                    port,
+                    online,
+                    row_number() OVER (
+                        PARTITION BY availability_zone
+                        ORDER BY pgwrh.score(weight, s.schema_name, s.table_name, host_id) DESC) AS group_rank
+                FROM
+                    shard_host_weight
+                        JOIN shard_host USING (replication_group_id, host_id)
+                        JOIN replication_group_member USING (replication_group_id, host_id)
+                WHERE
+                    (replication_group_id, version) = (s.replication_group_id, s.version)
+                ORDER BY
+                    group_rank, pgwrh.score(100, s.schema_name, s.table_name, availability_zone) DESC
+                LIMIT
+                    s.replica_count
+            ) h
+)
 SELECT
     schema_name,
     table_name,
-    (loc.host_id IS NOT NULL) AS local,
-    shard_server_name,
-    host,
-    port,
+    bool_or(m.host_id = sah.host_id) AS local, -- is this member one of the assigned hosts?
+    -- foreign server name, host and port
+    -- take all assigned hosts that are
+    -- -- ready (ie. NOT pending)
+    -- -- online
+    -- -- not this member
+    -- sort hosts by their id to minimize number of foreign servers
+    -- (ie. avoid having different foreign servers for different permutations the same hosts)
+    md5(coalesce(string_agg(sah.host_id, ',' ORDER BY sah.host_id)
+        FILTER (WHERE online AND NOT pending AND m.host_id <> sah.host_id), '')) AS shard_server_name,
+    coalesce(string_agg(host_name, ',' ORDER BY sah.host_id)
+        FILTER (WHERE online AND NOT pending AND m.host_id <> sah.host_id), '') AS host,
+    coalesce(string_agg(port::text, ',' ORDER BY sah.host_id)
+        FILTER (WHERE online AND NOT pending AND m.host_id <> sah.host_id), '') AS port,
     current_database() AS dbname,
     username AS shard_server_user,
     password AS shard_server_password,
@@ -475,46 +470,13 @@ SELECT
 FROM
     replication_group_member m
         JOIN replication_group g USING (replication_group_id)
-        JOIN shard_counts sc USING (replication_group_id)
-        -- all hosts of a particular shard
-        -- from the point of view of m
-        LEFT JOIN LATERAL (
-            SELECT
-                host_id,
-                row_number() OVER (PARTITION BY s.availability_zone ORDER BY (CASE WHEN s.host_id = m.host_id THEN max_pending_score ELSE min_pending_score END) DESC) AS group_rank
-            FROM
-                scores(replication_group_id, sc.schema_name, sc.table_name) s
-            ORDER BY
-                group_rank, az_score
-            LIMIT
-                sc.pending_count
-        ) loc USING (host_id)
-        -- remote server of a particular shard
-        -- from the point of view of m
-        -- take "ready" values of weight and replica_count
-        CROSS JOIN LATERAL (
-            SELECT
-                md5(coalesce(string_agg(host_name || ':' || port, ',') FILTER ( WHERE online ), '')) AS shard_server_name,
-                coalesce(string_agg(host_name, ',') FILTER ( WHERE online ), '') AS host,
-                coalesce(string_agg(port::text, ',') FILTER ( WHERE online ), '') AS port
-            FROM (
-                SELECT
-                    sc.replication_group_id,
-                    host_id,
-                    availability_zone,
-                    row_number() OVER (PARTITION BY availability_zone ORDER BY ready_score DESC) AS group_rank
-                FROM
-                    scores(replication_group_id, sc.schema_name, sc.table_name)
-                ORDER BY
-                    group_rank, az_score
-                LIMIT
-                    sc.ready_count
-            ) AS top
-                JOIN shard_host USING (replication_group_id, host_id),
-                generate_series(1, CASE WHEN m.availability_zone = top.availability_zone THEN m.same_zone_multiplier ELSE 1 END)
-            WHERE host_id <> m.host_id
-        ) rem
-WHERE member_role = CURRENT_ROLE;
+        JOIN shard_assigned_host sah USING (replication_group_id)
+        JOIN replication_group_config USING (replication_group_id, version),
+        -- multiply hosts in the same availability zone as this member
+        generate_series(1, CASE WHEN m.availability_zone = sah.availability_zone THEN m.same_zone_multiplier ELSE 1 END)
+WHERE member_role = CURRENT_ROLE
+GROUP BY
+    schema_name, table_name, dbname, shard_server_user, shard_server_password, publication_name;
 
 GRANT SELECT ON shard_assignment TO PUBLIC;
 
