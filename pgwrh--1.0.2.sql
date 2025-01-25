@@ -1556,52 +1556,59 @@ GROUP BY 1
 -- -- FIXME???
 GRANT SELECT ON sync TO PUBLIC;
 
-CREATE OR REPLACE FUNCTION launch_sync() RETURNS void LANGUAGE plpgsql AS
-$$DECLARE
+CREATE OR REPLACE FUNCTION launch_in_background(commands text) RETURNS void LANGUAGE plpgsql AS
+$$
+DECLARE
     pid int;
 BEGIN
-    pid := (select pg_background_launch('
-        CAll @extschema@.sync_replica_worker();
-    '));
+    pid := (select pg_background_launch(commands));
     PERFORM pg_sleep(0.1);
     PERFORM pg_background_detach(pid);
-END$$;
-CREATE OR REPLACE FUNCTION sync_daemon(seconds real) RETURNS void LANGUAGE plpgsql AS
-$$DECLARE
-    pid int;
-BEGIN
-    pid := (select pg_background_launch(format('
+END
+$$;
+
+CREATE OR REPLACE FUNCTION launch_sync() RETURNS void LANGUAGE sql AS
+$$
+SELECT @extschema@.launch_in_background('CAll @extschema@.sync_replica_worker();')
+$$;
+
+CREATE OR REPLACE FUNCTION sync_daemon(seconds real) RETURNS void LANGUAGE sql AS
+$$
+SELECT @extschema@.launch_in_background(format('
         CAll @extschema@.sync_replica_worker();
         SELECT pg_sleep(%1$s);
         SELECT pgwrh.sync_daemon(%1$s);
-    ', seconds)));
-    PERFORM pg_sleep(0.1);
-    PERFORM pg_background_detach(pid);
-END$$;
+    ', seconds))
+$$;
 
 CREATE OR REPLACE FUNCTION exec_script(script text) RETURNS boolean LANGUAGE plpgsql AS
-$$BEGIN
+$$
+BEGIN
     PERFORM * FROM pg_background_result(pg_background_launch(script)) AS discarded(result text);
     RETURN TRUE;
 EXCEPTION
     WHEN OTHERS THEN
         RETURN FALSE;
-END$$;
+END
+$$;
 
-CREATE OR REPLACE FUNCTION exec_non_tx_scripts(script text[]) RETURNS boolean LANGUAGE plpgsql AS
-$$DECLARE
+CREATE OR REPLACE FUNCTION exec_non_tx_scripts(scripts text[]) RETURNS boolean LANGUAGE plpgsql AS
+$$
+DECLARE
     cmd text;
     err text;
 BEGIN
-    FOREACH cmd IN script LOOP
+    FOREACH cmd IN ARRAY scripts LOOP
         PERFORM * FROM pg_background_result(pg_background_launch(cmd)) AS discarded(result text);
     END LOOP;
+    RETURN TRUE;
 EXCEPTION
     WHEN OTHERS THEN
         GET STACKED DIAGNOSTICS err = MESSAGE_TEXT;
         raise NOTICE '%', err;
         RETURN FALSE;
-END$$;
+END
+$$;
 
 CREATE OR REPLACE FUNCTION sync_step() RETURNS boolean LANGUAGE plpgsql AS
 $$
@@ -1610,20 +1617,21 @@ DECLARE
     cmd text;
     err text;
 BEGIN
-    FOR r IN SELECT * FROM @extschema@.sync LOOP
+    -- Select commands to execute in a separate transaction so that we don't keep any locks here
+    FOR r IN SELECT * FROM pg_background_result(pg_background_launch('select * from @extschema@.sync')) AS (transactional boolean, async boolean, description text, commands text[]) LOOP
         RAISE NOTICE '%', r.description;
         IF r.transactional THEN
             IF r.async THEN
-                PERFORM pg_background_detach(pg_background_launch(array_to_string(r.commands, ';')));
+                PERFORM @extschema@.launch_in_background(array_to_string(r.commands, ';'));
             ELSE
                 PERFORM @extschema@.exec_script(array_to_string(r.commands, ';'));
             END IF;
         ELSE
             IF r.async THEN
                 IF array_length(r.commands, 1) > 1 THEN
-                    PERFORM pg_background_detach(pg_background_launch(format('SELECT @extschema@.exec_non_tx_scripts(ARRAY[%s])', (SELECT string_agg(format('%L', c), ',') FROM unnest(r.commands) AS c))));
+                    PERFORM @extschema@.launch_in_background(format('SELECT @extschema@.exec_non_tx_scripts(ARRAY[%s])', (SELECT string_agg(format('%L', c), ',') FROM unnest(r.commands) AS c)));
                 ELSE
-                    PERFORM pg_background_detach(pg_background_launch(r.commands[1]));
+                    PERFORM @extschema@.launch_in_background(r.commands[1]);
                 END IF;
             ELSE
                 FOREACH cmd IN ARRAY r.commands LOOP
@@ -1636,7 +1644,7 @@ BEGIN
 EXCEPTION
     WHEN OTHERS THEN
         GET STACKED DIAGNOSTICS err = MESSAGE_TEXT;
-        raise NOTICE '%', err;
+        raise WARNING '%', err;
         PERFORM pg_sleep(1);
         RETURN TRUE;
 END
