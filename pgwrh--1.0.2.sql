@@ -37,7 +37,8 @@ $$SELECT @extschema@.next_version(version)$$;
 CREATE TABLE IF NOT EXISTS replication_group (
     replication_group_id text NOT NULL PRIMARY KEY,
     username text NOT NULL,
-    password text NOT NULL
+    password text NOT NULL,
+    ready_version config_version NOT NULL DEFAULT 'FLIP'
 );
 SELECT pg_catalog.pg_extension_config_dump('replication_group', '');
 COMMENT ON TABLE replication_group IS
@@ -57,10 +58,8 @@ COMMENT ON COLUMN replication_group.replication_group_id IS
 CREATE TABLE IF NOT EXISTS replication_group_config (
     replication_group_id text NOT NULL REFERENCES replication_group(replication_group_id),
     version config_version NOT NULL,
-    pending boolean NOT NULL,
 
-    PRIMARY KEY (replication_group_id, version),
-    UNIQUE (replication_group_id, pending)
+    PRIMARY KEY (replication_group_id, version)
 );
 SELECT pg_catalog.pg_extension_config_dump('replication_group_config', '');
 COMMENT ON TABLE replication_group_config IS
@@ -79,34 +78,41 @@ Version marked as "pending" (pending = true) is a configuration version that is 
 
 A replica keeps all shards from "ready" configuration even if a shard might be no longer assigned to it in "pending" configuration version.';
 
+ALTER TABLE replication_group ADD FOREIGN KEY (replication_group_id, ready_version)
+REFERENCES replication_group_config(replication_group_id, version)
+DEFERRABLE INITIALLY DEFERRED;
+
+CREATE OR REPLACE FUNCTION replication_group_prepare_config() RETURNS trigger LANGUAGE plpgsql AS
+$$
+BEGIN
+    INSERT INTO @extschema@.replication_group_config VALUES (NEW.replication_group_id, NEW.ready_version)
+    ON CONFLICT DO NOTHING;
+    RETURN NEW;
+END
+$$;
+CREATE OR REPLACE TRIGGER replication_group_before_insert
+AFTER INSERT ON replication_group
+FOR EACH ROW EXECUTE FUNCTION replication_group_prepare_config();
+
 CREATE OR REPLACE FUNCTION is_ready(group_id text, version config_version) RETURNS boolean
 SET SEARCH_PATH FROM CURRENT
 LANGUAGE sql STABLE AS
 $$
-SELECT EXISTS (SELECT 1 FROM replication_group_config WHERE replication_group_id = group_id AND version = $2 AND NOT pending)
+SELECT EXISTS (SELECT 1 FROM replication_group WHERE replication_group_id = group_id AND ready_version = $2)
 $$;
 
 CREATE OR REPLACE FUNCTION next_pending_version(group_id text) RETURNS config_version
-SET SEARCH_PATH FROM CURRENT
 LANGUAGE sql AS
 $$
-    -- calculate next version
-    WITH v AS (
-        SELECT g.replication_group_id, coalesce(pending.version, next_version(ready.version), 'FLIP') AS pending_version, ready.version AS version, TRUE
-        FROM
-            replication_group g
-                LEFT JOIN replication_group_config pending ON g.replication_group_id = pending.replication_group_id AND pending.pending
-                LEFT JOIN replication_group_config ready ON g.replication_group_id = ready.replication_group_id AND NOT ready.pending
-        WHERE
-            g.replication_group_id = group_id
-    ),
-    -- insert next config if necessary
-    _ AS (
-        INSERT INTO replication_group_config (replication_group_id, version, pending)
-        SELECT replication_group_id, pending_version, TRUE FROM v
-        ON CONFLICT DO NOTHING
-    )
-    SELECT pending_version FROM v
+INSERT INTO @extschema@.replication_group_config
+SELECT replication_group_id, pgwrh.next_version(ready_version)
+FROM @extschema@.replication_group
+WHERE replication_group_id = group_id
+ON CONFLICT DO NOTHING;
+
+SELECT pgwrh.next_version(ready_version)
+FROM @extschema@.replication_group
+WHERE replication_group_id = group_id
 $$;
 COMMENT ON FUNCTION next_pending_version(group_id text) IS
 'Inserts next pending version into replication_group_config and returns it.
@@ -130,20 +136,11 @@ BEGIN
 END
 $$;
 
-CREATE OR REPLACE TRIGGER forbid_not_pending_version_insert BEFORE INSERT ON replication_group_config
-FOR EACH ROW
-WHEN (NOT NEW.pending)
-EXECUTE FUNCTION forbid_not_pending_version_modifications();
-CREATE OR REPLACE TRIGGER forbid_not_pending_version_delete BEFORE DELETE ON replication_group_config
-FOR EACH ROW
-WHEN (NOT OLD.pending)
-EXECUTE FUNCTION forbid_not_pending_version_modifications();
-
 CREATE OR REPLACE FUNCTION clone_config(group_id text, target_version config_version) RETURNS void
 SET SEARCH_PATH FROM CURRENT
 LANGUAGE sql AS
 $$
-    -- calculate next version
+    -- clone weights
     WITH _ AS (
         INSERT INTO shard_host_weight (replication_group_id, host_id, version, weight)
         SELECT
@@ -186,14 +183,27 @@ CREATE OR REPLACE FUNCTION mark_pending_version_ready(group_id text) RETURNS voi
 SET SEARCH_PATH FROM CURRENT
 LANGUAGE sql AS
 $$
-UPDATE @extschema@.replication_group_config dst SET pending = NOT pending
+WITH updated AS (
+    UPDATE @extschema@.replication_group g SET ready_version = @extschema@.next_version(ready_version)
+    WHERE
+        replication_group_id = group_id AND
+        EXISTS (
+            SELECT 1 FROM @extschema@.replication_group_config
+            WHERE
+                replication_group_id = g.replication_group_id AND
+                version = @extschema@.next_version(g.ready_version)
+    )
+    RETURNING *
+)
+DELETE FROM @extschema@.replication_group_config c
 WHERE
-    replication_group_id = group_id
-    AND EXISTS (
-        SELECT 1
-        FROM @extschema@.replication_group_config
-        WHERE replication_group_id = dst.replication_group_id
-            AND pending)
+    replication_group_id = group_id AND
+    NOT EXISTS (
+        SELECT 1 FROM updated
+        WHERE
+            replication_group_id = c.replication_group_id AND
+            ready_version = c.version
+    )
 $$;
 COMMENT ON FUNCTION mark_pending_version_ready(group_id text) IS
 'Swaps pending and ready configuration versions for a group.
@@ -449,7 +459,8 @@ WITH shard_assigned_host AS (
 SELECT
     schema_name,
     table_name,
-    bool_or(m.host_id = sah.host_id) AS local, -- is this member one of the assigned hosts?
+    -- is this member one of the assigned hosts?
+    bool_or(m.host_id = sah.host_id) AS local,
     -- foreign server name, host and port
     -- take all assigned hosts that are
     -- -- ready (ie. NOT pending)
@@ -458,11 +469,11 @@ SELECT
     -- sort hosts by their id to minimize number of foreign servers
     -- (ie. avoid having different foreign servers for different permutations the same hosts)
     md5(coalesce(string_agg(sah.host_id, ',' ORDER BY sah.host_id)
-        FILTER (WHERE online AND NOT pending AND m.host_id <> sah.host_id), '')) AS shard_server_name,
+        FILTER (WHERE online AND g.ready_version = sah.version AND m.host_id <> sah.host_id), '')) AS shard_server_name,
     coalesce(string_agg(host_name, ',' ORDER BY sah.host_id)
-        FILTER (WHERE online AND NOT pending AND m.host_id <> sah.host_id), '') AS host,
+        FILTER (WHERE online AND g.ready_version = sah.version AND m.host_id <> sah.host_id), '') AS host,
     coalesce(string_agg(port::text, ',' ORDER BY sah.host_id)
-        FILTER (WHERE online AND NOT pending AND m.host_id <> sah.host_id), '') AS port,
+        FILTER (WHERE online AND g.ready_version = sah.version AND m.host_id <> sah.host_id), '') AS port,
     current_database() AS dbname,
     username AS shard_server_user,
     password AS shard_server_password,
@@ -470,8 +481,7 @@ SELECT
 FROM
     replication_group_member m
         JOIN replication_group g USING (replication_group_id)
-        JOIN shard_assigned_host sah USING (replication_group_id)
-        JOIN replication_group_config USING (replication_group_id, version),
+        JOIN shard_assigned_host sah USING (replication_group_id),
         -- multiply hosts in the same availability zone as this member
         generate_series(1, CASE WHEN m.availability_zone = sah.availability_zone THEN m.same_zone_multiplier ELSE 1 END)
 WHERE member_role = CURRENT_ROLE
@@ -495,12 +505,12 @@ WITH parent_class AS (
         c.oid::regclass,
         it.index_name,
         it.index_template,
-        pending
+        ready_version = version AS pending
     FROM
         pg_class c
             JOIN pg_namespace n ON relnamespace = n.oid
             JOIN shard_index_template it ON (nspname, relname) = (schema_name, table_name)
-            JOIN replication_group_config USING (replication_group_id, version)
+            JOIN replication_group USING (replication_group_id)
 )
 SELECT
     nspname AS schema_name,
