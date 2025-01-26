@@ -1,3 +1,6 @@
+COMMENT ON TYPE config_version IS
+'A FLIP/FLAP enum to use as config version identifier';
+
 DROP TRIGGER forbid_not_pending_version_insert ON replication_group_config;
 DROP TRIGGER forbid_not_pending_version_delete ON replication_group_config;
 
@@ -47,12 +50,17 @@ SELECT pgwrh.next_version(ready_version)
 FROM @extschema@.replication_group
 WHERE replication_group_id = group_id
 $$;
+COMMENT ON FUNCTION next_pending_version(group_id text) IS
+'Inserts next pending version into replication_group_config and returns it.';
+
+COMMENT ON FUNCTION clone_config IS
+'Copies configuration from one version to another. Ignores already existing items.';
 
 CREATE OR REPLACE FUNCTION mark_pending_version_ready(group_id text) RETURNS void
 SET SEARCH_PATH FROM CURRENT
 LANGUAGE sql AS
 $$
-WITH updated AS (
+WITH updated_group AS (
     UPDATE @extschema@.replication_group g SET ready_version = @extschema@.next_version(ready_version)
     WHERE
         replication_group_id = group_id AND
@@ -65,14 +73,10 @@ WITH updated AS (
     RETURNING *
 )
 DELETE FROM @extschema@.replication_group_config c
+USING updated_group g
 WHERE
-    replication_group_id = group_id AND
-    NOT EXISTS (
-        SELECT 1 FROM updated
-        WHERE
-            replication_group_id = c.replication_group_id AND
-            ready_version = c.version
-    )
+    c.replication_group_id = g.replication_group_id AND
+    c.version <> g.ready_version
 $$;
 
 CREATE OR REPLACE FUNCTION score(weight int, VARIADIC text[]) RETURNS double precision IMMUTABLE LANGUAGE sql AS
@@ -228,8 +232,8 @@ WHERE
 
 
 ---- Drop unused controller objects
+DROP FUNCTION scores(group_id text, schema_name text, table_name text);
 DROP VIEW shard_counts;
-
 ALTER TABLE replication_group_config DROP COLUMN pending;
 
 

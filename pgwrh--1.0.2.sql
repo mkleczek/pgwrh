@@ -1,6 +1,6 @@
 GRANT USAGE ON SCHEMA @extschema@ TO PUBLIC;
 
-ALTER DEFAULT PRIVILEGES GRANT EXECUTE ON ROUTINES TO PUBLIC;
+ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON ROUTINES FROM PUBLIC;
 
 --------------------
 -- Global (controller and replica) helpers
@@ -20,7 +20,13 @@ $$SELECT format('SELECT @extschema@.add_ext_dependency(%1$L, (SELECT oid FROM %1
 -- End Global (controller and replica) helpers
 -------------------
 
+----------------------------------------------------
+-- Controller start
+----------------------------------------------------
+
 CREATE TYPE config_version AS ENUM ('FLIP', 'FLOP');
+COMMENT ON TYPE config_version IS
+'A FLIP/FLAP enum to use as config version identifier';
 
 CREATE OR REPLACE FUNCTION next_version(version config_version) RETURNS config_version
 IMMUTABLE
@@ -115,9 +121,7 @@ FROM @extschema@.replication_group
 WHERE replication_group_id = group_id
 $$;
 COMMENT ON FUNCTION next_pending_version(group_id text) IS
-'Inserts next pending version into replication_group_config and returns it.
-
-Clones existing non-pending configuration.';
+'Inserts next pending version into replication_group_config and returns it.';
 
 CREATE OR REPLACE FUNCTION next_pending_version_trigger() RETURNS TRIGGER
 LANGUAGE plpgsql AS
@@ -170,6 +174,8 @@ $$
         (replication_group_id, version) = (group_id, prev_version(target_version))
     ON CONFLICT DO NOTHING
 $$;
+COMMENT ON FUNCTION clone_config IS
+'Copies configuration from one version to another. Ignores already existing items.';
 
 CREATE OR REPLACE FUNCTION clone_config_trigger() RETURNS TRIGGER
 SET SEARCH_PATH FROM CURRENT
@@ -183,7 +189,7 @@ CREATE OR REPLACE FUNCTION mark_pending_version_ready(group_id text) RETURNS voi
 SET SEARCH_PATH FROM CURRENT
 LANGUAGE sql AS
 $$
-WITH updated AS (
+WITH updated_group AS (
     UPDATE @extschema@.replication_group g SET ready_version = @extschema@.next_version(ready_version)
     WHERE
         replication_group_id = group_id AND
@@ -196,14 +202,10 @@ WITH updated AS (
     RETURNING *
 )
 DELETE FROM @extschema@.replication_group_config c
+USING updated_group g
 WHERE
-    replication_group_id = group_id AND
-    NOT EXISTS (
-        SELECT 1 FROM updated
-        WHERE
-            replication_group_id = c.replication_group_id AND
-            ready_version = c.version
-    )
+    c.replication_group_id = g.replication_group_id AND
+    c.version <> g.ready_version
 $$;
 COMMENT ON FUNCTION mark_pending_version_ready(group_id text) IS
 'Swaps pending and ready configuration versions for a group.
