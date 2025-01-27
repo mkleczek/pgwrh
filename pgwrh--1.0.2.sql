@@ -1529,6 +1529,38 @@ GROUP BY 1
 -- -- FIXME???
 GRANT SELECT ON sync TO PUBLIC;
 
+CREATE OR REPLACE VIEW replica_status AS
+WITH shard_assignment AS MATERIALIZED (
+    -- TODO cleanup select list as it is copied from shard_assignment_r
+    SELECT
+        lr.rel_id AS rel_id,
+        lr.slot_rel_id AS slot_rel_id,
+        (lr).slot_rel_id.schema_name AS slot_schema_name,
+        (shard_server_schema, (lr).rel_id.table_name)::rel_id AS remote_rel_id,
+        sa.local,
+        lr.reg_class,
+        lr.parent,
+        lr,
+        rr
+    FROM
+        fdw_shard_assignment sa
+            LEFT JOIN local_rel lr ON (sa.schema_name, sa.table_name) = ((lr).rel_id.schema_name, (lr).rel_id.table_name)
+            CROSS JOIN LATERAL (SELECT format('%s_%s', sa.schema_name, shard_server_name)) AS sss(shard_server_schema)
+            LEFT JOIN local_rel rr ON (shard_server_schema, sa.table_name) = ((rr).rel_id.schema_name, (rr).rel_id.table_name)
+)
+SELECT
+    count(*) FILTER (WHERE local) AS shards_to_host,
+    count(*) FILTER (WHERE (lr).parent.rel_id = slot_rel_id) AS exposed_shards,
+    count(*) FILTER (WHERE NOT local AND (rr).parent.rel_id IS DISTINCT FROM slot_rel_id) AS mismatched_remote_shards,
+    count(*) FILTER (WHERE EXISTS (SELECT 1 FROM pg_subscription_rel WHERE srrelid = reg_class AND srsubstate <> 'r')) AS not_replicated_shards
+FROM
+    shard_assignment;
+
+CREATE OR REPLACE FUNCTION replica_ready() RETURNS boolean LANGUAGE sql AS
+$$
+    SELECT shards_to_host = exposed_shards AND mismatched_remote_shards = 0 FROM @extschema@.replica_status
+$$;
+
 CREATE OR REPLACE FUNCTION launch_in_background(commands text) RETURNS void LANGUAGE plpgsql AS
 $$
 DECLARE
@@ -1545,13 +1577,16 @@ $$
 SELECT @extschema@.launch_in_background('CAll @extschema@.sync_replica_worker();')
 $$;
 
-CREATE OR REPLACE FUNCTION sync_daemon(seconds real) RETURNS void LANGUAGE sql AS
+CREATE OR REPLACE FUNCTION sync_daemon(seconds real, application_name text DEFAULT 'pgwrh_sync_daemon') RETURNS void LANGUAGE sql AS
 $$
 SELECT @extschema@.launch_in_background(format('
+        SET application_name TO %L;
         CAll @extschema@.sync_replica_worker();
         SELECT pg_sleep(%1$s);
-        SELECT pgwrh.sync_daemon(%1$s);
-    ', seconds))
+        SELECT @extschema@.sync_daemon(%1$s);
+    ', application_name, seconds))
+-- WHERE
+--     NOT EXISTS (SELECT 1 FROM pg_stat_activity a WHERE a.application_name = $2)
 $$;
 
 CREATE OR REPLACE FUNCTION exec_script(script text) RETURNS boolean LANGUAGE plpgsql AS
@@ -1594,30 +1629,34 @@ DECLARE
     cmd text;
     err text;
 BEGIN
-    -- Select commands to execute in a separate transaction so that we don't keep any locks here
-    FOR r IN SELECT * FROM pg_background_result(pg_background_launch('select * from @extschema@.sync')) AS (transactional boolean, async boolean, description text, commands text[]) LOOP
-        RAISE NOTICE '%', r.description;
-        IF r.transactional THEN
-            IF r.async THEN
-                PERFORM @extschema@.launch_in_background(array_to_string(r.commands, ';'));
-            ELSE
-                PERFORM @extschema@.exec_script(array_to_string(r.commands, ';'));
-            END IF;
-        ELSE
-            IF r.async THEN
-                IF array_length(r.commands, 1) > 1 THEN
-                    PERFORM @extschema@.launch_in_background(format('SELECT @extschema@.exec_non_tx_scripts(ARRAY[%s])', (SELECT string_agg(format('%L', c), ',') FROM unnest(r.commands) AS c)));
+    IF pg_try_advisory_xact_lock(2895359559) THEN
+        -- Select commands to execute in a separate transaction so that we don't keep any locks here
+        FOR r IN SELECT * FROM pg_background_result(pg_background_launch('select * from @extschema@.sync')) AS (transactional boolean, async boolean, description text, commands text[]) LOOP
+            RAISE NOTICE '%', r.description;
+            IF r.transactional THEN
+                IF r.async THEN
+                    PERFORM @extschema@.launch_in_background(array_to_string(r.commands, ';'));
                 ELSE
-                    PERFORM @extschema@.launch_in_background(r.commands[1]);
+                    PERFORM @extschema@.exec_script(array_to_string(r.commands, ';'));
                 END IF;
             ELSE
-                FOREACH cmd IN ARRAY r.commands LOOP
-                    PERFORM @extschema@.exec_script(cmd);
-                END LOOP;
+                IF r.async THEN
+                    IF array_length(r.commands, 1) > 1 THEN
+                        PERFORM @extschema@.launch_in_background(format('SELECT @extschema@.exec_non_tx_scripts(ARRAY[%s])', (SELECT string_agg(format('%L', c), ',') FROM unnest(r.commands) AS c)));
+                    ELSE
+                        PERFORM @extschema@.launch_in_background(r.commands[1]);
+                    END IF;
+                ELSE
+                    FOREACH cmd IN ARRAY r.commands LOOP
+                        PERFORM @extschema@.exec_script(cmd);
+                    END LOOP;
+                END IF;
             END IF;
-        END IF;
-    END LOOP;
-    RETURN FOUND;
+        END LOOP;
+        RETURN FOUND;
+    ELSE
+        RETURN FALSE;
+    END IF;
 EXCEPTION
     WHEN OTHERS THEN
         GET STACKED DIAGNOSTICS err = MESSAGE_TEXT;
@@ -1630,10 +1669,9 @@ $$;
 CREATE OR REPLACE PROCEDURE sync_replica_worker() LANGUAGE plpgsql AS
 $$
 BEGIN
-    IF pg_try_advisory_lock(2895359559) THEN
-        WHILE r FROM pg_background_result(pg_background_launch('SELECT @extschema@.sync_step()')) AS r(r boolean) LOOP
-        END LOOP;
-    END IF;
+    WHILE r FROM pg_background_result(pg_background_launch('SELECT @extschema@.sync_step()')) AS r(r boolean) LOOP
+    END LOOP;
+    PERFORM pg_notify('pgwrh_sync_replica_worker', 'replica_ready') WHERE @extschema@.replica_ready();
 END
 $$;
 
@@ -1649,7 +1687,7 @@ $$;
 
 -- -- -- API
 
-CREATE OR REPLACE FUNCTION configure_controller(host text, port text, username text, password text)
+CREATE OR REPLACE FUNCTION configure_controller(host text, port text, username text, password text, start_daemon boolean DEFAULT true, refresh_seconds real DEFAULT 60)
 RETURNS void
 SET SEARCH_PATH FROM CURRENT
 LANGUAGE plpgsql AS
@@ -1663,5 +1701,6 @@ BEGIN
     FOR r IN SELECT * FROM @extschema@.update_user_mapping('replica_controller', username, password) AS u(cmd) LOOP
         EXECUTE r.cmd;
     END LOOP;
+    PERFORM @extschema@.sync_daemon(refresh_seconds);
 END
 $$;

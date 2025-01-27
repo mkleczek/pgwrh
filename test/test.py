@@ -4,83 +4,76 @@ import tempfile
 import time
 
 from testgres import get_new_node, scoped_config
-from unittest import TestCase
+from contextlib import ExitStack
 
-class TestRemoteOperations(TestCase):
-
-    def test_temp(self):
-        logfile = tempfile.NamedTemporaryFile('w', delete=True)
+@pytest.fixture
+def new_postgres_node():
+    with ExitStack() as stack:
         with scoped_config(use_python_logging=True):
-            with get_new_node().init(allow_logical=True) as master:
-                # Configure and start master
-                (master
+            def do(name, master=False):
+                node = get_new_node(name)
+                stack.enter_context(node)
+                node.init(allow_logical=master)
+                (node
                     .append_conf('max_worker_processes = 100')
                     .append_conf('max_replication_slots = 100')
                     .append_conf('max_wal_senders = 100'))
-                master.start()
-                master.execute('CREATE EXTENSION pgwrh CASCADE')
+                node.start()
+                node.execute('CREATE EXTENSION pgwrh CASCADE')
+                return node
+            yield do
 
-                # Initialize master with some tables to replicate, data and sharding configuration
-                master.psql(filename='master.sql')
-                print(f'my_data master count: {master.execute('select count(*) from test.my_data')}')
-                
-                print(f'Starting replicas')
-                with \
-                    get_new_node().init() as replica1, \
-                    get_new_node().init() as replica2, \
-                    get_new_node().init() as replica3, \
-                    get_new_node().init() as replica4:
-                    
-                    replicas = [(replica1, 'h1'),
-                                (replica2, 'h2'),
-                                (replica3, 'h3'),
-                                (replica4, 'h4')]
+def setup_replica(master, user):
+    def init(replica):
+        with master.connect() as mc:
+            mc.begin()
+            mc.execute(f'CREATE USER {user} PASSWORD \'{user}\' REPLICATION IN ROLE test_replica;')
+            mc.execute(f'SELECT pgwrh.add_shard_host(\'g1\', \'{user}\', \'localhost\', {replica.port})')
+            mc.commit()
+    return init
 
-                    for (replica, user) in replicas:
-                        print(f'Starting replica {user}')
-                        (replica
-                            .append_conf('max_worker_processes = 100')
-                            .append_conf('max_logical_replication_workers = 12')
-                            .append_conf('max_replication_slots = 32'))
-                        replica.start()
 
-                    # Register replicas in master pgwrh configuration
-                    with master.connect() as mc:
-                        mc.begin()
-                        for (replica, user) in replicas:
-                            mc.execute(f'CREATE USER {user} PASSWORD \'{user}\' REPLICATION IN ROLE test_replica;')
-                            mc.execute(f'SELECT pgwrh.add_shard_host(\'g1\', \'{user}\', \'localhost\', {replica.port})')
-                        mc.commit()
+@pytest.fixture
+def master(new_postgres_node):
+    node = new_postgres_node('master', True)
+    node.psql(filename='master.sql')
+    return node
 
-                    # Initialize replicas
-                    # Run sync_replica_worker so that replica configures itself for replication
-                    for (replica, user) in replicas:
-                        replica.execute('CREATE EXTENSION pgwrh CASCADE')
-                        replica.execute(f'SELECT pgwrh.configure_controller(\'localhost\', \'{master.port}\', \'{user}\', \'{user}\')')
-                        replica.execute('select pgwrh.sync_daemon(0)')
+@pytest.fixture
+def register_replicas(master):
+    def do(replicas):
+        for replica in replicas:
+            user = replica.name
+            password = replica.name
+            with master.connect() as mc:
+                mc.begin()
+                mc.execute(f'CREATE USER {user} PASSWORD \'{password}\' REPLICATION IN ROLE test_replica;')
+                mc.execute(f'SELECT pgwrh.add_shard_host(\'g1\', \'{user}\', \'localhost\', {replica.port})')
+                mc.commit()
+            replica.execute(f'SELECT pgwrh.configure_controller(\'localhost\', \'{master.port}\', \'{user}\', \'{password}\', refresh_seconds := 0)')
+            #replica.execute('select pgwrh.sync_daemon(0)')
+    return do
 
-                    # All shards are replicated. We can mark pending version as ready
-                    master.execute(f'SELECT pgwrh.mark_pending_version_ready(\'g1\')')
+@pytest.fixture
+def publish_config_version(master):
+    def do():
+        master.execute('select pgwrh.mark_pending_version_ready(\'g1\')')
+    return do
 
-                    # Re-run sync_replica_worker on replicas so that foreign tables are reconfigured
-                    # for (replica, user) in replicas:
-                    #     print(f'Starting replica worker {user}')
-                    #     replica.execute('select pgwrh.launch_sync()')
 
-                    time.sleep(5)
-                    # Perform some queries on replicas
-                    for (replica, _) in replicas:
-                        print(f'my_data count: {replica.execute('select count(*) from test.my_data')}')
+@pytest.fixture
+def replica1(new_postgres_node):
+    return new_postgres_node('replica1')
+@pytest.fixture
+def replica2(new_postgres_node):
+    return new_postgres_node('replica2')
 
-                    with master.connect() as mc:
-                        mc.begin()
-                        mc.execute('CALL test.create_year_shard(2026)')
-                        mc.execute('SELECT pgwrh.sync_publications()')
-                        mc.commit()
 
-                    master.execute('CALL test.insert_test_data(2026)')
+def test_dummy(register_replicas, replica1, replica2, publish_config_version):
+    register_replicas([replica1, replica2])
 
-                    time.sleep(5)
-                    # Perform some queries on replicas
-                    for (replica, _) in replicas:
-                        print(f'my_data count: {replica.execute('select count(*) from test.my_data')}')
+    replica1.poll_query_until('SELECT pgwrh.replica_ready()')
+    replica2.poll_query_until('SELECT pgwrh.replica_ready()')
+
+    print(replica1.execute('select * from pgwrh.replica_status'))
+    print(replica2.execute('select * from pgwrh.replica_status'))
