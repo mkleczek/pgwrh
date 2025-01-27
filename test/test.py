@@ -68,12 +68,25 @@ def replica1(new_postgres_node):
 def replica2(new_postgres_node):
     return new_postgres_node('replica2')
 
+def poll_ready(replica):
+    replica.poll_query_until('SELECT pgwrh.replica_ready()')
 
-def test_dummy(register_replicas, replica1, replica2, publish_config_version):
+def test_dummy(master, register_replicas, replica1, replica2, publish_config_version):
     register_replicas([replica1, replica2])
 
-    replica1.poll_query_until('SELECT pgwrh.replica_ready()')
-    replica2.poll_query_until('SELECT pgwrh.replica_ready()')
+    poll_ready(replica1)
+    poll_ready(replica2)
 
-    print(replica1.execute('select * from pgwrh.replica_status'))
-    print(replica2.execute('select * from pgwrh.replica_status'))
+    try:
+        print(f'Count: {replica1.execute('select count(*) from test.my_data')[0]}')
+        pytest.fail('Should have failed with fdw connection error')
+    except:
+        pass
+
+    publish_config_version()
+
+    poll_ready(replica1)
+    poll_ready(replica2)
+
+    query = lambda r: r.execute('select count(*) from test.my_data')[0]
+    assert all(query(master) == count for count in map(query, [replica1, replica2]))

@@ -1577,16 +1577,16 @@ $$
 SELECT @extschema@.launch_in_background('CAll @extschema@.sync_replica_worker();')
 $$;
 
-CREATE OR REPLACE FUNCTION sync_daemon(seconds real, application_name text DEFAULT 'pgwrh_sync_daemon') RETURNS void LANGUAGE sql AS
+CREATE OR REPLACE FUNCTION sync_daemon(seconds real, application_name text DEFAULT 'pgwrh_sync_daemon', check_running boolean DEFAULT true) RETURNS void LANGUAGE sql AS
 $$
 SELECT @extschema@.launch_in_background(format('
-        SET application_name TO %L;
+        SET application_name TO %1$L;
         CAll @extschema@.sync_replica_worker();
-        SELECT pg_sleep(%1$s);
-        SELECT @extschema@.sync_daemon(%1$s);
+        SELECT pg_sleep(%2$s);
+        SELECT @extschema@.sync_daemon(%2$s, %1$L, false);
     ', application_name, seconds))
--- WHERE
---     NOT EXISTS (SELECT 1 FROM pg_stat_activity a WHERE a.application_name = $2)
+WHERE
+    NOT EXISTS (SELECT 1 FROM pg_stat_activity a WHERE a.application_name = $2) OR NOT check_running
 $$;
 
 CREATE OR REPLACE FUNCTION exec_script(script text) RETURNS boolean LANGUAGE plpgsql AS
