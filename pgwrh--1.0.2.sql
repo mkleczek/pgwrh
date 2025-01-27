@@ -1026,6 +1026,9 @@ SELECT
     FALSE,
     format('Creating replication subscription %s', subname),
     ARRAY[
+        format('TRUNCATE %s',
+            string_agg((sc).reg_class::text, ', ')
+        ),
         format('CREATE SUBSCRIPTION %I CONNECTION %L PUBLICATION %s WITH (slot_name = %L)',
             subname,
             format('host=%s port=%s user=%s password=%s dbname=%s',
@@ -1240,7 +1243,6 @@ SELECT
             (lr).bound,
             pg_get_partkeydef((parent).pc.oid)
         ),
-        select_add_ext_dependency('pg_class', format('%L::regclass', format('%s.%s', (slot_rel_id).schema_name, (slot_rel_id).table_name))),
         format('CREATE FOREIGN TABLE %I.%I PARTITION OF %I.%I %s SERVER %I OPTIONS (schema_name %L)',
             (remote_rel_id).schema_name,
             (remote_rel_id).table_name,
@@ -1249,8 +1251,7 @@ SELECT
             (lr).bound,
             shard_server_name,
             (rel_id).schema_name
-        ),
-        select_add_ext_dependency('pg_class', format('%L::regclass', format('%s.%s', (remote_rel_id).schema_name, (remote_rel_id).table_name)))
+        )
     ]
 FROM
     shard_assignment sc
@@ -1285,11 +1286,7 @@ SELECT
             (slot).bound,
             shard_server_name,
             (rs).rel_id.schema_name
-        ),
-        select_add_ext_dependency('pg_class'::regclass,
-            format('%L::regclass', format('%s.%s',
-                (rs).remote_rel_id.schema_name,
-                (rs).remote_rel_id.table_name)))
+        )
     ]
 FROM
     shard_assignment rs
@@ -1559,11 +1556,15 @@ $$;
 
 CREATE OR REPLACE FUNCTION exec_script(script text) RETURNS boolean LANGUAGE plpgsql AS
 $$
+DECLARE
+    err text;
 BEGIN
     PERFORM * FROM pg_background_result(pg_background_launch(script)) AS discarded(result text);
     RETURN TRUE;
 EXCEPTION
     WHEN OTHERS THEN
+        GET STACKED DIAGNOSTICS err = MESSAGE_TEXT;
+        raise WARNING '%', err;
         RETURN FALSE;
 END
 $$;
