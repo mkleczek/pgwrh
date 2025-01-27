@@ -373,9 +373,11 @@ $$SELECT to_regclass(st.sharded_table_schema || '.' || st.sharded_table_name)$$;
 
 CREATE OR REPLACE FUNCTION stable_hash(VARIADIC text[]) RETURNS int IMMUTABLE LANGUAGE sql AS
 $$SELECT ('x' || substr(md5(array_to_string($1, '', '')), 1, 8))::bit(32)::int$$;
+GRANT EXECUTE ON ROUTINE stable_hash(VARIADIC text[]) TO PUBLIC;
 
 CREATE OR REPLACE FUNCTION score(weight int, VARIADIC text[]) RETURNS double precision IMMUTABLE LANGUAGE sql AS
 $$SELECT weight / -ln(pgwrh.stable_hash(VARIADIC $2)::double precision / ((2147483649)::bigint - (-2147483648)::bigint) + 0.5::double precision)$$;
+GRANT EXECUTE ON ROUTINE score(weight int, VARIADIC text[]) TO PUBLIC;
 
 CREATE OR REPLACE VIEW published_shard AS
 WITH sharded_pg_class AS (
