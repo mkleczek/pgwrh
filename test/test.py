@@ -1,6 +1,4 @@
 import pytest
-import logging
-import tempfile
 import time
 
 from testgres import get_new_node, scoped_config
@@ -23,59 +21,52 @@ def new_postgres_node():
                 return node
             yield do
 
-def setup_replica(master, user):
-    def init(replica):
-        with master.connect() as mc:
-            mc.begin()
-            mc.execute(f'CREATE USER {user} PASSWORD \'{user}\' REPLICATION IN ROLE test_replica;')
-            mc.execute(f'SELECT pgwrh.add_shard_host(\'g1\', \'{user}\', \'localhost\', {replica.port})')
-            mc.commit()
-    return init
-
-
 @pytest.fixture
 def master(new_postgres_node):
-    node = new_postgres_node('master', True)
-    node.psql(filename='master.sql')
-    return node
+    pg_node = new_postgres_node('master', True)
+    pg_node.psql(filename='master.sql')
+    class Master:
+        port = pg_node.port
+        def with_node(self, action):
+            action(pg_node)
+        def publish_config_version(self):
+            pg_node.execute('select pgwrh.mark_pending_version_ready(\'g1\')')
+        def register_replica(self, replica):
+            user = replica.name
+            password = replica.name
+            with pg_node.connect() as mc:
+                mc.begin()
+                mc.execute(f'CREATE USER {user} PASSWORD \'{password}\' REPLICATION IN ROLE test_replica;')
+                mc.execute(f'SELECT pgwrh.add_shard_host(\'g1\', \'{user}\', \'localhost\', {replica.port})')
+                mc.commit()
+            return (replica.name, replica.name)
+        def delete_pending_version(self):
+            pg_node.execute('select pgwrh.delete_pending_version(\'g1\')')
+        def assert_same_result(self, query, replicas):
+            assert all(query(pg_node) == result for result in map(query, replicas))
+    return Master()
 
 @pytest.fixture
 def register_replicas(master):
     def do(replicas):
         for replica in replicas:
-            user = replica.name
-            password = replica.name
-            with master.connect() as mc:
-                mc.begin()
-                mc.execute(f'CREATE USER {user} PASSWORD \'{password}\' REPLICATION IN ROLE test_replica;')
-                mc.execute(f'SELECT pgwrh.add_shard_host(\'g1\', \'{user}\', \'localhost\', {replica.port})')
-                mc.commit()
+            (user, password) = master.register_replica(replica)
             replica.execute(f'SELECT pgwrh.configure_controller(\'localhost\', \'{master.port}\', \'{user}\', \'{password}\', refresh_seconds := 0)')
-            #replica.execute('select pgwrh.sync_daemon(0)')
     return do
 
-@pytest.fixture
-def publish_config_version(master):
-    def do():
-        master.execute('select pgwrh.mark_pending_version_ready(\'g1\')')
-    return do
+def poll_ready(replicas):
+    for replica in replicas:
+        replica.poll_query_until('SELECT pgwrh.replica_ready()')
 
+def test_dummy(master, register_replicas, new_postgres_node):
+    replica1 = new_postgres_node('replica1')
+    replica2 = new_postgres_node('replica2')
 
-@pytest.fixture
-def replica1(new_postgres_node):
-    return new_postgres_node('replica1')
-@pytest.fixture
-def replica2(new_postgres_node):
-    return new_postgres_node('replica2')
+    replicas = [replica1, replica2]
 
-def poll_ready(replica):
-    replica.poll_query_until('SELECT pgwrh.replica_ready()')
+    register_replicas(replicas)
 
-def test_dummy(master, register_replicas, replica1, replica2, publish_config_version):
-    register_replicas([replica1, replica2])
-
-    poll_ready(replica1)
-    poll_ready(replica2)
+    poll_ready(replicas)
 
     try:
         print(f'Count: {replica1.execute('select count(*) from test.my_data')[0]}')
@@ -83,10 +74,30 @@ def test_dummy(master, register_replicas, replica1, replica2, publish_config_ver
     except:
         pass
 
-    publish_config_version()
+    master.publish_config_version()
 
-    poll_ready(replica1)
-    poll_ready(replica2)
+    poll_ready(replicas)
 
     query = lambda r: r.execute('select count(*) from test.my_data')[0]
-    assert all(query(master) == count for count in map(query, [replica1, replica2]))
+    master.assert_same_result(query, replicas)
+
+    replica3 = new_postgres_node('replica3')
+    try:
+        register_replicas([replica3])
+        pytest.fail('Should faile with locked version')
+    except:
+        pass
+
+    master.delete_pending_version()
+    register_replicas([replica3])
+    replicas.append(replica3)
+
+    poll_ready(replicas)
+
+    master.assert_same_result(query, replicas)
+
+    master.publish_config_version()
+
+    poll_ready(replicas)
+
+    master.assert_same_result(query, replicas)
