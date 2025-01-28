@@ -84,14 +84,26 @@ Version marked as "pending" (pending = true) is a configuration version that is 
 
 A replica keeps all shards from "ready" configuration even if a shard might be no longer assigned to it in "pending" configuration version.';
 
+CREATE TABLE IF NOT EXISTS replication_group_config_lock (
+    replication_group_id text NOT NULL,
+    version config_version NOT NULL,
+
+    PRIMARY KEY (replication_group_id, version),
+    FOREIGN KEY (replication_group_id, version)
+        REFERENCES replication_group_config(replication_group_id, version)
+        ON DELETE CASCADE
+);
+
 ALTER TABLE replication_group ADD FOREIGN KEY (replication_group_id, ready_version)
-REFERENCES replication_group_config(replication_group_id, version)
+REFERENCES replication_group_config_lock(replication_group_id, version)
 DEFERRABLE INITIALLY DEFERRED;
 
 CREATE OR REPLACE FUNCTION replication_group_prepare_config() RETURNS trigger LANGUAGE plpgsql AS
 $$
 BEGIN
     INSERT INTO @extschema@.replication_group_config VALUES (NEW.replication_group_id, NEW.ready_version)
+    ON CONFLICT DO NOTHING;
+    INSERT INTO @extschema@.replication_group_config_lock VALUES (NEW.replication_group_id, NEW.ready_version)
     ON CONFLICT DO NOTHING;
     RETURN NEW;
 END
@@ -100,11 +112,11 @@ CREATE OR REPLACE TRIGGER replication_group_before_insert
 AFTER INSERT ON replication_group
 FOR EACH ROW EXECUTE FUNCTION replication_group_prepare_config();
 
-CREATE OR REPLACE FUNCTION is_ready(group_id text, version config_version) RETURNS boolean
+CREATE OR REPLACE FUNCTION is_locked(group_id text, version config_version) RETURNS boolean
 SET SEARCH_PATH FROM CURRENT
 LANGUAGE sql STABLE AS
 $$
-SELECT EXISTS (SELECT 1 FROM replication_group WHERE replication_group_id = group_id AND ready_version = $2)
+SELECT EXISTS (SELECT 1 FROM replication_group_config_lock WHERE replication_group_id = group_id AND version = $2)
 $$;
 
 CREATE OR REPLACE FUNCTION next_pending_version(group_id text) RETURNS config_version
@@ -130,12 +142,12 @@ $$BEGIN
     RETURN NEW;
 END$$;
 
-CREATE OR REPLACE FUNCTION forbid_not_pending_version_modifications() RETURNS TRIGGER
+CREATE OR REPLACE FUNCTION forbid_locked_version_modifications() RETURNS TRIGGER
 SET SEARCH_PATH FROM CURRENT
 LANGUAGE plpgsql AS
 $$
 BEGIN
-    RAISE 'Modifications of non-pending config in % is forbidden', TG_RELID::regclass;
+    RAISE 'This config version is locked. Modifications in % are forbidden.', TG_RELID::regclass;
     RETURN NULL;
 END
 $$;
@@ -189,23 +201,15 @@ CREATE OR REPLACE FUNCTION mark_pending_version_ready(group_id text) RETURNS voi
 SET SEARCH_PATH FROM CURRENT
 LANGUAGE sql AS
 $$
-WITH updated_group AS (
-    UPDATE @extschema@.replication_group g SET ready_version = @extschema@.next_version(ready_version)
-    WHERE
-        replication_group_id = group_id AND
-        EXISTS (
-            SELECT 1 FROM @extschema@.replication_group_config
-            WHERE
-                replication_group_id = g.replication_group_id AND
-                version = @extschema@.next_version(g.ready_version)
-    )
-    RETURNING *
-)
-DELETE FROM @extschema@.replication_group_config c
-USING updated_group g
-WHERE
-    c.replication_group_id = g.replication_group_id AND
-    c.version <> g.ready_version
+INSERT INTO @extschema@.replication_group_config_lock (replication_group_id, version)
+SELECT replication_group_id, @extschema@.next_version(ready_version)
+FROM @extschema@.replication_group
+WHERE replication_group_id = group_id
+ON CONFLICT DO NOTHING;
+
+UPDATE @extschema@.replication_group g
+SET ready_version = @extschema@.next_version(ready_version)
+WHERE replication_group_id = group_id
 $$;
 COMMENT ON FUNCTION mark_pending_version_ready(group_id text) IS
 'Swaps pending and ready configuration versions for a group.
@@ -267,16 +271,16 @@ COMMENT ON TABLE shard_host_weight IS
 
 CREATE OR REPLACE TRIGGER forbid_not_pending_version_insert BEFORE INSERT ON shard_host_weight
 FOR EACH ROW
-WHEN (is_ready(NEW.replication_group_id, NEW.version))
-EXECUTE FUNCTION forbid_not_pending_version_modifications();
+WHEN (is_locked(NEW.replication_group_id, NEW.version))
+EXECUTE FUNCTION forbid_locked_version_modifications();
 CREATE OR REPLACE TRIGGER forbid_not_pending_version_update BEFORE UPDATE ON shard_host_weight
 FOR EACH ROW
-WHEN (is_ready(OLD.replication_group_id, OLD.version) OR is_ready(NEW.replication_group_id, NEW.version))
-EXECUTE FUNCTION forbid_not_pending_version_modifications();
+WHEN (is_locked(OLD.replication_group_id, OLD.version) OR is_locked(NEW.replication_group_id, NEW.version))
+EXECUTE FUNCTION forbid_locked_version_modifications();
 CREATE OR REPLACE TRIGGER forbid_not_pending_version_delete BEFORE DELETE ON shard_host_weight
 FOR EACH ROW
-WHEN (is_ready(OLD.replication_group_id, OLD.version))
-EXECUTE FUNCTION forbid_not_pending_version_modifications();
+WHEN (is_locked(OLD.replication_group_id, OLD.version))
+EXECUTE FUNCTION forbid_locked_version_modifications();
 
 CREATE OR REPLACE TRIGGER next_pending_version BEFORE INSERT ON shard_host_weight
 FOR EACH ROW EXECUTE FUNCTION next_pending_version_trigger();
@@ -314,16 +318,16 @@ SELECT pg_catalog.pg_extension_config_dump('sharded_table', '');
 
 CREATE OR REPLACE TRIGGER forbid_not_pending_version_insert BEFORE INSERT ON sharded_table
 FOR EACH ROW
-WHEN (is_ready(NEW.replication_group_id, NEW.version))
-EXECUTE FUNCTION forbid_not_pending_version_modifications();
+WHEN (is_locked(NEW.replication_group_id, NEW.version))
+EXECUTE FUNCTION forbid_locked_version_modifications();
 CREATE OR REPLACE TRIGGER forbid_not_pending_version_update BEFORE UPDATE ON sharded_table
 FOR EACH ROW
-WHEN (is_ready(OLD.replication_group_id, OLD.version) OR is_ready(NEW.replication_group_id, NEW.version))
-EXECUTE FUNCTION forbid_not_pending_version_modifications();
+WHEN (is_locked(OLD.replication_group_id, OLD.version) OR is_locked(NEW.replication_group_id, NEW.version))
+EXECUTE FUNCTION forbid_locked_version_modifications();
 CREATE OR REPLACE TRIGGER forbid_not_pending_version_delete BEFORE DELETE ON sharded_table
 FOR EACH ROW
-WHEN (is_ready(OLD.replication_group_id, OLD.version))
-EXECUTE FUNCTION forbid_not_pending_version_modifications();
+WHEN (is_locked(OLD.replication_group_id, OLD.version))
+EXECUTE FUNCTION forbid_locked_version_modifications();
 
 CREATE OR REPLACE TRIGGER next_pending_version BEFORE INSERT ON sharded_table
 FOR EACH ROW EXECUTE FUNCTION next_pending_version_trigger();
@@ -346,16 +350,16 @@ SELECT pg_catalog.pg_extension_config_dump('shard_index_template', '');
 
 CREATE OR REPLACE TRIGGER forbid_not_pending_version_insert BEFORE INSERT ON shard_index_template
 FOR EACH ROW
-WHEN (is_ready(NEW.replication_group_id, NEW.version))
-EXECUTE FUNCTION forbid_not_pending_version_modifications();
+WHEN (is_locked(NEW.replication_group_id, NEW.version))
+EXECUTE FUNCTION forbid_locked_version_modifications();
 CREATE OR REPLACE TRIGGER forbid_not_pending_version_update BEFORE UPDATE ON shard_index_template
 FOR EACH ROW
-WHEN (is_ready(OLD.replication_group_id, OLD.version) OR is_ready(NEW.replication_group_id, NEW.version))
-EXECUTE FUNCTION forbid_not_pending_version_modifications();
+WHEN (is_locked(OLD.replication_group_id, OLD.version) OR is_locked(NEW.replication_group_id, NEW.version))
+EXECUTE FUNCTION forbid_locked_version_modifications();
 CREATE OR REPLACE TRIGGER forbid_not_pending_version_delete BEFORE DELETE ON shard_index_template
 FOR EACH ROW
-WHEN (is_ready(OLD.replication_group_id, OLD.version))
-EXECUTE FUNCTION forbid_not_pending_version_modifications();
+WHEN (is_locked(OLD.replication_group_id, OLD.version))
+EXECUTE FUNCTION forbid_locked_version_modifications();
 
 CREATE OR REPLACE TRIGGER next_pending_version BEFORE INSERT ON shard_index_template
 FOR EACH ROW EXECUTE FUNCTION next_pending_version_trigger();
