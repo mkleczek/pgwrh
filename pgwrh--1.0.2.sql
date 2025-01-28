@@ -215,6 +215,22 @@ COMMENT ON FUNCTION mark_pending_version_ready(group_id text) IS
 'Swaps pending and ready configuration versions for a group.
 Does not do anything if there is no pending version present';
 
+CREATE OR REPLACE FUNCTION delete_pending_version(group_id text) RETURNS void LANGUAGE sql AS
+$$
+DELETE FROM @extschema@.replication_group_config c
+WHERE
+    replication_group_id = group_id AND
+    version <> (
+        SELECT ready_version
+        FROM @extschema@.replication_group WHERE replication_group_id = c.replication_group_id
+    )
+$$;
+COMMENT ON FUNCTION delete_pending_version(group_id text) IS
+'Removes pending (ie. the one that is not pointed to by replication_group(ready_version)) configuration version.
+
+Removal of pending version may trigger removal of no longer needed shards on the replicas.
+So it must be performed with caution after verifying no replicas assume presence of these shards on other replicas';
+
 CREATE TABLE IF NOT EXISTS replication_group_member (
     replication_group_id text NOT NULL REFERENCES replication_group(replication_group_id),
     host_id text NOT NULL,
@@ -1033,12 +1049,30 @@ SELECT
         format('TRUNCATE %s',
             string_agg((sc).reg_class::text, ', ')
         ),
-        format('CREATE SUBSCRIPTION %I CONNECTION %L PUBLICATION %s WITH (slot_name = %L)',
+        format('CREATE SUBSCRIPTION %I CONNECTION %L PUBLICATION %s WITH (%s)',
             subname,
             format('host=%s port=%s user=%s password=%s dbname=%s',
                 s.host, s.port, cred.user, cred.pass, current_database()),
+            -- compute subscription options
+            -- this is verbose as it is sql :-)
+            -- the full set of options depends on Pg version
+            -- we always add slot_name
+            -- and if Pg version >= 17 - failover = 'true'
             string_agg(quote_ident(sc.publication_name), ', '),
-            cred.user || '_' || (random() * 10000000)::bigint::text -- random slot_name
+            (
+                SELECT string_agg(format('%s = %L', key, val), ', ') FROM (
+                    SELECT
+                        'slot_name' AS key,
+                        cred.user || '_' || (random() * 10000000)::bigint::text AS val-- random slot_name
+                    UNION ALL
+                    -- add failover = 'true' option for PostgreSQL >= 17
+                    SELECT
+                        'failover' AS key,
+                        'true' AS val
+                    WHERE
+                        substring(current_setting('server_version') FROM '\d{2}')::int >= 17
+                )
+            )
         )
     ]
 FROM
@@ -1556,7 +1590,8 @@ SELECT
     count(*) FILTER (WHERE local) AS shards_to_host,
     count(*) FILTER (WHERE (lr).parent.rel_id = slot_rel_id) AS exposed_shards,
     count(*) FILTER (WHERE NOT local AND (rr).parent.rel_id IS DISTINCT FROM slot_rel_id) AS mismatched_remote_shards,
-    count(*) FILTER (WHERE EXISTS (SELECT 1 FROM pg_subscription_rel WHERE srrelid = reg_class AND srsubstate <> 'r')) AS not_replicated_shards
+    count(*) FILTER (WHERE local AND EXISTS (SELECT 1 FROM pg_subscription_rel WHERE srrelid = reg_class AND srsubstate <> 'r')) AS initial_replication_shards,
+    count(*) FILTER (WHERE local AND NOT EXISTS (SELECT 1 FROM pg_subscription_rel WHERE srrelid = reg_class)) AS not_subscribed_shards
 FROM
     shard_assignment;
 
