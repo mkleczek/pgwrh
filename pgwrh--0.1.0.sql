@@ -14,6 +14,8 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+\echo Use "CREATE EXTENSION pgwrh CASCADE" to load this file. \quit
+
 GRANT USAGE ON SCHEMA @extschema@ TO PUBLIC;
 
 ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON ROUTINES FROM PUBLIC;
