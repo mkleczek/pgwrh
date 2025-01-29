@@ -730,7 +730,7 @@ GRANT SELECT ON shard_structure TO PUBLIC;
 
 ----------------- REPLICA -------------------
 
-CREATE SERVER IF NOT EXISTS replica_controller FOREIGN DATA WRAPPER postgres_fdw;
+CREATE SERVER IF NOT EXISTS replica_controller FOREIGN DATA WRAPPER postgres_fdw OPTIONS (load_balance_hosts 'random');
 CREATE USER MAPPING FOR PUBLIC SERVER replica_controller;
 
 CREATE OR REPLACE FUNCTION sub_num_modulus_exponent() RETURNS int LANGUAGE sql AS
@@ -1083,7 +1083,8 @@ SELECT
         ),
         format('CREATE SUBSCRIPTION %I CONNECTION %L PUBLICATION %s WITH (%s)',
             subname,
-            format('host=%s port=%s user=%s password=%s dbname=%s',
+            -- always connecto to the primary
+            format('host=%s port=%s user=%s password=%s dbname=%s target_session_attrs=primary',
                 s.host, s.port, cred.user, cred.pass, current_database()),
             -- compute subscription options
             -- this is verbose as it is sql :-)
