@@ -326,6 +326,7 @@ CREATE TABLE IF NOT EXISTS sharded_table (
     sharded_table_name text NOT NULL,
     version config_version NOT NULL,
     replica_count smallint NOT NULL CHECK ( replica_count >= 0 ),
+    sharding_key_expression text NOT NULL DEFAULT 'SELECT ARRAY[$1, $2]',
 
     PRIMARY KEY (replication_group_id, sharded_table_schema, sharded_table_name, version),
     FOREIGN KEY (replication_group_id, version) REFERENCES replication_group_config(replication_group_id, version) ON DELETE CASCADE
@@ -395,9 +396,20 @@ CREATE OR REPLACE FUNCTION stable_hash(VARIADIC text[]) RETURNS int IMMUTABLE LA
 $$SELECT ('x' || substr(md5(array_to_string($1, '', '')), 1, 8))::bit(32)::int$$;
 GRANT EXECUTE ON ROUTINE stable_hash(VARIADIC text[]) TO PUBLIC;
 
-CREATE OR REPLACE FUNCTION score(weight int, VARIADIC text[]) RETURNS double precision IMMUTABLE LANGUAGE sql AS
+CREATE OR REPLACE FUNCTION score(weight int, text[]) RETURNS double precision IMMUTABLE LANGUAGE sql AS
 $$SELECT weight / -ln(pgwrh.stable_hash(VARIADIC $2)::double precision / ((2147483649)::bigint - (-2147483648)::bigint) + 0.5::double precision)$$;
-GRANT EXECUTE ON ROUTINE score(weight int, VARIADIC text[]) TO PUBLIC;
+GRANT EXECUTE ON ROUTINE score(weight int, text[]) TO PUBLIC;
+
+CREATE OR REPLACE FUNCTION extract_sharding_key_values(schema_name text, table_name text, sharding_key_expression text) RETURNS text[] IMMUTABLE LANGUAGE plpgsql AS
+$$
+DECLARE
+    result text[];
+BEGIN
+    EXECUTE sharding_key_expression INTO result USING schema_name, table_name;
+    RETURN result;
+END
+$$;
+GRANT EXECUTE ON ROUTINE extract_sharding_key_values(schema_name text, table_name text, sharding_key_expression text) TO PUBLIC;
 
 CREATE OR REPLACE VIEW published_shard AS
 WITH sharded_pg_class AS (
@@ -405,7 +417,8 @@ WITH sharded_pg_class AS (
         st.replication_group_id,
         c.oid::regclass,
         version,
-        replica_count
+        replica_count,
+        sharding_key_expression
     FROM
         pg_class c
             JOIN pg_namespace n ON relnamespace = n.oid
@@ -417,6 +430,7 @@ SELECT
     nspname AS schema_name,
     relname AS table_name,
     replica_count,
+    @extschema@.extract_sharding_key_values(nspname, relname, sharding_key_expression) AS sharding_key_values,
     publication_name
 FROM
     pg_class c
@@ -467,7 +481,7 @@ WITH shard_assigned_host AS (
                     online,
                     row_number() OVER (
                         PARTITION BY availability_zone
-                        ORDER BY pgwrh.score(weight, s.schema_name, s.table_name, host_id) DESC) AS group_rank
+                        ORDER BY pgwrh.score(weight, array_append(sharding_key_values, host_id)) DESC) AS group_rank
                 FROM
                     shard_host_weight
                         JOIN shard_host USING (replication_group_id, host_id)
@@ -475,7 +489,7 @@ WITH shard_assigned_host AS (
                 WHERE
                     (replication_group_id, version) = (s.replication_group_id, s.version)
                 ORDER BY
-                    group_rank, pgwrh.score(100, s.schema_name, s.table_name, availability_zone) DESC
+                    group_rank, pgwrh.score(100, array_append(sharding_key_values, availability_zone)) DESC
                 LIMIT
                     s.replica_count
             ) h
