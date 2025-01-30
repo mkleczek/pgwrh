@@ -1703,7 +1703,7 @@ DECLARE
 BEGIN
     IF pg_try_advisory_xact_lock(2895359559) THEN
         -- Select commands to execute in a separate transaction so that we don't keep any locks here
-        FOR r IN SELECT * FROM pg_background_result(pg_background_launch('select * from @extschema@.sync')) AS (transactional boolean, async boolean, description text, commands text[]) LOOP
+        FOR r IN SELECT * FROM pg_background_result(pg_background_launch('select async, transactional, description, commands from @extschema@.sync')) AS (async boolean, transactional boolean, description text, commands text[]) LOOP
             RAISE NOTICE '%', r.description;
             IF r.transactional THEN
                 IF r.async THEN
