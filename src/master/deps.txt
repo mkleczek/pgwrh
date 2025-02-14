@@ -1,0 +1,9 @@
+implementation-views    api-replica
+tables                  ext-config-dump
+tables                  helpers
+helpers                 implementation-views
+helpers                 publication-sync
+publication-sync        triggers
+snapshot                triggers
+tables                  api-management
+implementation-views    snapshot

@@ -15,6 +15,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 relocatable = false
-default_version = '0.1.0'
+default_version = '0.2.0'
+
 schema = pgwrh
 requires = 'postgres_fdw,pg_background'

@@ -1,0 +1,20 @@
+{
+    "plpgsqlLanguageServer.database": "postgres",
+    "plpgsqlLanguageServer.user": "michal",
+    "plpgsqlLanguageServer.password": "michal",
+    "plpgsqlLanguageServer.definitionFiles": [
+        "**/*.psql",
+        "**/*.pgsql",
+        "**/*.sql"
+    ],
+    "files.associations": {
+        "*.sql": "postgres"
+    },
+    "[makefile]": {
+        "editor.insertSpaces": false,
+        "editor.detectIndentation": false
+    },
+    "plpgsqlLanguageServer.workspaceValidationTargetFiles": [
+        "**/*.sql"
+    ]
+}

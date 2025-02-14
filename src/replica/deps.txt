@@ -1,0 +1,8 @@
+tables          helpers
+helpers         sync
+fdw             sync
+fdw             status
+helpers         status
+tables          ext-config-dump
+sync            daemon
+status          daemon

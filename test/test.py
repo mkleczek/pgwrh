@@ -40,7 +40,7 @@ def new_postgres_node():
 @pytest.fixture
 def master(new_postgres_node):
     pg_node = new_postgres_node('master', True)
-    pg_node.psql(filename='master.sql')
+    pg_node.psql(filename='masteride.sql')
     class Master:
         port = pg_node.port
         def with_node(self, action):
