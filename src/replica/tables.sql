@@ -21,3 +21,7 @@ CREATE TABLE IF NOT EXISTS shard_subscription (
     modulus int NOT NULL CHECK (modulus > 0),
     remainder int NOT NULL CHECK (remainder >= 0 AND remainder < modulus)
 );
+
+CREATE TABLE IF NOT EXISTS analyzed_remote_pg_class (
+    oid oid NOT NULL PRIMARY KEY
+);

@@ -133,6 +133,11 @@ ready_remote_shard AS (
             pg_statistic s
             WHERE s.starelid = reg_class
         )
+        OR
+        EXISTS (SELECT 1 FROM
+            analyzed_remote_pg_class
+            WHERE oid = reg_class
+        )
 ),
 ready_local_shard AS (
     SELECT
@@ -673,9 +678,12 @@ scripts (async, transactional, description, commands) AS (
     -- Analyze remote shards in parallel
     SELECT
         TRUE,
-        FALSE,
-        'Trigger analyzing remote shards',
-        array_agg(format('ANALYZE ( SKIP_LOCKED ) %s', reg_class))
+        TRUE,
+        format('Analyze remote shards [%s]', reg_class),
+        ARRAY [
+            format('ANALYZE %s', reg_class),
+            format('INSERT INTO "@extschema@".analyzed_remote_pg_class (oid) VALUES (%s) ON CONFLICT DO NOTHING', reg_class::oid)
+        ]
     FROM (
         SELECT
             rs.reg_class
@@ -686,6 +694,10 @@ scripts (async, transactional, description, commands) AS (
                 NOT EXISTS (SELECT 1 FROM
                     pg_statistic s
                     WHERE s.starelid = rs.reg_class
+                )
+            AND NOT EXISTS (SELECT 1 FROM
+                    analyzed_remote_pg_class
+                    WHERE oid = rs.reg_class
                 )
             AND NOT EXISTS (SELECT 1 FROM
                 pg_stat_progress_analyze
@@ -700,7 +712,6 @@ scripts (async, transactional, description, commands) AS (
                 5,
                 current_setting('max_worker_processes')::int - 6 - (SELECT count(*) FROM pg_stat_progress_analyze WHERE datname = current_database())))
     ) sub
-    GROUP BY 1, 2
 
     UNION ALL
     -- DROP remote shards no longer in use
