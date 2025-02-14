@@ -47,7 +47,7 @@ FROM
             END
         FROM
             unnest(ARRAY['host', 'port', 'dbname'], ARRAY[host, port, dbname]) AS toset(key, val)
-                LEFT JOIN (SELECT * FROM opts(srvoptions)) AS opt USING (key)
+                LEFT JOIN (SELECT * FROM "@extschema@".opts(srvoptions)) AS opt USING (key)
         WHERE
             opt.key IS NULL OR toset.val <> opt.value
     ) AS opts(srvname, cmd)
@@ -60,7 +60,7 @@ STABLE
 LANGUAGE sql
 AS
 $$
-    SELECT update_server_options(srvname, srvoptions, host, port, dbname)
+    SELECT "@extschema@".update_server_options(srvname, srvoptions, host, port, dbname)
     FROM
         pg_foreign_server
     WHERE
@@ -82,7 +82,7 @@ FROM
             END
         FROM
             unnest(ARRAY['user', 'password'], ARRAY[username, password]) AS toset(key, val)
-                LEFT JOIN (SELECT * FROM opts(pum.umoptions)) AS opt USING (key)
+                LEFT JOIN (SELECT * FROM "@extschema@".opts(pum.umoptions)) AS opt USING (key)
         WHERE
             opt.key IS NULL OR toset.val <> opt.value
     ) AS opts(cmd)
