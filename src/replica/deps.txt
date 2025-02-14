@@ -6,3 +6,5 @@ helpers         status
 tables          ext-config-dump
 sync            daemon
 status          daemon
+daemon          api-management
+helpers         api-management
