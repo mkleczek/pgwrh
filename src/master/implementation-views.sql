@@ -1,136 +1,6 @@
 -- name: master-implementation-views
 -- requires: core
 
--- CREATE OR REPLACE VIEW published_shard AS
--- WITH group_counts AS (
---     SELECT
---         replication_group_id,
---         version,
---         count(DISTINCT availability_zone) AS az_count,
---         count(*) AS host_count
---     FROM
---         shard_host_weight
---     GROUP BY
---         1, 2
--- )
--- SELECT
---     replication_group_id,
---     version,
---     schema_name,
---     table_name,
---     greatest(
---         ceil((replication_factor * host_count) / 100),
---         least(min_replica_count, host_count),
---         least(min_replica_count_per_availability_zone * az_count, host_count)) AS replica_count,
---     "@extschema@".extract_sharding_key_value(schema_name, table_name, sharding_key_expression) AS sharding_key_value,
---     pubname,
---     sc.oid
--- FROM
---     shard_class sc
---         JOIN pg_publication_rel ON sc.oid = prrelid
---         JOIN pg_publication pub ON pub.oid = prpubid AND is_dependent_object('pg_publication', pub.oid)
---         -- JOIN pgwrh_publication pwp USING (pubname, schema_name, table_name) -- is this redundant?
---         JOIN sharded_table USING (replication_group_id, version, sharded_table_schema, sharded_table_name)
---         JOIN replication_group_config USING (replication_group_id, version)
---         JOIN group_counts USING (replication_group_id, version)
--- ;
--- COMMENT ON VIEW published_shard IS
--- 'Provides shards and their number of pending and ready copies based on configuration in sharded_table.
--- A shard is a non-partitioned table which ancestor (can be the table iself) is in sharded_table.
--- The desired number of copies is specified per the whole hierarchy (ie. all partitions of a given table).
---
--- Only shards for which there is a publication are present here.';
-
--- CREATE VIEW shard_pg_class_index AS
--- SELECT
---     replication_group_id,
---     version,
---     sc.schema_name,
---     sc.table_name,
---     sc.oid,
---     format('%s_%s_%s', sc.table_name, index_name, substring(md5(index_template), 0, 16)) AS index_name,
---     it.index_template
--- FROM
---         shard_class sc
---             JOIN shard_index_template it USING (replication_group_id, version)
--- WHERE EXISTS (SELECT 1 FROM
---     pg_class parent
---         JOIN pg_namespace n ON relnamespace = n.oid
---     WHERE
---             (nspname, relname) = (it.schema_name, it.table_name)
---         AND
---             parent.oid = ANY (SELECT * FROM pg_partition_ancestors(sc.oid))
--- )
--- ;
-
--- CREATE OR REPLACE VIEW shard_assigned_host AS
--- SELECT
---     replication_group_id,
---     version,
---     schema_name,
---     table_name,
---     pubname,
---     member_role,
---     availability_zone,
---     host_id,
---     host_name,
---     port,
---     online,
---     s.oid,
---     subscribed_local_shards,
---     connected_remote_shards,
---     connected_local_shards,
---     indexes
--- --     bool_or(si IS NOT NULL AND NOT EXISTS (
--- --         SELECT 1 FROM
--- --                 json_to_recordset(indexes) AS i(schema_name text, index_name text)
--- --                 WHERE
--- --                     (schema_name, index_name) = (si.schema_name, si.index_name)
--- --     )) AS missing_index
--- --     EXISTS (SELECT 1 FROM
--- --         shard_pg_class_index si
--- --         WHERE
--- --                 (replication_group_id, version, schema_name, table_name) = (s.replication_group_id, s.version, s.schema_name, s.table_name)
--- --             AND NOT EXISTS (SELECT 1 FROM
--- --                 json_to_recordset((m).indexes) AS i(schema_name text, index_name text)
--- --                 WHERE
--- --                     (schema_name, index_name) = (si.schema_name, si.index_name)
--- --             )
--- --     ) AS missing_index
--- FROM
---     published_shard s
---         CROSS JOIN LATERAL (
---             SELECT
---                 member_role,
---                 availability_zone,
---                 host_id,
---                 host_name,
---                 port,
---                 online,
---                 subscribed_local_shards,
---                 connected_remote_shards,
---                 connected_local_shards,
---                 indexes,
---                 row_number() OVER (
---                     PARTITION BY availability_zone
---                     ORDER BY "@extschema@".score(weight, sharding_key_value, host_id) DESC) AS group_rank
---             FROM
---                 shard_host_weight
---                     JOIN shard_host USING (replication_group_id, availability_zone, host_id)
---                     JOIN replication_group_member m USING (replication_group_id, availability_zone, host_id)
---             WHERE
---                 (replication_group_id, version) = (s.replication_group_id, s.version)
---             ORDER BY
---                 group_rank, "@extschema@".score(100, sharding_key_value, availability_zone) DESC
---             LIMIT
---                 s.replica_count
---         ) h
--- ;
--- COMMENT ON VIEW shard_assigned_host IS
--- 'Provides assignment of shards to hosts for each replication group configuration version.
---
--- Calculation is based on Weighted Randezvous Hash algorithm.';
-
 CREATE VIEW shard_index_definition AS
     SELECT
         replication_group_id,
@@ -210,36 +80,6 @@ FROM
 COMMENT ON VIEW shard_index_per_member IS
 'Provides definitions of indexes that should be created for each shard.';
 
-CREATE OR REPLACE FUNCTION has_indexes(_replication_group_id text, _version config_version, indexes json, _schema_name text, _table_name text)
-    RETURNS boolean
-    STABLE
-    LANGUAGE sql
-AS
-$$
-    SELECT
-        NOT EXISTS (SELECT 1 FROM
-            "@extschema@".shard_index_definition i
-            WHERE
-                    (  replication_group_id,  version,  schema_name,  table_name) =
-                    ( _replication_group_id, _version, _schema_name, _table_name)
-                AND
-                    NOT EXISTS (SELECT 1 FROM
-                        json_to_recordset(indexes) AS mi(schema_name text, index_name text)
-                        WHERE
-                                (   schema_name,   index_name) =
-                                ( i.schema_name, i.index_name)
-                    )            
-        )
-$$;
-
-CREATE FUNCTION subscribes_local_shard(subscribed_local_shards json, schema_name text, table_name text) RETURNS boolean LANGUAGE sql AS
-$$
-    SELECT EXISTS (SELECT 1 FROM
-        json_to_recordset(subscribed_local_shards) AS t(schema_name text, table_name text)
-        WHERE (schema_name, table_name) = ($2, $3)
-    )
-$$;
-
 CREATE OR REPLACE VIEW shard_assignment_per_member AS
 SELECT
     replication_group_id,
@@ -291,19 +131,41 @@ FROM
                 bool_or(online) FILTER (WHERE member_role <> m.member_role AND version = target_version) AS target_online,
                 -- status of this particular shard
                 -- did all target hosts confirmed subscription (so that clients can execute analyze)
-                bool_and(subscribes_local_shard(subscribed_local_shards, schema_name, table_name))
+                bool_and(subscribes_local_shard)
                     FILTER (WHERE member_role <> m.member_role AND version = target_version) AS target_subscribed,
                 -- did all target version hosts confirm target version indexes (so that clients can expose them as foreign tables)
                 -- we want to avoid situation when clients issue queries to hosts that don't have required indexes
                 -- as that might disrupt whole cluster due to slow queries causing
                 -- a) high resource usage and cache thrashing
                 -- b) exhausted connection pools
-                bool_and(has_indexes(sah.replication_group_id, version, indexes, schema_name, table_name))
+                bool_and(has_all_indexes)
                     FILTER (WHERE member_role <> m.member_role AND version = target_version) AS target_indexed
             FROM
                 shard_assigned_host sah
                     JOIN shard_host USING (replication_group_id, availability_zone, host_id)
                     JOIN replication_group_member USING (replication_group_id, availability_zone, host_id)
+                    -- check if all required indexes are created
+                    CROSS JOIN LATERAL (SELECT NOT EXISTS (SELECT 1 FROM
+                        shard_index_definition i
+                        WHERE
+                                (    i.replication_group_id,   i.version,   i.schema_name,   i.table_name) =
+                                (  sah.replication_group_id, sah.version, sah.schema_name, sah.table_name)
+                            AND
+                                NOT EXISTS (SELECT 1 FROM
+                                    json_to_recordset(indexes) AS mi(schema_name text, index_name text)
+                                            WHERE
+                                                (   schema_name,   index_name) =
+                                                ( i.schema_name, i.index_name)
+                                )
+                    )) i(has_all_indexes)
+                    -- check if shard is subscribed
+                    CROSS JOIN LATERAL (
+                        SELECT EXISTS (SELECT 1 FROM
+                            json_to_recordset(subscribed_local_shards) AS t(schema_name text, table_name text)
+                            WHERE
+                                (    schema_name,     table_name) =
+                                (sah.schema_name, sah.table_name)
+    )               ) s(subscribes_local_shard)
             WHERE
                     sah.replication_group_id = m.replication_group_id
                 AND
