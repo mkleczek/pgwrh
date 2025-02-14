@@ -5,6 +5,7 @@ CREATE FUNCTION pubname(schema_name text, table_name text) RETURNS text IMMUTABL
 $$
     SELECT 'pgwrh_' || md5(schema_name || table_name);
 $$;
+GRANT EXECUTE ON FUNCTION pubname(schema_name text, table_name text) TO PUBLIC;
 
 CREATE OR REPLACE FUNCTION next_version(version config_version) RETURNS config_version
     IMMUTABLE
