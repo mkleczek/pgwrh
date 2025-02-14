@@ -7,3 +7,4 @@ publication-sync        triggers
 snapshot                triggers
 tables                  api-management
 implementation-views    snapshot
+tables                  monitoring
