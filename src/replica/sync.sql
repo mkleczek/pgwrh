@@ -745,22 +745,22 @@ scripts (async, transactional, description, commands) AS (
         owned_server
             JOIN shard_server ON srvname = shard_server_name,
             update_server_options(srvname, srvoptions, host, port) AS cmd
---
---     UNION ALL
---     -- DROP remote servers (and all dependent objects) for non-existent remote shards
---     SELECT
---         FALSE,
---         TRUE,
---         format('Found server %s for non-existent shard. Dropping.', string_agg(srvname, ', ')),
---         array_agg(format('DROP SERVER IF EXISTS %I CASCADE', srvname))
---     FROM
---         owned_server fs
---     WHERE
---             fs.srvname <> 'replica_controller'
---         AND NOT EXISTS (SELECT 1 FROM
---             shard_assignment WHERE fs.srvname IN (shard_server_name, retained_shard_server_name)
---         )
---     GROUP BY 1, 2 -- make sure we produce empty set when no results
+
+    UNION ALL
+    -- DROP remote servers (and all dependent objects) for non-existent remote shards
+    SELECT
+        FALSE,
+        TRUE,
+        format('Found server %s for non-existent shard. Dropping.', string_agg(srvname, ', ')),
+        array_agg(format('DROP SERVER IF EXISTS %I CASCADE', srvname))
+    FROM
+        owned_server fs
+    WHERE
+            fs.srvname <> 'replica_controller'
+        AND NOT EXISTS (SELECT 1 FROM
+            shard_assignment WHERE fs.srvname IN (shard_server_name, retained_shard_server_name)
+        )
+    GROUP BY 1, 2 -- make sure we produce empty set when no results
 
 
 )
