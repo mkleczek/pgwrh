@@ -771,3 +771,11 @@ FROM
 ;
 -- FIXME should it be PUBLIC?
 GRANT SELECT ON sync TO PUBLIC;
+
+CREATE FUNCTION cleanup_analyzed_pg_class() RETURNS void LANGUAGE sql AS
+$$
+    DELETE
+    FROM "@extschema@".analyzed_remote_pg_class ac
+    WHERE
+        NOT EXISTS (SELECT 1 FROM pg_class WHERE oid = ac.oid)
+$$;

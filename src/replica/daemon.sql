@@ -147,6 +147,7 @@ BEGIN
     WHILE r FROM "@extschema:pg_background@".pg_background_result("@extschema:pg_background@".pg_background_launch('SELECT "@extschema@".sync_step()')) AS r(r boolean) LOOP
     END LOOP;
     PERFORM * FROM "@extschema:pg_background@".pg_background_result("@extschema:pg_background@".pg_background_launch('SELECT ''ignored'' FROM "@extschema@".report_state()')) AS r(ignored text);
+    PERFORM * FROM "@extschema:pg_background@".pg_background_result("@extschema:pg_background@".pg_background_launch('SELECT ''ignored'' FROM "@extschema@".cleanup_analyzed_pg_class()')) AS r(ignored text);
 END
 $$;
 
