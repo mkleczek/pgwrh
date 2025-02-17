@@ -25,14 +25,34 @@ MASTER = $(shell tsort src/master/deps.txt | sed -e 's/^/src\/master\//' -e 's/$
 REPLICA = $(shell tsort src/replica/deps.txt | sed -e 's/^/src\/replica\//' -e 's/$$/\.sql/'  | xargs echo)
 
 PG_CONFIG = pg_config
+
+ifdef NO_PGXS
+# Simple install for systems without pgxs
+# RedHat packages pgxs in postgresql-devel
+# which has a lot of dependencies (compilers etc.)
+# need to make it possible to use make to install
+# pgwrh on such systems
+EXTDIR := $(shell $(PG_CONFIG) --sharedir)/extension
+
+clean:
+	rm -rf $(BUILD)
+
+install: all
+	install -c -m 644 ./pgwrh.control $(EXTDIR)
+	install -c -m 644 $(BUILD)/pgwrh/$(EXTENSION)--$(EXTVERSION).sql $(EXTDIR)
+
+else # NO_PGXS
+# Standard pgxs makefile
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
+
+endif # NO_PGXS
 
 $(BUILD)/pgwrh/$(EXTENSION)--$(EXTVERSION).sql: src/common.sql $(MASTER) $(REPLICA)
 	cat $^ > $@
 
 all: prepare $(EXTENSION).control $(BUILD)/pgwrh/$(EXTENSION)--$(EXTVERSION).sql
-
-PHONY: prepare
 prepare:
 	mkdir -p ${BUILD}/pgwrh
+
+PHONY: all prepare
