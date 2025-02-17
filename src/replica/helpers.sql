@@ -156,6 +156,7 @@ SELECT
     sa.dbname,
     host,
     port,
+    connect_remote,
     retained_shard_server_name,
     retained_shard_server_schema,
     retained_remote_rel_id,

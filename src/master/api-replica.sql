@@ -108,7 +108,7 @@ SELECT
     dbname,
     shard_server_user,
     pubname,
-    ready,
+    connect_remote,
     retained_shard_server_name
 FROM
     shard_assignment_per_member

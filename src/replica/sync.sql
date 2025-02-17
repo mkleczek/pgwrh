@@ -453,12 +453,12 @@ scripts (async, transactional, description, commands) AS (
     WHERE
             ready_shard.reg_class IS DISTINCT FROM i.inhrelid
         AND sa.local
+        AND NOT sa.connect_remote
     GROUP BY 1, 2
 
     UNION ALL
     -- Attach ready remote shards to slots replacing
     -- existing attachments if necessary
-    -- we also replace local shard attachments if they are missing indexes
     SELECT
         FALSE,
         TRUE,
@@ -483,25 +483,8 @@ scripts (async, transactional, description, commands) AS (
     WHERE
             ready_shard.reg_class IS DISTINCT FROM i.inhrelid
         AND
-        (
-                NOT sa.local
-            OR  EXISTS (SELECT 1 FROM
-                    missing_required_index
-                    WHERE
-                        reg_class = i.inhrelid
-                )
-        )
+            sa.connect_remote
     GROUP BY 1, 2
-
-            -- format('CREATE FOREIGN TABLE %I.%I PARTITION OF %s %s SERVER %I OPTIONS (schema_name %L)',
-            --     (remote_rel_id).schema_name,
-            --     (remote_rel_id).table_name,
-            --     (parent).reg_class,
-            --     (lr).bound,
-            --     shard_server_name,
-            --     (rel_id).schema_name
-            -- )
-
 
     UNION ALL
     -- Subscriptions

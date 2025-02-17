@@ -29,7 +29,7 @@ CREATE FOREIGN TABLE IF NOT EXISTS fdw_shard_assignment (
     dbname text,
     shard_server_user text,
     pubname text,
-    ready boolean,
+    connect_remote boolean,
     retained_shard_server_name text
 )
 SERVER replica_controller

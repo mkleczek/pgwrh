@@ -118,8 +118,13 @@ SELECT
         THEN target_credentials.username
         ELSE current_username
     END AS shard_server_user,
+    -- If shard is remote in target version, and it is ready, connect it to slot instead of the local one
+    -- (but keep the local one if it is still be marked as "local" above)
+    CASE WHEN current_version <> target_version
+        THEN target_remote AND target_subscribed AND target_online AND target_user_created
+        ELSE NOT local
+    END AS connect_remote,
     pubname(schema_name, table_name) AS pubname,
-    current_version = target_version OR (target_online AND target_subscribed AND target_indexed) AS ready, -- can foreign table be connected to slot and made available to clients
     current_server_name AS retained_shard_server_name, -- do not drop foreign tables with this server name (to keep current tables during transition)
     --local AND hosted_shard_subscribed_confirmation IS NULL AS subscription_confirmation_required -- whether confirmation from this member is required
     m AS replication_group_member
@@ -135,6 +140,8 @@ FROM
                 -- is m among assigned hosts regardless of version
                 -- every host has to retain shards from both current and target version
                 bool_or(member_role = m.member_role) AS local,
+                bool_and(member_role <> m.member_role)
+                    FILTER ( WHERE version = target_version) AS target_remote,
                 -- server names are independent of shard
                 md5(string_agg(sah.availability_zone || sah.host_id, ',' ORDER BY sah.availability_zone, sah.host_id)
                     FILTER (WHERE member_role <> m.member_role AND version = current_version)) AS current_server_name,
@@ -306,8 +313,8 @@ CREATE VIEW missing_connected_remote_shard AS
                 JOIN shard ms USING (replication_group_id)
         WHERE
             NOT EXISTS (SELECT 1 FROM shard_assigned_host WHERE
-                        (  replication_group_id,   availability_zone,   host_id,    schema_name,    table_name) =
-                        (m.replication_group_id, m.availability_zone, m.host_id, ms.schema_name, ms.table_name))
+                        (  replication_group_id,    version,   availability_zone,   host_id,    schema_name,    table_name) =
+                        (m.replication_group_id, ms.version, m.availability_zone, m.host_id, ms.schema_name, ms.table_name))
     )
     SELECT
         replication_group_id, version, availability_zone, host_id, schema_name, table_name
