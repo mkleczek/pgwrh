@@ -55,22 +55,24 @@ $$;
 CREATE OR REPLACE FUNCTION next_pending_version(group_id text) RETURNS config_version
     LANGUAGE sql AS
 $$
-INSERT INTO "@extschema@".replication_group_config
-SELECT
-    replication_group_id, "@extschema@".next_version(current_version)
-FROM
-    "@extschema@".replication_group
-WHERE
-    replication_group_id = group_id
-ON CONFLICT DO NOTHING;
+    INSERT INTO "@extschema@".replication_group_config
+    SELECT
+        replication_group_id, "@extschema@".next_version(current_version)
+    FROM
+        "@extschema@".replication_group
+    WHERE
+        replication_group_id = group_id
+    ON CONFLICT DO NOTHING;
 
-SELECT
-    "@extschema@".next_version(current_version)
-FROM
-    "@extschema@".replication_group
-WHERE
-    replication_group_id = group_id
+    SELECT
+        "@extschema@".next_version(current_version)
+    FROM
+        "@extschema@".replication_group
+    WHERE
+        replication_group_id = group_id
 $$;
+COMMENT ON FUNCTION next_pending_version(group_id text) IS
+'Inserts next pending version into replication_group_config and returns it.';
 
 
 CREATE OR REPLACE FUNCTION clone_config(group_id text, _target_version config_version) RETURNS void
@@ -117,6 +119,8 @@ $$
             version = source_version
     ON CONFLICT DO NOTHING
 $$;
+COMMENT ON FUNCTION clone_config(group_id text, target_version config_version) IS
+'Copies configuration from one version to another. Ignores already existing items.';
 
 CREATE OR REPLACE FUNCTION delete_pending_version(group_id text) RETURNS void LANGUAGE sql AS
 $$
