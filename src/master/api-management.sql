@@ -99,7 +99,7 @@ $$
 Adds new replica to a cluster.
 $$;
 
-CREATE OR REPLACE FUNCTION mark_pending_version_ready(
+CREATE OR REPLACE FUNCTION commit_rollout(
         group_id text, keep_old_config boolean DEFAULT false)
     RETURNS void
     SET SEARCH_PATH FROM CURRENT
@@ -120,7 +120,7 @@ BEGIN
         AND NOT keep_old_config;
 END
 $$;
-COMMENT ON FUNCTION mark_pending_version_ready(group_id text, keep_old_config boolean) IS
+COMMENT ON FUNCTION commit_rollout(group_id text, keep_old_config boolean) IS
 $$
 Marks the version being rolled out as current.
 If any of the replicas did not report all remote and local shards as ready error is raised.
