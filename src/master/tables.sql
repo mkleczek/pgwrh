@@ -23,8 +23,6 @@ COMMENT ON TYPE config_version IS
 
 CREATE TABLE  replication_group (
     replication_group_id text NOT NULL PRIMARY KEY,
-    username text NOT NULL,
-    password text NOT NULL,
     current_version config_version NOT NULL DEFAULT 'FLIP',
     target_version config_version NOT NULL DEFAULT 'FLIP',
     seq_number int NOT NULL DEFAULT 0
@@ -41,10 +39,6 @@ Username and password are credentials shared between cluster members and used
 to access remote shards (ie. they are used in USER MAPPINGs created on cluster members).';
 COMMENT ON COLUMN replication_group.replication_group_id IS
 'Unique identifier of a replication group.';
-COMMENT ON COLUMN replication_group.username IS
-'Username shared among cluster members and used to establish postgres_fdw connections between each other.';
-COMMENT ON COLUMN replication_group.password IS
-'Password shared among cluster members and used to establish postgres_fdw connections between each other.';
 COMMENT ON COLUMN replication_group.current_version IS
 'Identifier of currently deployed configuration version.';
 COMMENT ON COLUMN replication_group.target_version IS
@@ -86,6 +80,9 @@ CREATE TABLE replication_group_config_clone (
 CREATE TABLE  replication_group_config_lock (
     replication_group_id text NOT NULL,
     version config_version NOT NULL,
+    -- most probably it should be separate
+    -- but for now it is simpler here
+    seed uuid NOT NULL DEFAULT gen_random_uuid(),
 
     PRIMARY KEY (replication_group_id, version),
     FOREIGN KEY (replication_group_id, version)
@@ -110,6 +107,7 @@ CREATE TABLE  replication_group_member (
     indexes json NOT NULL DEFAULT '[]',
     connected_local_shards json NOT NULL DEFAULT '[]',
     connected_remote_shards json NOT NULL DEFAULT '[]',
+    users json NOT NULL DEFAULT '[]',
 
     PRIMARY KEY (replication_group_id, availability_zone, host_id)
 );

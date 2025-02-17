@@ -56,18 +56,16 @@ Identifier of the replication group to start rollout.
 $$;
 
 CREATE FUNCTION create_replica_cluster(
-        _replication_group_id text,
-        _username text DEFAULT NULL,
-        _password text DEFAULT gen_random_uuid()::text)
+        _replication_group_id text)
     RETURNS void
     SET SEARCH_PATH FROM CURRENT
     LANGUAGE sql
     AS
 $$
-    INSERT INTO replication_group (replication_group_id, username, password)
-    VALUES ($1, coalesce($2, _replication_group_id), $3);
+    INSERT INTO replication_group (replication_group_id)
+    VALUES ($1);
 $$;
-COMMENT ON FUNCTION create_replica_cluster(_replication_group_id text, _username text, _password text) IS
+COMMENT ON FUNCTION create_replica_cluster(_replication_group_id text) IS
 $$
 Creates new replica cluster.
 $$;

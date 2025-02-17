@@ -107,7 +107,6 @@ SELECT
     port,
     dbname,
     shard_server_user,
-    shard_server_password,
     pubname,
     ready,
     retained_shard_server_name
@@ -145,7 +144,8 @@ CREATE VIEW replica_state AS
         subscribed_local_shards,
         indexes,
         connected_local_shards,
-        connected_remote_shards
+        connected_remote_shards,
+        users
     FROM replication_group_member
     WHERE
         member_role = CURRENT_ROLE
@@ -166,3 +166,14 @@ CREATE VIEW replica_state AS
 -- $$;
 -- CREATE TRIGGER update_replica_state_trigger INSTEAD OF INSERT OR UPDATE ON replica_state FOR EACH ROW EXECUTE FUNCTION update_replica_state();
 GRANT SELECT, INSERT, UPDATE ON replica_state TO PUBLIC;
+
+CREATE VIEW credentials AS
+SELECT
+    creds.username,
+    creds.password
+FROM
+    replication_group_member
+        JOIN replication_group_credentials creds USING (replication_group_id)
+WHERE
+    member_role = CURRENT_ROLE;
+GRANT SELECT ON credentials TO PUBLIC;

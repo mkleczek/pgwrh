@@ -67,29 +67,40 @@ $$
         srvname = _srvname;
 $$;
 
-CREATE OR REPLACE FUNCTION update_user_mapping(server_name text, username text, password text)
+CREATE OR REPLACE FUNCTION update_user_mapping(server_name text, umoptions text[], username text, password text)
 RETURNS SETOF text
 STABLE
 LANGUAGE sql AS
 $$
 SELECT format('ALTER USER MAPPING FOR PUBLIC SERVER %I OPTIONS (%s)', srvname, string_agg(opts.cmd, ', '))
 FROM
-    pg_user_mappings pum CROSS JOIN LATERAL (
+    (
         SELECT
+            server_name,
             CASE
                 WHEN opt.key IS NOT NULL THEN format('SET %s %L', toset.key, toset.val)
                 ELSE format('ADD %s %L', toset.key, toset.val)
             END
         FROM
             unnest(ARRAY['user', 'password'], ARRAY[username, password]) AS toset(key, val)
-                LEFT JOIN (SELECT * FROM "@extschema@".opts(pum.umoptions)) AS opt USING (key)
+                LEFT JOIN (SELECT * FROM "@extschema@".opts(umoptions)) AS opt USING (key)
         WHERE
             opt.key IS NULL OR toset.val <> opt.value
-    ) AS opts(cmd)
-WHERE
-    srvname = server_name
+    ) AS opts(srvname, cmd)
 GROUP BY
     srvname
+$$;
+CREATE OR REPLACE FUNCTION update_user_mapping(_srvname text, username text, password text)
+    RETURNS SETOF text
+    STABLE
+    LANGUAGE sql
+AS
+$$
+SELECT "@extschema@".update_user_mapping(srvname, umoptions, username, password)
+FROM
+    pg_user_mappings
+WHERE
+    srvname = _srvname;
 $$;
 
 CREATE TYPE  rel_id AS (schema_name text, table_name text);
@@ -142,7 +153,6 @@ SELECT
     (stable_hash(sa.schema_name, sa.table_name) % sub_num() + sub_num()) % sub_num() AS sub_remainder,
     sa.pubname,
     sa.shard_server_user,
-    sa.shard_server_password,
     sa.dbname,
     host,
     port,

@@ -76,7 +76,14 @@ $$
             subscribed_local_shards = (SELECT coalesce((SELECT json_agg(rel_id) FROM "@extschema@".subscribed_local_shard), '[]')),
             connected_local_shards = (SELECT coalesce((SELECT json_agg(rel_id) FROM "@extschema@".connected_local_shard), '[]')),
             connected_remote_shards = (SELECT coalesce((SELECT json_agg(rel_id) FROM "@extschema@".connected_remote_shard), '[]')),
-            indexes = (SELECT coalesce((SELECT json_agg(i) FROM "@extschema@".local_shard_index i), '[]'));
+            indexes = (SELECT coalesce((SELECT json_agg(i) FROM "@extschema@".local_shard_index i), '[]')),
+            users = (SELECT coalesce((SELECT json_agg(u.rolname)
+                                      FROM pg_roles u
+                                               JOIN pg_auth_members ON member = u.oid
+                                               JOIN pg_roles gr ON
+                                                    gr.oid = roleid
+                                                AND gr.rolname = format('pgwrh_replica_%s', current_database())),
+                                     '[]'));
 $$;
 COMMENT ON FUNCTION report_state() IS
 $$

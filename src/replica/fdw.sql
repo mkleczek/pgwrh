@@ -28,7 +28,6 @@ CREATE FOREIGN TABLE IF NOT EXISTS fdw_shard_assignment (
     port text,
     dbname text,
     shard_server_user text,
-    shard_server_password text,
     pubname text,
     ready boolean,
     retained_shard_server_name text
@@ -59,6 +58,13 @@ CREATE FOREIGN TABLE fdw_replica_state (
     subscribed_local_shards json,
     indexes json,
     connected_local_shards json,
-    connected_remote_shards json
+    connected_remote_shards json,
+    users json
 ) SERVER replica_controller
 OPTIONS (table_name 'replica_state');
+
+CREATE FOREIGN TABLE fdw_credentials (
+    username text,
+    password text
+) SERVER replica_controller
+OPTIONS (table_name 'credentials');

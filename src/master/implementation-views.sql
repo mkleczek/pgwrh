@@ -80,6 +80,16 @@ FROM
 COMMENT ON VIEW shard_index_per_member IS
 'Provides definitions of indexes that should be created for each shard.';
 
+CREATE VIEW replication_group_credentials AS
+SELECT
+    replication_group_id,
+    version,
+    usernamegen(replication_group_id, version, seed) AS username,
+    passgen(replication_group_id, version, seed) AS password
+FROM
+    replication_group_config_lock
+;
+
 CREATE OR REPLACE VIEW shard_assignment_per_member AS
 SELECT
     replication_group_id,
@@ -91,21 +101,23 @@ SELECT
     local,
     -- foreign server hosting shard
     -- use target configuration server only when transitioning and all remote replicas subscribed to the shard (ie. we can run ANALYZE)
-    CASE WHEN current_version <> target_version AND target_subscribed AND target_online
+    CASE WHEN current_version <> target_version AND target_subscribed AND target_online AND target_user_created
         THEN target_server_name
         ELSE current_server_name
     END AS shard_server_name,
-    CASE WHEN current_version <> target_version AND target_subscribed AND target_online
+    CASE WHEN current_version <> target_version AND target_subscribed AND target_online AND target_user_created
         THEN target_host
         ELSE coalesce(current_host, '')
     END AS host,
-    CASE WHEN current_version <> target_version AND target_subscribed AND target_online
+    CASE WHEN current_version <> target_version AND target_subscribed AND target_online AND target_user_created
         THEN target_port
         ELSE coalesce(current_port, '')
     END AS port,
     current_database() AS dbname,
-    username AS shard_server_user,
-    password AS shard_server_password,
+    CASE WHEN current_version <> target_version AND target_subscribed AND target_online AND target_user_created
+        THEN target_credentials.username
+        ELSE current_username
+    END AS shard_server_user,
     pubname(schema_name, table_name) AS pubname,
     current_version = target_version OR (target_online AND target_subscribed AND target_indexed) AS ready, -- can foreign table be connected to slot and made available to clients
     current_server_name AS retained_shard_server_name, -- do not drop foreign tables with this server name (to keep current tables during transition)
@@ -114,7 +126,8 @@ SELECT
 FROM
     replication_group_member m
         JOIN replication_group g USING (replication_group_id)
-        -- calculate foreign sever names from _all_ assigned hosts
+        JOIN replication_group_credentials current_credentials USING (replication_group_id)
+        JOIN replication_group_credentials target_credentials USING (replication_group_id)
         CROSS JOIN LATERAL (
             SELECT
                 schema_name,
@@ -123,9 +136,9 @@ FROM
                 -- every host has to retain shards from both current and target version
                 bool_or(member_role = m.member_role) AS local,
                 -- server names are independent of shard
-                md5(string_agg(sah.availability_zone || sah.host_id, ',' ORDER BY sah.host_id)
+                md5(string_agg(sah.availability_zone || sah.host_id, ',' ORDER BY sah.availability_zone, sah.host_id)
                     FILTER (WHERE member_role <> m.member_role AND version = current_version)) AS current_server_name,
-                md5(string_agg(sah.availability_zone || sah.host_id, ',' ORDER BY sah.host_id)
+                md5(string_agg(sah.availability_zone || sah.host_id, ',' ORDER BY sah.availability_zone, sah.host_id)
                     FILTER (WHERE member_role <> m.member_role AND version = target_version)) AS target_server_name,
                 -- is any of target version hosts online?
                 bool_or(online) FILTER (WHERE member_role <> m.member_role AND version = target_version) AS target_online,
@@ -135,11 +148,19 @@ FROM
                     FILTER (WHERE member_role <> m.member_role AND version = target_version) AS target_subscribed,
                 -- did all target version hosts confirm target version indexes (so that clients can expose them as foreign tables)
                 -- we want to avoid situation when clients issue queries to hosts that don't have required indexes
-                -- as that might disrupt whole cluster due to slow queries causing
+                -- as that might disrupt whole cluster due to slow queries, that in turn cause
                 -- a) high resource usage and cache thrashing
                 -- b) exhausted connection pools
                 bool_and(has_all_indexes)
-                    FILTER (WHERE member_role <> m.member_role AND version = target_version) AS target_indexed
+                    FILTER (WHERE member_role <> m.member_role AND version = target_version) AS target_indexed,
+                -- If all current hosts confirmed creation of target version user
+                -- then we rotate credentials
+                CASE WHEN bool_and(target_user_created) FILTER ( WHERE member_role <> m.member_role AND version = current_version)
+                    THEN target_credentials.username
+                    ELSE current_credentials.username
+                END AS current_username,
+                bool_and(target_user_created)
+                    FILTER ( WHERE member_role <> m.member_role AND version = target_version) AS target_user_created
             FROM
                 shard_assigned_host sah
                     JOIN shard_host USING (replication_group_id, availability_zone, host_id)
@@ -165,7 +186,12 @@ FROM
                             WHERE
                                 (    schema_name,     table_name) =
                                 (sah.schema_name, sah.table_name)
-    )               ) s(subscribes_local_shard)
+                    )) s(subscribes_local_shard)
+                    CROSS JOIN LATERAL (
+                        SELECT EXISTS (SELECT 1 FROM
+                            json_array_elements_text(users) AS t(username)
+                            WHERE username = target_credentials.username)
+                    ) u(target_user_created)
             WHERE
                     sah.replication_group_id = m.replication_group_id
                 AND
@@ -237,6 +263,9 @@ FROM
             GROUP BY
                 1, 2
         ) target_host_port USING (schema_name, table_name)
+WHERE
+        current_credentials.version = current_version
+    AND target_credentials.version = target_version
 ;
 
 CREATE VIEW missing_subscribed_shard AS

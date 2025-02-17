@@ -45,8 +45,7 @@ shard_server AS (
         host,
         port,
         dbname,
-        shard_server_user,
-        shard_server_password
+        shard_server_user
     FROM
         shard_assignment
     WHERE
@@ -150,6 +149,9 @@ ready_local_shard AS (
             WHERE
                 reg_class = s.reg_class
         )
+),
+roles AS (
+    SELECT * FROM fdw_credentials
 ),
 scripts (async, transactional, description, commands) AS (
     SELECT
@@ -307,18 +309,46 @@ scripts (async, transactional, description, commands) AS (
     GROUP BY 1, 2
 
     UNION ALL
-    -- Make sure user accounts for local shards is created
+    -- Create pgwrh_replica role if not exists
+    -- TODO should this be moved to extension intallation script
+    -- so that it fails if there is conflicting role already present?
     SELECT
         FALSE,
         TRUE,
-        format('User accounts [%s] to access local shards need to be created.', string_agg(shard_server_user, ', ')),
-        array_agg(format('CREATE USER %I PASSWORD %L', shard_server_user, shard_server_password))
+        format('Creating %I role', format('pgwrh_replica_%s', current_database())),
+        ARRAY [
+            format('CREATE ROLE %I', format('pgwrh_replica_%s', current_database()))
+        ]
+    WHERE
+        NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = format('pgwrh_replica_%s', current_database()))
+
+    UNION ALL
+    -- Make sure user accounts for local shards are created
+    SELECT
+        FALSE,
+        TRUE,
+        format('User accounts [%s] to access local shards need to be created.', string_agg(username, ', ')),
+        array_agg(format('CREATE USER %I PASSWORD %L IN ROLE %I', username, password, format('pgwrh_replica_%s', current_database())))
     FROM
-        (
-            SELECT DISTINCT shard_server_user, shard_server_password
-            FROM local_shard WHERE
-                NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = shard_server_user)
-        ) up
+        roles
+    WHERE
+                NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = username)
+            AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = format('pgwrh_replica_%s', current_database()))
+    GROUP BY 1, 2 -- make sure we produce empty set when no results
+
+    UNION ALL
+    -- Clean up
+    SELECT
+        FALSE,
+        TRUE,
+        format('Dropping no longer needed roles [%s]', string_agg(u.rolname, ', ')),
+        array_agg(format('DROP ROLE %I', u.rolname))
+    FROM
+        pg_roles u
+            JOIN pg_auth_members ON member = u.oid
+            JOIN pg_roles gr ON gr.oid = roleid AND gr.rolname = format('pgwrh_replica_%s', current_database())
+    WHERE
+            NOT EXISTS (SELECT 1 FROM roles WHERE u.rolname = username)
     GROUP BY 1, 2 -- make sure we produce empty set when no results
 
     UNION ALL
@@ -328,12 +358,13 @@ scripts (async, transactional, description, commands) AS (
         TRUE,
         format('Found local shard schemas [%s] without proper access rights for other replicas', string_agg(schema_name, ', ')),
         ARRAY[
-            format('GRANT USAGE ON SCHEMA %s TO %s', string_agg(quote_ident(schema_name), ', '), string_agg(quote_ident(rolname), ', '))
+            format('GRANT USAGE ON SCHEMA %s TO %I', string_agg(quote_ident(schema_name), ', '), format('pgwrh_replica_%s', current_database()))
         ]
     FROM
-        pg_roles JOIN (SELECT DISTINCT (rel_id).schema_name, shard_server_user FROM local_shard) s ON rolname = shard_server_user
-    WHERE
-        NOT has_schema_privilege(rolname, schema_name, 'USAGE')
+        pg_roles
+            JOIN (SELECT DISTINCT (rel_id).schema_name FROM local_shard) s ON
+                    rolname = format('pgwrh_replica_%s', current_database())
+                AND NOT has_schema_privilege(rolname, schema_name, 'USAGE')
     GROUP BY 1, 2
 
     UNION ALL
@@ -343,12 +374,12 @@ scripts (async, transactional, description, commands) AS (
         TRUE,
         format('Found local shard [%s] without proper access rights for other replicas', string_agg(reg_class::text, ', ')),
         ARRAY[
-            format('GRANT SELECT ON %s TO %s', string_agg(reg_class::text, ', '), string_agg(DISTINCT quote_ident(rolname), ', '))
+            format('GRANT SELECT ON %s TO %I', string_agg(reg_class::text, ', '), format('pgwrh_replica_%s', current_database()))
         ]
     FROM
-        local_shard JOIN pg_roles ON shard_server_user = rolname
-    WHERE
-        NOT has_table_privilege(rolname, reg_class, 'SELECT')
+        local_shard JOIN pg_roles ON
+                rolname = format('pgwrh_replica_%s', current_database())
+            AND NOT has_table_privilege(rolname, reg_class, 'SELECT')
     GROUP BY rolname
 
     UNION ALL
@@ -611,13 +642,14 @@ scripts (async, transactional, description, commands) AS (
         array_agg(
             format('CREATE USER MAPPING FOR PUBLIC SERVER %I OPTIONS (user %L, password %L)',
                 shard_server_name,
-                shard_server_user,
-                shard_server_password
+                username,
+                password
             ))
         ||
         array_agg(select_add_ext_dependency('pg_foreign_server'::regclass, 'srvname', shard_server_name))
     FROM
         shard_server
+            JOIN roles ON shard_server_user = username
     WHERE
         NOT EXISTS (SELECT 1 FROM pg_foreign_server WHERE srvname = shard_server_name)
     GROUP BY 1, 2
@@ -745,6 +777,22 @@ scripts (async, transactional, description, commands) AS (
         owned_server
             JOIN shard_server ON srvname = shard_server_name,
             update_server_options(srvname, srvoptions, host, port) AS cmd
+
+    UNION ALL
+    -- Update user mapping with updated user/pass if changed
+    SELECT
+        FALSE,
+        TRUE,
+        format('Found modified user and pass for server %I', s.srvname),
+        ARRAY[
+            cmd
+        ]
+    FROM
+        owned_server s
+            JOIN pg_user_mappings um ON um.srvid = s.oid AND um.umuser = 0
+            JOIN shard_server ON s.srvname = shard_server_name
+            JOIN roles ON shard_server_user = username,
+            update_user_mapping(s.srvname, umoptions, username, password) AS cmd
 
     UNION ALL
     -- DROP remote servers (and all dependent objects) for non-existent remote shards

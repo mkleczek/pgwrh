@@ -7,6 +7,25 @@ $$
 $$;
 GRANT EXECUTE ON FUNCTION pubname(schema_name text, table_name text) TO PUBLIC;
 
+CREATE FUNCTION usernamegen(replication_group_id text, version config_version, seed uuid)
+    RETURNS text
+    IMMUTABLE
+    LANGUAGE sql
+    AS
+$$
+    SELECT 'pgwrh_' || current_database() || '_' || replication_group_id || '_' || right(md5(version || seed::text), 5);
+$$;
+GRANT EXECUTE ON FUNCTION usernamegen(replication_group_id text, version config_version, seed uuid) TO PUBLIC;
+CREATE FUNCTION passgen(replication_group_id text, version config_version, seed uuid)
+    RETURNS text
+    IMMUTABLE
+    LANGUAGE sql
+AS
+$$
+    SELECT encode(sha256(convert_to(replication_group_id || version || seed::text, 'UTF8')), 'hex');
+$$;
+GRANT EXECUTE ON FUNCTION passgen(replication_group_id text, version config_version, seed uuid) TO PUBLIC;
+
 CREATE OR REPLACE FUNCTION next_version(version config_version) RETURNS config_version
     IMMUTABLE
     SET SEARCH_PATH FROM CURRENT
