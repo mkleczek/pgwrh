@@ -178,9 +178,9 @@ FROM
 ```
 
 ### Configure replicas
-For each replica issue:
+Add replica to configuration:
 ```pgsql
-SELECT pgwrh.add_shard_host('c01', 'c01r01', 'replica01.cluster01.myorg', 5432);
+SELECT pgwrh.add_replica('c01', 'c01r01', 'replica01.cluster01.myorg', 5432);
 ```
 
 ### Start deployment
@@ -188,35 +188,41 @@ SELECT pgwrh.add_shard_host('c01', 'c01r01', 'replica01.cluster01.myorg', 5432);
 SELECT pgwrh.start_rollout('c01');
 ```
 
-New configuration is now visible to connected replicas
-which will start data replication.
+New configuration is now visible to connected replicas which will start data replication.
 
 ### Commit configuration
-Once all replicas reported back configuration changes issue:
+Once all replicas confirmed configuration changes, execute:
 ```pgsql
 SELECT pgwrh.commit_rollout('c01');
 ```
+(this will fail if some replicas are not reconfigured yet)
 
-### Configure more replicas
+### Add more replicas
 ```pgsql
 CREATE USER c01r02 PASSWORD 'c01r02Password' REPLICATION IN ROLE c01_replica;
 CREATE USER c01r03 PASSWORD 'c01r03Password' REPLICATION IN ROLE c01_replica;
 CREATE USER c01r04 PASSWORD 'c01r04Password' REPLICATION IN ROLE c01_replica;
 
-select pgwrh.add_shard_host(
-       _replication_group_id := 'g1',
-       _host_id := 'h1',
-       _host_name := 'localhost',
-       _port := 5433,
-       _member_role := 'h1');
-
-SELECT pgwrh.add_shard_host('c01', 'c01r02', 'replica02.cluster01.myorg', 5432);
-SELECT pgwrh.add_shard_host('c01', 'c01r03', 'replica03.cluster01.myorg', 5432);
-SELECT pgwrh.add_shard_host('c01', 'c01r04', 'replica04.cluster01.myorg', 5432);
+select pgwrh.add_replica(
+       _replication_group_id := 'c01',
+       _host_id := 'c01r02',
+       _host_name := 'replica02.cluster01.myorg',
+       _port := 5432);
+select pgwrh.add_replica(
+       _replication_group_id := 'c01',
+       _host_id := 'c01r03',
+       _host_name := 'replica03.cluster01.myorg',
+       _port := 5432,
+       _weight := 70);
+select pgwrh.add_replica(
+       _replication_group_id := 'c01',
+       _host_id := 'c01r04',
+       _host_name := 'replica04.cluster01.myorg',
+       _port := 5432);
 ```
 It is possible to adjust the number of shards assigned to replicas by setting replica weight:
 ```pgsql
-SELECT pgwrh.set_weight('c01', 'c01r02', );
+SELECT pgwrh.set_replica_weight('c01', 'c01r04', 200);
 ```
 
 To deploy new configuration:
