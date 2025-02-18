@@ -6,6 +6,8 @@ lack of sharding and large storage requirements.
 
 See [Architecture](https://github.com/mkleczek/pgwrh/wiki/Architecture) for more information on inner workings.
 
+:warning: **WIP**: readme might be incomplete and contain mistakes in usage instrutions (as the API is still changing)
+
 # Features
 
 ## Horizontal Scalability and High Availability
