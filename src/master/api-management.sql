@@ -70,9 +70,9 @@ $$
 Creates new replica cluster.
 $$;
 
-CREATE FUNCTION add_shard_host(
+CREATE FUNCTION add_replica(
         _replication_group_id text,
-        _host_id text,
+        _replica_id text,
         _host_name text,
         _port int,
         _member_role regrole DEFAULT NULL,
@@ -85,18 +85,34 @@ CREATE FUNCTION add_shard_host(
 $$
     WITH m AS (
         INSERT INTO replication_group_member (replication_group_id, host_id, member_role, availability_zone)
-        VALUES (_replication_group_id, _host_id, coalesce(_member_role::text, _host_id::regrole::text), _availability_zone)
+        VALUES (_replication_group_id, _replica_id, coalesce(_member_role::text, _replica_id::regrole::text), _availability_zone)
     ),
     h AS (
         INSERT INTO shard_host (replication_group_id, availability_zone, host_id, host_name, port)
-        VALUES (_replication_group_id, _availability_zone, _host_id, _host_name, _port)
+        VALUES (_replication_group_id, _availability_zone, _replica_id, _host_name, _port)
     )
     INSERT INTO shard_host_weight (replication_group_id, availability_zone, host_id, weight)
-    VALUES (_replication_group_id, _availability_zone, _host_id, _weight)
+    VALUES (_replication_group_id, _availability_zone, _replica_id, _weight)
 $$;
-COMMENT ON FUNCTION add_shard_host(_replication_group_id text, _host_id text, _host_name text, _port int, _member_role regrole, _availability_zone text, _weight int) IS
+COMMENT ON FUNCTION add_replica(_replication_group_id text, _host_id text, _host_name text, _port int, _member_role regrole, _availability_zone text, _weight int) IS
 $$
 Adds new replica to a cluster.
+$$;
+
+CREATE FUNCTION set_replica_weight(
+    _replication_group_id text,
+    _availability_zone text,
+    _replica_id text,
+    _weight int)
+    RETURNS void
+    SET SEARCH_PATH FROM CURRENT
+    LANGUAGE sql
+    AS
+$$
+    INSERT INTO shard_host_weight (replication_group_id, availability_zone, host_id, weight)
+    VALUES (_replication_group_id, _availability_zone, _replica_id, _weight)
+    ON CONFLICT (replication_group_id, availability_zone, host_id, version)
+    DO UPDATE SET weight = EXCLUDED.weight;
 $$;
 
 CREATE OR REPLACE FUNCTION commit_rollout(
