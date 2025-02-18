@@ -1,8 +1,62 @@
 # pgwrh
 
-An extension implementing scale out sharding for PostgreSQL based on logical replication and postgres_fdw.
+An extension implementing sharding for PostgreSQL based on logical replication and postgres_fdw.
+The goal is to scale **_read queries_** overcoming main limitation of traditional setups based on streaming replication and hot standbys:
+lack of sharding and large storage requirements.
 
 See [Architecture](https://github.com/mkleczek/pgwrh/wiki/Architecture) for more information on inner workings.
+
+# Features
+
+## Horizontal Scalability and High Availability
+### No need for rebalancing
+Setting up and maintaining a highly available cluster of sharded storage servers is inherently tricky, especially during changes to cluster topology.
+Adding a new replica often requires rebalancing (ie. reorganizing data placement among replicas).
+
+_pgwrh_ minimizes the need to copy data by utilizing _Weighted Randezvous Hashing_ algorithm to distribute shards among replicas.
+Adding replicas never requires moving data between existing ones.
+### Data redundancy
+_pgwrh_ maintains requested level of redundancy of shard data.
+
+Administrator can specify:
+* the percentage of replicas to host each shard
+* the minimum number of copies of any shard (regardless of the percentage setting above)
+
+So it is possible to implement policies like: _"Shards X, Y, Z should be distributed among 20% of replicas in the cluster, but in no fewer than 2 copies"_.
+### Availability zones
+Replicas can be assigned to _availability zones_ and _pgwrh_ ensures shard copies are distributed evenly across all of them.
+
+### Zero downtime reconfiguration of cluster topology
+Changing cluster topology very often requires lengthy process of data copying and indexing.
+Exposing replicas that do not have necessary indexes created imposes a risk of downtimes due to long queries causing exhaustion of connection pools. 
+
+_pgwrh_ makes sure the cluster can operate without disruptions and that not-yet-ready replicas are isolated from query traffic.
+
+## Sharding policy flexibility and storage tiering
+_pgwrh_ does not dictate how data is split into shards. It is possible to implement _any_ sharding policy by utilizing PostgreSQL partitioning.
+_pgwrh_ will distribute _leaves_ of partition hierarchy among replicas.
+It is also possible to specify different levels of redundancy for different subtrees of partitioning hierarchy.
+
+Thanks to this it is possible to have more replicas maintain _hot_ data and have _cold_ data storage requirements minimized.
+
+## Ease of deployment and cluster administration
+
+
+## Pure SQL/PGSQL
+This makes it easy to use _pgwrh_ in cloud environments that limit possibilities of custom extension installation.
+
+***
+_Caveat_ at the moment _pgwrh_ requires _pg_background_ to operate as it needs a way to execute SQL commands
+outside current transaction (_CREATE/ALTER SUBSCRIPTION_ must not be executed in transaction).
+
+## Based on built-in PostgreSQL facilities - no need for custom query parser/planner
+Contrary to other PostgreSQL sharding solutions that implement a query parser and interpreter to direct queries to
+the right replicas, _pgwrh_ reuses built-in PostgreSQL features: partitioning and postgres_fdw.
+
+PostgreSQL query planner and executor - while still somewhat limited - have capabilities to distribute computing among
+multiple machines by:
+* _pushing down_ filtering and aggregates (see https://www.postgresql.org/docs/current/runtime-config-query.html#GUC-ENABLE-PARTITIONWISE-AGGREGATE)
+* skip execution of unnecessary query plan nodes (see https://www.postgresql.org/docs/current/runtime-config-query.html#GUC-ENABLE-PARTITIONWISE-AGGREGATE)
 
 # Installation
 
@@ -63,45 +117,27 @@ END$$;
 
 That gives 48 (16 * 3) shards in total.
 
-**Note** that there are no specific requirements for the partitioning hierarchy and any partitioned table can be sharded - the above is only for ilustration purposes.
+**Note** that there are no specific requirements for the partitioning hierarchy and any partitioned table can be sharded - the above is only for illustration purposes.
 
-### Create a replication group
+### Create a replica cluster
 
 Example:
 ```pgsql
-INSERT INTO pgwrh.replication_group (replication_group_id, username, password)
-VALUES ('cluster_01', 'cluster01', 'cluster01password');
-```
-
-### Specify what tables to replicate for replication group
-
-Example below would configure 2 copies of every partition of `test.my_data` except partitions of `test.my_data_2024` which will be copied to 4 replicas.
-```pgsql
-WITH st(schema_name, table_name, replica_count) AS (
-    VALUES
-        ('test', 'my_data', 2),
-        ('test', 'my_data_2024', 4)
-)
-INSERT INTO pgwrh.sharded_table (replication_group_id, sharded_table_schema, sharded_table_name, replica_count)
-SELECT
-    'cluster_01', schema_name, table_name, replica_count
-FROM
-    st;
+SELECT pgwrh.create_replica_cluster('c01');
 ```
 
 ### Configure roles and user accounts for replicas
 
 (Optional) Create a role for you cluster replicas and grant rights to SELECT from shards.
 ```pgsql
-CREATE ROLE cluster_01_replica;
+CREATE ROLE c01_replica;
 
-GRANT SELECT ON ALL TABLES IN SCHEMA test_shards TO cluster_01_replica;
+GRANT SELECT ON ALL TABLES IN SCHEMA test_shards TO c01_replica;
 ```
 
-Configure replicas:
+Create account for each replica.
 ```pgsql
-CREATE USER c01r01 PASSWORD 'c01r01Password' REPLICATION IN ROLE cluster_01_replica;
-SELECT pgwrh.add_shard_host('cluster_01', 'c01r01', 'replica01.cluster01.myorg', 5432);
+CREATE USER c01r01 PASSWORD 'c01r01Password' REPLICATION IN ROLE c01_replica;
 ```
 
 ## On every replica
@@ -120,4 +156,72 @@ SELECT configure_controller(
 );
 ```
 
-Replica should create the partition hierarchy and configure logica replication of shards assigned to it by *master*.
+## Create and deploy replica cluster configuration
+
+### Specify what tables to replicate
+
+Example below would configure distribution of every partition of `test.my_data` to half (50%) of replicas,
+except partitions of `test.my_data_2024` which will be copied to all (100%) replicas.
+```pgsql
+WITH st(schema_name, table_name, replication_factory) AS (
+    VALUES
+        ('test', 'my_data', 50),
+        ('test', 'my_data_2024', 100)
+)
+INSERT INTO pgwrh.sharded_table (replication_group_id, sharded_table_schema, sharded_table_name, replication_factor)
+SELECT
+    'c01', schema_name, table_name, replication_factor
+FROM
+    st;
+```
+
+### Configure replicas
+For each replica issue:
+```pgsql
+SELECT pgwrh.add_shard_host('c01', 'c01r01', 'replica01.cluster01.myorg', 5432);
+```
+
+### Start deployment
+```pgsql
+SELECT pgwrh.start_rollout('c01');
+```
+
+New configuration is now visible to connected replicas
+which will start data replication.
+
+### Commit configuration
+Once all replicas reported back configuration changes issue:
+```pgsql
+SELECT pgwrh.commit_rollout('c01');
+```
+
+### Configure more replicas
+```pgsql
+CREATE USER c01r02 PASSWORD 'c01r02Password' REPLICATION IN ROLE c01_replica;
+CREATE USER c01r03 PASSWORD 'c01r03Password' REPLICATION IN ROLE c01_replica;
+CREATE USER c01r04 PASSWORD 'c01r04Password' REPLICATION IN ROLE c01_replica;
+
+select pgwrh.add_shard_host(
+       _replication_group_id := 'g1',
+       _host_id := 'h1',
+       _host_name := 'localhost',
+       _port := 5433,
+       _member_role := 'h1');
+
+SELECT pgwrh.add_shard_host('c01', 'c01r02', 'replica02.cluster01.myorg', 5432);
+SELECT pgwrh.add_shard_host('c01', 'c01r03', 'replica03.cluster01.myorg', 5432);
+SELECT pgwrh.add_shard_host('c01', 'c01r04', 'replica04.cluster01.myorg', 5432);
+```
+It is possible to adjust the number of shards assigned to replicas by setting replica weight:
+```pgsql
+SELECT pgwrh.set_weight('c01', 'c01r02', );
+```
+
+To deploy new configuration:
+```pgsql
+SELECT pgwrh.start_rollout('c01');
+```
+And then:
+```pgsql
+SELECT pgwrh.commit_rollout('c01');
+```
