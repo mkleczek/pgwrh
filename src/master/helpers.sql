@@ -122,21 +122,6 @@ $$;
 COMMENT ON FUNCTION clone_config(group_id text, target_version config_version) IS
 'Copies configuration from one version to another. Ignores already existing items.';
 
-CREATE OR REPLACE FUNCTION delete_pending_version(group_id text) RETURNS void LANGUAGE sql AS
-$$
-DELETE FROM "@extschema@".replication_group_config c
-WHERE NOT EXISTS (SELECT 1 FROM
-    "@extschema@".replication_group
-                  WHERE replication_group_id = c.replication_group_id AND c.version IN (current_version, target_version)
-)
-$$;
-COMMENT ON FUNCTION delete_pending_version(group_id text) IS
-    'Removes pending (ie. the one that is not pointed to by replication_group(current_version)) configuration version.
-
-    Removal of pending version may trigger removal of no longer needed shards on the replicas.
-    So it must be performed with caution after verifying no replicas assume presence of these shards on other replicas';
--- TODO fix comment
-
 CREATE OR REPLACE FUNCTION stable_hash(VARIADIC text[]) RETURNS int IMMUTABLE LANGUAGE sql AS
 $$
 SELECT ('x' || substr(md5(array_to_string($1, '', '')), 1, 8))::bit(32)::int
