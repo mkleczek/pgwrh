@@ -309,31 +309,17 @@ scripts (async, transactional, description, commands) AS (
     GROUP BY 1, 2
 
     UNION ALL
-    -- Create pgwrh_replica role if not exists
-    -- TODO should this be moved to extension intallation script
-    -- so that it fails if there is conflicting role already present?
-    SELECT
-        FALSE,
-        TRUE,
-        format('Creating %I role', format('pgwrh_replica_%s', current_database())),
-        ARRAY [
-            format('CREATE ROLE %I', format('pgwrh_replica_%s', current_database()))
-        ]
-    WHERE
-        NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = format('pgwrh_replica_%s', current_database()))
-
-    UNION ALL
     -- Make sure user accounts for local shards are created
     SELECT
         FALSE,
         TRUE,
         format('User accounts [%s] to access local shards need to be created.', string_agg(username, ', ')),
-        array_agg(format('CREATE USER %I PASSWORD %L IN ROLE %I', username, password, format('pgwrh_replica_%s', current_database())))
+        array_agg(format('CREATE USER %I PASSWORD %L IN ROLE %I', username, password, "@extschema@".pgwrh_replica_role_name()))
     FROM
         roles
     WHERE
                 NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = username)
-            AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = format('pgwrh_replica_%s', current_database()))
+            AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = "@extschema@".pgwrh_replica_role_name())
     GROUP BY 1, 2 -- make sure we produce empty set when no results
 
     UNION ALL
@@ -346,7 +332,7 @@ scripts (async, transactional, description, commands) AS (
     FROM
         pg_roles u
             JOIN pg_auth_members ON member = u.oid
-            JOIN pg_roles gr ON gr.oid = roleid AND gr.rolname = format('pgwrh_replica_%s', current_database())
+            JOIN pg_roles gr ON gr.oid = roleid AND gr.rolname = "@extschema@".pgwrh_replica_role_name()
     WHERE
             NOT EXISTS (SELECT 1 FROM roles WHERE u.rolname = username)
     GROUP BY 1, 2 -- make sure we produce empty set when no results
@@ -358,12 +344,12 @@ scripts (async, transactional, description, commands) AS (
         TRUE,
         format('Found local shard schemas [%s] without proper access rights for other replicas', string_agg(schema_name, ', ')),
         ARRAY[
-            format('GRANT USAGE ON SCHEMA %s TO %I', string_agg(quote_ident(schema_name), ', '), format('pgwrh_replica_%s', current_database()))
+            format('GRANT USAGE ON SCHEMA %s TO %I', string_agg(quote_ident(schema_name), ', '), "@extschema@".pgwrh_replica_role_name())
         ]
     FROM
         pg_roles
             JOIN (SELECT DISTINCT (rel_id).schema_name FROM local_shard) s ON
-                    rolname = format('pgwrh_replica_%s', current_database())
+                    rolname = "@extschema@".pgwrh_replica_role_name()
                 AND NOT has_schema_privilege(rolname, schema_name, 'USAGE')
     GROUP BY 1, 2
 
@@ -374,11 +360,11 @@ scripts (async, transactional, description, commands) AS (
         TRUE,
         format('Found local shard [%s] without proper access rights for other replicas', string_agg(reg_class::text, ', ')),
         ARRAY[
-            format('GRANT SELECT ON %s TO %I', string_agg(reg_class::text, ', '), format('pgwrh_replica_%s', current_database()))
+            format('GRANT SELECT ON %s TO %I', string_agg(reg_class::text, ', '), "@extschema@".pgwrh_replica_role_name())
         ]
     FROM
         local_shard JOIN pg_roles ON
-                rolname = format('pgwrh_replica_%s', current_database())
+                rolname = "@extschema@".pgwrh_replica_role_name()
             AND NOT has_table_privilege(rolname, reg_class, 'SELECT')
     GROUP BY rolname
 
@@ -793,7 +779,22 @@ scripts (async, transactional, description, commands) AS (
         )
     GROUP BY 1, 2 -- make sure we produce empty set when no results
 
-
+    UNION ALL
+    -- Handle pg_tle extensions if pg_tle is installed
+    SELECT
+        FALSE,
+        TRUE,
+        format(''),
+        array_agg(stmt)
+    FROM
+        tle_sync() stmt
+    WHERE
+        EXISTS (SELECT 1 FROM
+            pg_extension
+            WHERE
+                extname = 'pg_tle'
+        )
+    GROUP BY 1, 2
 )
 SELECT
     *

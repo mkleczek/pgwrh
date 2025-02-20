@@ -122,6 +122,7 @@ CREATE TABLE  replication_group_member (
     connected_local_shards json NOT NULL DEFAULT '[]',
     connected_remote_shards json NOT NULL DEFAULT '[]',
     users json NOT NULL DEFAULT '[]',
+    extensions json NOT NULL DEFAULT '[]',
 
     PRIMARY KEY (replication_group_id, availability_zone, host_id)
 );
@@ -200,6 +201,15 @@ CREATE TABLE shard_index_template (
     PRIMARY KEY (replication_group_id, version, index_template_schema, index_template_table_name, index_template_name),
     FOREIGN KEY (replication_group_id, version) REFERENCES replication_group_config(replication_group_id, version) ON DELETE CASCADE
 );
+
+-- TLE
+
+CREATE TABLE extension_to_install (
+    name text,
+    target_version text
+);
+SELECT exec_dynamic(format(
+        'GRANT SELECT ON extension_to_install TO %I', pgwrh_replica_role_name()));
 
 -- SNAPSHOT
 

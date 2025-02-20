@@ -19,6 +19,7 @@
 
 CREATE OR REPLACE VIEW shard_structure AS
 WITH stc AS (
+    -- take all sharded_tables that are not part of any extension
     SELECT
         st.replication_group_id,
         c.oid::regclass 
@@ -26,6 +27,14 @@ WITH stc AS (
         pg_class c
             JOIN pg_namespace n ON relnamespace = n.oid
             JOIN sharded_table st ON (nspname, relname) = (sharded_table_schema, sharded_table_name)
+    WHERE
+        NOT EXISTS (SELECT 1 FROM
+            pg_depend
+            WHERE
+                classid = 'pg_class'::regclass
+            AND objid = c.oid
+            AND refclassid = 'pg_extension'::regclass
+        )
 ),
 roots AS (
     SELECT *

@@ -8,3 +8,4 @@ sync            daemon
 status          daemon
 daemon          api-management
 helpers         api-management
+tle             sync
