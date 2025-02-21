@@ -107,9 +107,16 @@ $$;
 CREATE OR REPLACE FUNCTION clone_config_trigger() RETURNS TRIGGER
 LANGUAGE plpgsql AS
 $$BEGIN
-    PERFORM "@extschema@".clone_config(NEW.replication_group_id, NEW.version);
+    INSERT INTO "@extschema@".replication_group_config_clone (replication_group_id, source_version, target_version)
+    VALUES (NEW.replication_group_id, "@extschema@".prev_version(NEW.version), NEW.version)
+    ON CONFLICT DO NOTHING;
     RETURN NEW;
 END$$;
+
+CREATE OR REPLACE TRIGGER forbid_not_pending_version_update BEFORE UPDATE ON replication_group_config
+    FOR EACH ROW
+    WHEN (is_locked(OLD.replication_group_id, OLD.version) OR is_locked(NEW.replication_group_id, NEW.version))
+    EXECUTE FUNCTION forbid_locked_version_modifications();
 
 CREATE OR REPLACE TRIGGER "00_next_pending_version" BEFORE INSERT ON shard_host_weight
 FOR EACH ROW EXECUTE FUNCTION next_pending_version_trigger();
@@ -177,3 +184,59 @@ END
 $$;
 CREATE OR REPLACE TRIGGER replication_group_config_snapshot AFTER INSERT ON replication_group_config_lock
 FOR EACH ROW EXECUTE FUNCTION replication_group_config_snapshot_trigger();
+--------------------
+--------------------
+CREATE FUNCTION before_clone_insert_trigger() RETURNS trigger LANGUAGE plpgsql AS
+$$
+BEGIN
+    INSERT INTO "@extschema@".replication_group_config (replication_group_id, version, min_replica_count, min_replica_count_per_availability_zone)
+    SELECT replication_group_id, NEW.target_version, min_replica_count, min_replica_count_per_availability_zone FROM
+        "@extschema@".replication_group_config
+    WHERE
+            replication_group_id = NEW.replication_group_id
+        AND version = NEW.source_version
+    ON CONFLICT DO NOTHING;
+    RETURN NEW;
+END
+$$;
+--------------------
+--------------------
+CREATE FUNCTION after_clone_insert_trigger()
+    RETURNS trigger
+    SET SEARCH_PATH FROM CURRENT
+    LANGUAGE plpgsql AS
+$$
+BEGIN
+    INSERT INTO shard_host_weight (replication_group_id, availability_zone, host_id, version, weight)
+    SELECT
+        replication_group_id, availability_zone, host_id, NEW.target_version, weight
+    FROM
+        shard_host_weight
+    WHERE
+        (replication_group_id, version) = (NEW.replication_group_id, NEW.source_version)
+    ON CONFLICT DO NOTHING;
+    INSERT INTO sharded_table (replication_group_id, sharded_table_schema, sharded_table_name, version, replication_factor)
+    SELECT replication_group_id, sharded_table_schema, sharded_table_name, NEW.target_version, replication_factor
+    FROM
+        sharded_table
+    WHERE
+        (replication_group_id, version) = (NEW.replication_group_id, NEW.source_version)
+    ON CONFLICT DO NOTHING;
+    INSERT INTO shard_index_template (replication_group_id, version, index_template_schema, index_template_table_name, index_template_name, index_template)
+    SELECT replication_group_id, NEW.target_version, index_template_schema, index_template_table_name, index_template_name, index_template
+    FROM
+        shard_index_template
+    WHERE
+        (replication_group_id, version) = (NEW.replication_group_id, NEW.source_version)
+    ON CONFLICT DO NOTHING;
+
+    RETURN NEW;
+END
+$$;
+COMMENT ON FUNCTION after_clone_insert_trigger() IS
+'Copies configuration from one version to another. Ignores already existing items.';
+
+CREATE TRIGGER before_insert BEFORE INSERT ON replication_group_config_clone
+    FOR EACH ROW EXECUTE FUNCTION before_clone_insert_trigger();
+CREATE TRIGGER after_insert AFTER INSERT ON replication_group_config_clone
+    FOR EACH ROW EXECUTE FUNCTION after_clone_insert_trigger();

@@ -75,53 +75,6 @@ COMMENT ON FUNCTION next_pending_version(group_id text) IS
 'Inserts next pending version into replication_group_config and returns it.';
 
 
-CREATE OR REPLACE FUNCTION clone_config(group_id text, _target_version config_version) RETURNS void
-    SET SEARCH_PATH FROM CURRENT
-    LANGUAGE sql AS
-$$
-    -- Do not do anything if a clone already exists
-    WITH clone AS (
-        INSERT INTO "@extschema@".replication_group_config_clone (replication_group_id, source_version, target_version)
-            VALUES (group_id, prev_version(_target_version), _target_version)
-            ON CONFLICT DO NOTHING
-            RETURNING *
-    ),
-    -- clone weights
-    _ AS (
-        INSERT INTO shard_host_weight (replication_group_id, availability_zone, host_id, version, weight)
-            SELECT
-                replication_group_id, availability_zone, host_id, target_version, weight
-            FROM
-                shard_host_weight
-                JOIN clone USING (replication_group_id)
-            WHERE
-                version = source_version
-        ON CONFLICT DO NOTHING
-    ),
-    -- clone shards if necessary
-    __ AS (
-        INSERT INTO sharded_table (replication_group_id, sharded_table_schema, sharded_table_name, version, replication_factor)
-            SELECT replication_group_id, sharded_table_schema, sharded_table_name, target_version, replication_factor
-            FROM
-                sharded_table
-                    JOIN clone USING (replication_group_id)
-            WHERE
-                version = source_version
-        ON CONFLICT DO NOTHING
-    )
-    -- clone index templates if necessary
-    INSERT INTO shard_index_template (replication_group_id, version, index_template_schema, index_template_table_name, index_template_name, index_template)
-        SELECT replication_group_id, target_version, index_template_schema, index_template_table_name, index_template_name, index_template
-        FROM
-            shard_index_template
-                JOIN clone c USING (replication_group_id)
-        WHERE
-            version = source_version
-    ON CONFLICT DO NOTHING
-$$;
-COMMENT ON FUNCTION clone_config(group_id text, target_version config_version) IS
-'Copies configuration from one version to another. Ignores already existing items.';
-
 CREATE OR REPLACE FUNCTION stable_hash(VARIADIC text[]) RETURNS int IMMUTABLE LANGUAGE sql AS
 $$
 SELECT ('x' || substr(md5(array_to_string($1, '', '')), 1, 8))::bit(32)::int
