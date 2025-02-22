@@ -32,6 +32,9 @@ slot_schema AS (
 template_schema AS (
     SELECT DISTINCT template_schema_name FROM shard_assignment
 ),
+view_schema AS (
+    SELECT DISTINCT view_schema_name FROM shard_assignment
+),
 shard_structure AS MATERIALIZED (
     SELECT * FROM fdw_shard_structure
 ),
@@ -155,7 +158,9 @@ scripts (async, transactional, description, commands) AS (
             SELECT slot_schema_name FROM slot_schema
             UNION ALL
             SELECT template_schema_name FROM template_schema
-        ) s
+            UNION ALL
+            SELECT view_schema_name FROM view_schema
+        ) s(schema_name)
     WHERE NOT EXISTS (SELECT 1 FROM
         pg_namespace
         WHERE nspname = schema_name
@@ -198,6 +203,9 @@ scripts (async, transactional, description, commands) AS (
         )
         AND NOT EXISTS (
             SELECT 1 FROM template_schema WHERE n.nspname = template_schema_name
+        )
+        AND NOT EXISTS (
+            SELECT 1 FROM view_schema WHERE n.nspname = view_schema_name
         )
         AND NOT EXISTS (
             SELECT 1 FROM shard_assignment WHERE n.nspname IN (shard_server_schema_name, retained_shard_server_schema)
@@ -244,38 +252,25 @@ scripts (async, transactional, description, commands) AS (
     GROUP BY 1, 2 -- make sure we produce empty set when no results
 
     UNION ALL
-    -- Grant USAGE on local shards schemas
+    -- Grant USAGE on local shards view schemas
     SELECT
         FALSE,
         TRUE,
-        format('Found local shard schemas [%s] without proper access rights for other replicas', string_agg(schema_name, ', ')),
+        format('Found view shard schemas [%s] without proper access rights for other replicas', string_agg(view_schema_name, ', ')),
         ARRAY[
-            format('GRANT USAGE ON SCHEMA %s TO %I', string_agg(quote_ident(schema_name), ', '), "@extschema@".pgwrh_replica_role_name())
+            format('GRANT USAGE ON SCHEMA %s TO %I', string_agg(quote_ident(view_schema_name), ', '), pgwrh_replica_role_name())
         ]
     FROM
-        pg_roles
-            JOIN (SELECT DISTINCT (rel_id).schema_name FROM local_shard) s ON
-                    rolname = "@extschema@".pgwrh_replica_role_name()
-                AND NOT has_schema_privilege(rolname, schema_name, 'USAGE')
+        view_schema s
+            JOIN pg_namespace n ON n.nspname = s.view_schema_name
+            JOIN pg_roles ON
+                    rolname = pgwrh_replica_role_name()
+                AND NOT has_schema_privilege(rolname, n.oid, 'USAGE')
+
     GROUP BY 1, 2
 
     UNION ALL
-    -- Grant SELECT on local shards
-    SELECT
-        FALSE,
-        TRUE,
-        format('Found local shard [%s] without proper access rights for other replicas', string_agg(reg_class::text, ', ')),
-        ARRAY[
-            format('GRANT SELECT ON %s TO %I', string_agg(reg_class::text, ', '), "@extschema@".pgwrh_replica_role_name())
-        ]
-    FROM
-        local_shard JOIN pg_roles ON
-                rolname = "@extschema@".pgwrh_replica_role_name()
-            AND NOT has_table_privilege(rolname, reg_class, 'SELECT')
-    GROUP BY rolname
-
-    UNION ALL
-    -- Create single table infrastructure: slot and template tables
+    -- Create single table infrastructure: slot, template tables and views
     SELECT
         FALSE,
         TRUE,
@@ -308,10 +303,21 @@ scripts (async, transactional, description, commands) AS (
         )
         ||
         array_agg(add_ext_dependency(template_rel_id))
+        ||
+        array_agg(
+            format('CREATE VIEW %s AS SELECT * FROM %s', fqn(view_rel_id), (lr).reg_class)
+        )
+        ||
+        array_agg(
+            format('GRANT SELECT ON %s TO %I', fqn(view_rel_id), pgwrh_replica_role_name())
+        )
+        ||
+        array_agg(add_ext_dependency(view_rel_id))
     FROM
         shard_assignment sc
             JOIN pg_namespace sns ON sns.nspname = slot_schema_name
             JOIN pg_namespace tns ON tns.nspname = template_schema_name
+            JOIN pg_namespace vns ON vns.nspname = view_schema_name
     WHERE
             parent IS NOT NULL
         AND (parent).pn.oid <> sns.oid
@@ -556,7 +562,7 @@ scripts (async, transactional, description, commands) AS (
                 template.reg_class,
                 slot.bound,
                 shard_server_name,
-                (sa).rel_id.schema_name
+                (sa).view_schema_name
             )
         )
         ||
