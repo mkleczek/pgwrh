@@ -16,15 +16,6 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-CREATE OR REPLACE FUNCTION sub_num_modulus_exponent() RETURNS int LANGUAGE sql AS
-$$
-    SELECT 0
-$$; -- FIXME GUC
-CREATE OR REPLACE FUNCTION sub_num() RETURNS int LANGUAGE sql AS
-$$
-    SELECT (2 ^ "@extschema@".sub_num_modulus_exponent())
-$$;
-
 -- options parsing
 CREATE OR REPLACE FUNCTION opts(arr text[]) RETURNS TABLE(key text, value text, vals text[]) LANGUAGE sql AS
 $$
@@ -148,9 +139,7 @@ SELECT
     shard_template_schema AS template_schema_name,
     sa.local,
     CASE WHEN local THEN rel_id ELSE remote_rel_id END AS shard_rel_id,
-    format('pgwrh_shard_subscription_%s_%s', sub_num(), (stable_hash(sa.schema_name, sa.table_name) % sub_num() + sub_num()) % sub_num()) AS subname,
-    sub_num() AS sub_modulus,
-    (stable_hash(sa.schema_name, sa.table_name) % sub_num() + sub_num()) % sub_num() AS sub_remainder,
+    'pgwrh_replica_subscription' AS subname,
     sa.pubname,
     sa.shard_server_user,
     sa.dbname,

@@ -2,8 +2,8 @@
 -- requires: core
 -- requires: master-helpers
 
-CREATE PUBLICATION pgwrh_controller_publication;
-SELECT add_ext_dependency('pg_publication', (SELECT oid FROM pg_publication WHERE pubname = 'pgwrh_controller_publication'));
+CREATE PUBLICATION pgwrh_controller_ping FOR TABLE ping WITH (PUBLISH = 'insert');
+SELECT add_ext_dependency('pg_publication', (SELECT oid FROM pg_publication WHERE pubname = 'pgwrh_controller_ping'));
 
 CREATE OR REPLACE FUNCTION sync_publications() RETURNS void
 SET SEARCH_PATH FROM CURRENT
@@ -50,7 +50,7 @@ BEGIN
         WHERE
                 is_dependent_object('pg_publication', oid)
             AND
-                pubname <> 'pgwrh_controller_publication'
+                pubname NOT IN ('pgwrh_controller_ping')
             AND
                 NOT EXISTS (SELECT 1 FROM
                     shard s

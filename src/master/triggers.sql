@@ -87,6 +87,17 @@ CREATE TRIGGER check_replication_group_rollout_done
     WHEN ( NEW.current_version <> OLD.current_version )
 EXECUTE FUNCTION check_replication_group_rollout_done();
 
+CREATE FUNCTION ping_on_version_change_trigger() RETURNS trigger LANGUAGE plpgsql AS
+$$
+BEGIN
+    INSERT INTO "@extschema@".ping VALUES (now()) ON CONFLICT DO NOTHING;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER ping_on_version_change AFTER UPDATE ON replication_group
+    FOR EACH ROW
+    WHEN ( NEW.current_version <> OLD.current_version OR NEW.target_version <> OLD.target_version )
+    EXECUTE FUNCTION ping_on_version_change_trigger();
 
 CREATE OR REPLACE FUNCTION next_pending_version_trigger() RETURNS TRIGGER
 LANGUAGE plpgsql AS
@@ -240,3 +251,11 @@ CREATE TRIGGER before_insert BEFORE INSERT ON replication_group_config_clone
     FOR EACH ROW EXECUTE FUNCTION before_clone_insert_trigger();
 CREATE TRIGGER after_insert AFTER INSERT ON replication_group_config_clone
     FOR EACH ROW EXECUTE FUNCTION after_clone_insert_trigger();
+
+CREATE FUNCTION make_sure_daemon_started_on_ping_trigger() RETURNS TRIGGER LANGUAGE plpgsql AS
+$$
+BEGIN
+    PERFORM "@extschema@".start_sync_daemon(tg_argv[0]::real);
+    RETURN NEW;
+END
+$$;

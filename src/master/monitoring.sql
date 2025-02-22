@@ -14,7 +14,7 @@ SELECT
     availability_zone,
     host_id,
     pg_size_pretty(pg_current_wal_lsn() - confirmed_flush_lsn) AS lag,
-    coalesce(num_sessions, 0)
+    coalesce(num_sessions, 0) AS num_sessions
 FROM
     replication_group_member m
         LEFT JOIN pg_replication_slots ON

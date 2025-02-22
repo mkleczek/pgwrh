@@ -20,6 +20,28 @@
 
 GRANT USAGE ON SCHEMA "@extschema@" TO PUBLIC;
 
+CREATE FUNCTION pgwrh_replica_role_name() RETURNS text IMMUTABLE LANGUAGE sql AS
+$$
+    SELECT format('pgwrh_replica_%s', current_database());
+$$;
+CREATE FUNCTION exec_dynamic(cmd text) RETURNS void LANGUAGE plpgsql AS
+$$
+BEGIN
+    EXECUTE cmd;
+END;
+$$;
+
+DO
+$$
+DECLARE
+    r record;
+BEGIN
+    FOR r IN SELECT format('CREATE ROLE %I', pgwrh_replica_role_name()) AS stmt WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = pgwrh_replica_role_name()) LOOP
+        EXECUTE r.stmt;
+    END LOOP;
+END
+$$;
+
 CREATE OR REPLACE FUNCTION add_ext_dependency(_classid regclass, _objid oid) RETURNS void LANGUAGE sql AS
 $$
     INSERT INTO pg_depend (classid, objid, refclassid, refobjid, deptype, objsubid, refobjsubid)

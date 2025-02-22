@@ -78,20 +78,6 @@ owned_namespace AS (
 owned_subscription AS (
     SELECT * FROM pg_subscription s JOIN shard_subscription USING (subname)
 ),
--- subscribed_publication AS (
---     SELECT
---         subname, pub.name AS subpubname
---     FROM
---         owned_subscription, unnest(subpublications) AS pub(name)
--- ),
--- unsuscribed_local_shard AS (
---     SELECT
---         *
---     FROM
---         local_shard
---     WHERE
---         NOT EXISTS (SELECT 1 FROM subscribed_publication WHERE subpubname = pubname)
--- ),
 shard_index AS (
     SELECT
         reg_class,
@@ -190,86 +176,6 @@ scripts (async, transactional, description, commands) AS (
     WHERE
         NOT EXISTS (SELECT 1 FROM local_rel WHERE (schema_name, table_name) = (s.schema_name, s.table_name))
     GROUP BY 1, 2 -- make sure we produce empty set when no results
-    UNION ALL
-    -- Subscriptions
-    -- TODO decide if we need to implement multiple subscriptions - having hardcoded single subscription would simplify a bit
-    SELECT
-        FALSE,
-        TRUE,
-        format('Record subscription %I to create', subname),
-        ARRAY[
-            format('INSERT INTO "@extschema@".shard_subscription (subname, modulus, remainder) VALUES (%L, %s, %s) ON CONFLICT DO NOTHING', subname, sub_modulus, sub_remainder)
-        ]
-    FROM
-        (
-            SELECT DISTINCT subname, sub_modulus, sub_remainder
-            FROM local_shard ls
-                WHERE NOT EXISTS (SELECT 1 FROM
-                    shard_subscription
-                    WHERE subname = ls.subname
-                )
-        ) s
-
-    UNION ALL
-    -- Make sure there exists a subscription for all locally stored shards
-    SELECT
-        FALSE,
-        FALSE,
-        format('Creating replication subscription %s', subname),
-        ARRAY[
-            format('TRUNCATE %s',
-                string_agg((sc).reg_class::text, ', ')
-            ),
-            format('CREATE SUBSCRIPTION %I CONNECTION %L PUBLICATION pgwrh_controller_publication,%s WITH (%s)',
-                subname,
-                -- always connecto to the primary
-                format('host=%s port=%s user=%s password=%s dbname=%s target_session_attrs=primary',
-                    s.host, s.port, cred.user, cred.pass, current_database()),
-                -- compute subscription options
-                -- this is verbose as it is sql :-)
-                -- the full set of options depends on Pg version
-                -- we always add slot_name
-                -- and if Pg version >= 17 - failover = 'true'
-                string_agg(quote_ident(sc.pubname), ', '),
-                -- options
-                (
-                    SELECT string_agg(format('%s = %L', key, val), ', ') FROM (
-                        SELECT
-                            'slot_name' AS key,
-                            cred.user || '_' || (random() * 10000000)::bigint::text AS val-- random slot_name
-                        UNION ALL
-                        -- add failover = 'true' option for PostgreSQL >= 17
-                        SELECT
-                            'failover' AS key,
-                            'true' AS val
-                        WHERE
-                            substring(current_setting('server_version') FROM '\d{2}')::int >= 17
-                    ) opts
-                )
-            )
-        ]
-    FROM
-        local_shard sc JOIN shard_subscription USING (subname)
-            JOIN server_host_port s ON srvname = 'replica_controller'
-            JOIN pg_user_mappings um ON um.srvid = s.oid AND (um.umuser = 0) -- PUBLIC
-            CROSS JOIN LATERAL (
-                SELECT
-                    u.value AS "user",
-                    p.value AS pass
-                FROM
-                    opts(um.umoptions) AS u,
-                    opts(um.umoptions) AS p
-                WHERE
-                    u.key = 'user' AND p.key = 'password'
-            ) AS cred
-    WHERE
-        NOT EXISTS (
-            SELECT 1
-            FROM pg_subscription
-            WHERE subname = sc.subname
-        )
-    GROUP BY
-        subname, s.host, s.port, cred.user, cred.pass
 
     UNION ALL
     -- CLEANUP: DROP unnecessary slot and remote (per shard server) schemas
@@ -309,31 +215,17 @@ scripts (async, transactional, description, commands) AS (
     GROUP BY 1, 2
 
     UNION ALL
-    -- Create pgwrh_replica role if not exists
-    -- TODO should this be moved to extension intallation script
-    -- so that it fails if there is conflicting role already present?
-    SELECT
-        FALSE,
-        TRUE,
-        format('Creating %I role', format('pgwrh_replica_%s', current_database())),
-        ARRAY [
-            format('CREATE ROLE %I', format('pgwrh_replica_%s', current_database()))
-        ]
-    WHERE
-        NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = format('pgwrh_replica_%s', current_database()))
-
-    UNION ALL
     -- Make sure user accounts for local shards are created
     SELECT
         FALSE,
         TRUE,
         format('User accounts [%s] to access local shards need to be created.', string_agg(username, ', ')),
-        array_agg(format('CREATE USER %I PASSWORD %L IN ROLE %I', username, password, format('pgwrh_replica_%s', current_database())))
+        array_agg(format('CREATE USER %I PASSWORD %L IN ROLE %I', username, password, "@extschema@".pgwrh_replica_role_name()))
     FROM
         roles
     WHERE
                 NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = username)
-            AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = format('pgwrh_replica_%s', current_database()))
+            AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = "@extschema@".pgwrh_replica_role_name())
     GROUP BY 1, 2 -- make sure we produce empty set when no results
 
     UNION ALL
@@ -346,7 +238,7 @@ scripts (async, transactional, description, commands) AS (
     FROM
         pg_roles u
             JOIN pg_auth_members ON member = u.oid
-            JOIN pg_roles gr ON gr.oid = roleid AND gr.rolname = format('pgwrh_replica_%s', current_database())
+            JOIN pg_roles gr ON gr.oid = roleid AND gr.rolname = "@extschema@".pgwrh_replica_role_name()
     WHERE
             NOT EXISTS (SELECT 1 FROM roles WHERE u.rolname = username)
     GROUP BY 1, 2 -- make sure we produce empty set when no results
@@ -358,12 +250,12 @@ scripts (async, transactional, description, commands) AS (
         TRUE,
         format('Found local shard schemas [%s] without proper access rights for other replicas', string_agg(schema_name, ', ')),
         ARRAY[
-            format('GRANT USAGE ON SCHEMA %s TO %I', string_agg(quote_ident(schema_name), ', '), format('pgwrh_replica_%s', current_database()))
+            format('GRANT USAGE ON SCHEMA %s TO %I', string_agg(quote_ident(schema_name), ', '), "@extschema@".pgwrh_replica_role_name())
         ]
     FROM
         pg_roles
             JOIN (SELECT DISTINCT (rel_id).schema_name FROM local_shard) s ON
-                    rolname = format('pgwrh_replica_%s', current_database())
+                    rolname = "@extschema@".pgwrh_replica_role_name()
                 AND NOT has_schema_privilege(rolname, schema_name, 'USAGE')
     GROUP BY 1, 2
 
@@ -374,11 +266,11 @@ scripts (async, transactional, description, commands) AS (
         TRUE,
         format('Found local shard [%s] without proper access rights for other replicas', string_agg(reg_class::text, ', ')),
         ARRAY[
-            format('GRANT SELECT ON %s TO %I', string_agg(reg_class::text, ', '), format('pgwrh_replica_%s', current_database()))
+            format('GRANT SELECT ON %s TO %I', string_agg(reg_class::text, ', '), "@extschema@".pgwrh_replica_role_name())
         ]
     FROM
         local_shard JOIN pg_roles ON
-                rolname = format('pgwrh_replica_%s', current_database())
+                rolname = "@extschema@".pgwrh_replica_role_name()
             AND NOT has_table_privilege(rolname, reg_class, 'SELECT')
     GROUP BY rolname
 
@@ -496,7 +388,7 @@ scripts (async, transactional, description, commands) AS (
             format('TRUNCATE %s',
                 string_agg((sc).reg_class::text, ', ')
             ),
-            format('ALTER SUBSCRIPTION %I ADD PUBLICATION %s',
+            format('ALTER SUBSCRIPTION %I ADD PUBLICATION %s WITH (copy_data = true)',
                 s.subname,
                 string_agg(quote_ident(sc.pubname), ', ')
             )
@@ -594,7 +486,7 @@ scripts (async, transactional, description, commands) AS (
         NOT EXISTS (
             SELECT 1 FROM local_shard WHERE pubname = pub.name
         )
-        AND pub.name NOT IN ('pgwrh_controller_publication') -- FIXME
+        AND pub.name NOT IN ('pgwrh_controller_ping')
     GROUP BY
         s.oid, s.subname
 

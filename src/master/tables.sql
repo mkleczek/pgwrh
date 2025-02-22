@@ -253,3 +253,10 @@ CREATE TABLE shard_assigned_index (
         REFERENCES shard(replication_group_id, version, schema_name, table_name)
         ON DELETE CASCADE
 );
+
+--------------------
+--------------------
+CREATE TABLE ping (
+    last_time timestamptz NOT NULL PRIMARY KEY DEFAULT clock_timestamp()
+);
+SELECT exec_dynamic(format('GRANT SELECT ON ping TO %I', pgwrh_replica_role_name()));

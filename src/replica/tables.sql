@@ -17,9 +17,7 @@
 -- along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 CREATE TABLE IF NOT EXISTS shard_subscription (
-    subname text NOT NULL PRIMARY KEY,
-    modulus int NOT NULL CHECK (modulus > 0),
-    remainder int NOT NULL CHECK (remainder >= 0 AND remainder < modulus)
+    subname text NOT NULL PRIMARY KEY
 );
 
 CREATE TABLE IF NOT EXISTS analyzed_remote_pg_class (
