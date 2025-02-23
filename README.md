@@ -58,7 +58,7 @@ the right replicas, _pgwrh_ reuses built-in PostgreSQL features: partitioning an
 PostgreSQL query planner and executor - while still somewhat limited - have capabilities to distribute computing among
 multiple machines by:
 * _pushing down_ filtering and aggregates (see https://www.postgresql.org/docs/current/runtime-config-query.html#GUC-ENABLE-PARTITIONWISE-AGGREGATE)
-* skip execution of unnecessary query plan nodes (see https://www.postgresql.org/docs/current/runtime-config-query.html#GUC-ENABLE-PARTITIONWISE-AGGREGATE)
+* skip execution of unnecessary query plan nodes (see https://www.postgresql.org/docs/current/runtime-config-query.html#GUC-ENABLE-PARTITION-PRUNING)
 
 # Installation
 
