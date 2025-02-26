@@ -28,10 +28,9 @@ GRANT EXECUTE ON FUNCTION passgen(replication_group_id text, version config_vers
 
 CREATE OR REPLACE FUNCTION next_version(version config_version) RETURNS config_version
     IMMUTABLE
-    SET SEARCH_PATH FROM CURRENT
     LANGUAGE sql AS
 $$
-SELECT CASE version WHEN 'FLIP' THEN 'FLOP' ELSE 'FLIP' END::config_version
+SELECT CASE version WHEN 'FLIP' THEN 'FLOP' ELSE 'FLIP' END::"@extschema@".config_version
 $$;
 
 
@@ -46,8 +45,8 @@ CREATE OR REPLACE FUNCTION is_locked(group_id text, version config_version) RETU
     LANGUAGE sql STABLE AS
 $$
 SELECT EXISTS (SELECT 1 FROM
-    "@extschema@".replication_group_config_lock
-               WHERE replication_group_id = $1 AND version = $2
+    "@extschema@".replication_group_config_lock l
+               WHERE replication_group_id = $1 AND l.version = $2
 )
 $$;
 
