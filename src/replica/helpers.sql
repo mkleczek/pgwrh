@@ -161,7 +161,7 @@ FROM
         format('%s_%s', sa.schema_name, shard_server_name) AS shard_server_schema,
         format('%s_%s', sa.schema_name, retained_shard_server_name) AS retained_shard_server_schema,
         format('%s_template', sa.schema_name) AS shard_template_schema,
-        format('%s_view', sa.schema_name) AS view_schema
+        format('%s_shield', sa.schema_name) AS view_schema
         CROSS JOIN LATERAL (
             SELECT
                 (shard_server_schema, (rel_id).table_name)::rel_id AS remote_rel_id,
