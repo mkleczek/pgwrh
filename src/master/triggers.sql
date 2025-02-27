@@ -259,3 +259,5 @@ BEGIN
     RETURN NEW;
 END
 $$;
+COMMENT ON FUNCTION make_sure_daemon_started_on_ping_trigger() IS
+'Starts sync daemon if it is not running.';
