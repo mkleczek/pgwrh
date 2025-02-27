@@ -24,8 +24,7 @@ COMMENT ON TYPE config_version IS
 CREATE TABLE  replication_group (
     replication_group_id text NOT NULL PRIMARY KEY,
     current_version config_version NOT NULL DEFAULT 'FLIP',
-    target_version config_version NOT NULL DEFAULT 'FLIP',
-    seq_number int NOT NULL DEFAULT 0
+    target_version config_version NOT NULL DEFAULT 'FLIP'
 );
 COMMENT ON TABLE replication_group IS
 'Represents a specific cluster (replica group) configuration.
