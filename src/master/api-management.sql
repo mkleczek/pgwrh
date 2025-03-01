@@ -24,24 +24,23 @@ CREATE FUNCTION start_rollout(
     LANGUAGE sql
     AS
 $$
-    WITH lock AS (
-        INSERT INTO replication_group_config_lock (replication_group_id, version)
-        SELECT
-            replication_group_id, version
-        FROM
-            replication_group_config
-               JOIN replication_group USING (replication_group_id)
-        WHERE
-                replication_group_id = $1
-            AND current_version = target_version AND version <> current_version
-        ON CONFLICT DO NOTHING
-        RETURNING *
-    )
+    INSERT INTO replication_group_config_lock (replication_group_id, version)
+    SELECT
+        replication_group_id, version
+    FROM
+        replication_group_config
+           JOIN replication_group USING (replication_group_id)
+    WHERE
+            replication_group_id = $1
+        AND current_version = target_version AND version <> current_version
+    ON CONFLICT DO NOTHING;
     UPDATE replication_group g
         SET target_version = l.version
-        FROM lock l
+        FROM replication_group_config_lock l
         WHERE
-            g.replication_group_id = l.replication_group_id;
+                g.replication_group_id = l.replication_group_id
+            AND l.version = next_version(current_version)
+            AND g.replication_group_id = $1;
 $$;
 COMMENT ON FUNCTION start_rollout(_replication_group_id text) IS
 $$
