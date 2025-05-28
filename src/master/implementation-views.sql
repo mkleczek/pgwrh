@@ -11,7 +11,7 @@ CREATE VIEW shard_index_definition AS
             || '_'
             || index_template_name
             || '_'
-            || md5(index_template_schema || index_template_table_name || index_template) AS index_name,
+            || substr(md5(index_template_schema || index_template_table_name || index_template), 1, 5) AS index_name,
         index_template
     FROM
         shard_assigned_index
