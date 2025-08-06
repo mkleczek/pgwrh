@@ -18,7 +18,7 @@ EXTENSION = pgwrh
 EXTVERSION = $(shell grep default_version $(EXTENSION).control | \
                sed -e "s/default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/")
 BUILD = .build
-DATA = $(BUILD)/pgwrh/$(EXTENSION)--$(EXTVERSION).sql
+DATA = $(wildcard $(BUILD)/pgwrh/*.sql)
 EXTRA_CLEAN = $(BUILD)
 
 MASTER = $(shell tsort src/master/deps.txt | sed -e 's/^/src\/master\//' -e 's/$$/\.sql/'  | xargs echo)
@@ -39,7 +39,7 @@ clean:
 
 install: all
 	install -c -m 644 ./pgwrh.control $(EXTDIR)
-	install -c -m 644 $(BUILD)/pgwrh/$(EXTENSION)--$(EXTVERSION).sql $(EXTDIR)
+	install -c -m 644 $(wildcard $(BUILD)/pgwrh/*.sql) $(EXTDIR)
 
 else # NO_PGXS
 # Standard pgxs makefile
@@ -51,7 +51,10 @@ endif # NO_PGXS
 $(BUILD)/pgwrh/$(EXTENSION)--$(EXTVERSION).sql: src/common.sql $(MASTER) $(REPLICA)
 	cat $^ > $@
 
-all: prepare $(EXTENSION).control $(BUILD)/pgwrh/$(EXTENSION)--$(EXTVERSION).sql
+updates: $(wildcard src/updates/*.sql)
+	cp $^ $(BUILD)/pgwrh
+
+all: prepare $(EXTENSION).control $(BUILD)/pgwrh/$(EXTENSION)--$(EXTVERSION).sql updates
 prepare:
 	mkdir -p ${BUILD}/pgwrh
 
