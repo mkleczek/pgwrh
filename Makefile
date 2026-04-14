@@ -18,6 +18,8 @@ EXTENSION = pgwrh
 EXTVERSION = $(shell grep default_version $(EXTENSION).control | \
                sed -e "s/default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/")
 BUILD = .build
+TESTGRES_EXT_ROOT = $(BUILD)/testgres-ext
+TESTGRES_EXT_DIR = $(TESTGRES_EXT_ROOT)/extension
 DATA = $(wildcard $(BUILD)/pgwrh/*.sql)
 EXTRA_CLEAN = $(BUILD)
 
@@ -55,7 +57,13 @@ updates: $(wildcard src/updates/*.sql)
 	cp $^ $(BUILD)/pgwrh
 
 all: prepare $(EXTENSION).control $(BUILD)/pgwrh/$(EXTENSION)--$(EXTVERSION).sql updates
+
+testgres-ext: all
+	mkdir -p $(TESTGRES_EXT_DIR)
+	cp ./pgwrh.control $(TESTGRES_EXT_DIR)
+	cp $(wildcard $(BUILD)/pgwrh/*.sql) $(TESTGRES_EXT_DIR)
+
 prepare:
 	mkdir -p ${BUILD}/pgwrh
 
-PHONY: all prepare
+PHONY: all prepare testgres-ext
