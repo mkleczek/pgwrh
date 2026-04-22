@@ -18,20 +18,143 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-CREATE OR REPLACE FUNCTION launch_in_background(commands text) RETURNS void LANGUAGE plpgsql AS
+CREATE OR REPLACE FUNCTION bg_detach(_handle "@extschema:pg_background@".pg_background_handle) RETURNS void LANGUAGE plpgsql AS
+$$
+BEGIN
+    IF _handle IS NULL OR (_handle).pid IS NULL THEN
+        RETURN;
+    END IF;
+
+    PERFORM "@extschema:pg_background@".pg_background_detach_v2((_handle).pid, (_handle).cookie);
+END
+$$;
+
+CREATE OR REPLACE FUNCTION bg_safe_detach(_handle "@extschema:pg_background@".pg_background_handle) RETURNS void LANGUAGE plpgsql AS
+$$
+BEGIN
+    -- Error paths may race with worker-side cleanup, so detach must be best-effort here.
+    BEGIN
+        PERFORM "@extschema@".bg_detach(_handle);
+    EXCEPTION
+        WHEN OTHERS THEN
+            NULL;
+    END;
+END
+$$;
+
+CREATE OR REPLACE FUNCTION bg_exec_wait(script text) RETURNS void LANGUAGE plpgsql AS
 $$
 DECLARE
-    pid int;
+    _handle "@extschema:pg_background@".pg_background_handle;
 BEGIN
-    pid := (select "@extschema:pg_background@".pg_background_launch(commands));
-    PERFORM pg_sleep(0.1);
-    PERFORM "@extschema:pg_background@".pg_background_detach(pid);
+    -- Use wait_v2 for commands where we only care about completion, not returned rows.
+    SELECT
+        *
+    INTO
+        _handle
+    FROM
+        "@extschema:pg_background@".pg_background_launch_v2(script);
+
+    PERFORM "@extschema:pg_background@".pg_background_wait_v2((_handle).pid, (_handle).cookie);
+    PERFORM "@extschema@".bg_detach(_handle);
+EXCEPTION
+    WHEN OTHERS THEN
+        PERFORM "@extschema@".bg_safe_detach(_handle);
+        RAISE;
+END
+$$;
+
+CREATE OR REPLACE FUNCTION bg_query_bool(script text) RETURNS boolean LANGUAGE plpgsql AS
+$$
+DECLARE
+    _handle "@extschema:pg_background@".pg_background_handle;
+    _result boolean;
+BEGIN
+    -- sync_replica_worker uses this for the "should I run another pass?" handshake with sync_step.
+    SELECT
+        *
+    INTO
+        _handle
+    FROM
+        "@extschema:pg_background@".pg_background_launch_v2(script);
+
+    SELECT
+        r.result
+    INTO
+        _result
+    FROM
+        "@extschema:pg_background@".pg_background_result_v2((_handle).pid, (_handle).cookie) AS r(result boolean);
+
+    -- result_v2 consumes and detaches the worker handle.
+    _handle := NULL;
+    RETURN _result;
+EXCEPTION
+    WHEN OTHERS THEN
+        PERFORM "@extschema@".bg_safe_detach(_handle);
+        RAISE;
+END
+$$;
+
+CREATE OR REPLACE FUNCTION bg_sync_commands()
+    RETURNS TABLE (async boolean, transactional boolean, description text, commands text[])
+    LANGUAGE plpgsql AS
+$$
+DECLARE
+    _handle "@extschema:pg_background@".pg_background_handle;
+BEGIN
+    -- Read the sync plan in a separate transaction so sync_step does not keep any locks
+    -- from querying sync while it is busy executing the returned commands.
+    SELECT
+        *
+    INTO
+        _handle
+    FROM
+        "@extschema:pg_background@".pg_background_launch_v2('select async, transactional, description, commands from "@extschema@".sync');
+
+    RETURN QUERY
+        SELECT
+            r.async,
+            r.transactional,
+            r.description,
+            r.commands
+        FROM
+            "@extschema:pg_background@".pg_background_result_v2((_handle).pid, (_handle).cookie)
+                AS r(async boolean, transactional boolean, description text, commands text[]);
+
+    -- result_v2 consumes and detaches the worker handle.
+    _handle := NULL;
+EXCEPTION
+    WHEN OTHERS THEN
+        PERFORM "@extschema@".bg_safe_detach(_handle);
+        RAISE;
+END
+$$;
+
+CREATE OR REPLACE FUNCTION bg_submit_detached(commands text) RETURNS void LANGUAGE plpgsql AS
+$$
+DECLARE
+    _handle "@extschema:pg_background@".pg_background_handle;
+BEGIN
+    -- submit_v2 is the fire-and-forget path: once the worker is launched we immediately
+    -- detach and let it continue independently of the caller.
+    SELECT
+        *
+    INTO
+        _handle
+    FROM
+        "@extschema:pg_background@".pg_background_submit_v2(commands);
+
+    PERFORM "@extschema@".bg_detach(_handle);
+EXCEPTION
+    WHEN OTHERS THEN
+        PERFORM "@extschema@".bg_safe_detach(_handle);
+        RAISE;
 END
 $$;
 
 CREATE OR REPLACE FUNCTION launch_sync() RETURNS void LANGUAGE sql AS
 $$
-SELECT "@extschema@".launch_in_background('CAll "@extschema@".sync_replica_worker();')
+SELECT "@extschema@".bg_submit_detached('CAll "@extschema@".sync_replica_worker();')
 $$;
 
 CREATE OR REPLACE PROCEDURE sync_daemon(seconds real, _application_name text DEFAULT 'pgwrh_sync_daemon') LANGUAGE plpgsql AS
@@ -59,7 +182,7 @@ $$;
 
 CREATE OR REPLACE FUNCTION start_sync_daemon(seconds real, application_name text DEFAULT 'pgwrh_sync_daemon') RETURNS void LANGUAGE sql AS
 $$
-SELECT "@extschema@".launch_in_background(format('
+SELECT "@extschema@".bg_submit_detached(format('
         CALL "@extschema@".sync_daemon(%s, %L);
     ', seconds, application_name))
 $$;
@@ -69,7 +192,7 @@ $$
 DECLARE
     err text;
 BEGIN
-    PERFORM * FROM "@extschema:pg_background@".pg_background_result("@extschema:pg_background@".pg_background_launch(script)) AS discarded(result text);
+    PERFORM "@extschema@".bg_exec_wait(script);
     RETURN TRUE;
 EXCEPTION
     WHEN OTHERS THEN
@@ -86,7 +209,7 @@ DECLARE
     err text;
 BEGIN
     FOREACH cmd IN ARRAY scripts LOOP
-        PERFORM * FROM "@extschema:pg_background@".pg_background_result("@extschema:pg_background@".pg_background_launch(cmd)) AS discarded(result text);
+        PERFORM "@extschema@".bg_exec_wait(cmd);
     END LOOP;
     RETURN TRUE;
 EXCEPTION
@@ -105,21 +228,27 @@ DECLARE
     err text;
 BEGIN
     IF pg_try_advisory_xact_lock(2895359559) THEN
-        -- Select commands to execute in a separate transaction so that we don't keep any locks here
-        FOR r IN SELECT * FROM "@extschema:pg_background@".pg_background_result("@extschema:pg_background@".pg_background_launch('select async, transactional, description, commands from "@extschema@".sync')) AS (async boolean, transactional boolean, description text, commands text[]) LOOP
+        -- bg_sync_commands snapshots the sync plan in a separate transaction before we
+        -- start executing it here.
+        FOR r IN
+            SELECT
+                *
+            FROM
+                "@extschema@".bg_sync_commands()
+        LOOP
             RAISE NOTICE '%', r.description;
             IF r.transactional THEN
                 IF r.async THEN
-                    PERFORM "@extschema@".launch_in_background(array_to_string(r.commands, ';'));
+                    PERFORM "@extschema@".bg_submit_detached(array_to_string(r.commands, ';'));
                 ELSE
-                    PERFORM "@extschema@".exec_script(array_to_string(r.commands || 'SELECT '''''::text, ';'));
+                    PERFORM "@extschema@".exec_script(array_to_string(r.commands, ';'));
                 END IF;
             ELSE
                 IF r.async THEN
                     IF array_length(r.commands, 1) > 1 THEN
-                        PERFORM "@extschema@".launch_in_background(format('SELECT "@extschema@".exec_non_tx_scripts(ARRAY[%s])', (SELECT string_agg(format('%L', c), ',') FROM unnest(r.commands) AS c)));
+                        PERFORM "@extschema@".bg_submit_detached(format('SELECT "@extschema@".exec_non_tx_scripts(ARRAY[%s])', (SELECT string_agg(format('%L', c), ',') FROM unnest(r.commands) AS c)));
                     ELSE
-                        PERFORM "@extschema@".launch_in_background(r.commands[1]);
+                        PERFORM "@extschema@".bg_submit_detached(r.commands[1]);
                     END IF;
                 ELSE
                     FOREACH cmd IN ARRAY r.commands LOOP
@@ -144,10 +273,10 @@ $$;
 CREATE OR REPLACE PROCEDURE sync_replica_worker() LANGUAGE plpgsql AS
 $$
 BEGIN
-    WHILE r FROM "@extschema:pg_background@".pg_background_result("@extschema:pg_background@".pg_background_launch('SELECT "@extschema@".sync_step()')) AS r(r boolean) LOOP
+    WHILE "@extschema@".bg_query_bool('SELECT "@extschema@".sync_step()') LOOP
     END LOOP;
-    PERFORM * FROM "@extschema:pg_background@".pg_background_result("@extschema:pg_background@".pg_background_launch('SELECT ''ignored'' FROM "@extschema@".report_state()')) AS r(ignored text);
-    PERFORM * FROM "@extschema:pg_background@".pg_background_result("@extschema:pg_background@".pg_background_launch('SELECT ''ignored'' FROM "@extschema@".cleanup_analyzed_pg_class()')) AS r(ignored text);
+    PERFORM "@extschema@".bg_exec_wait('SELECT "@extschema@".report_state()');
+    PERFORM "@extschema@".bg_exec_wait('SELECT "@extschema@".cleanup_analyzed_pg_class()');
 END
 $$;
 

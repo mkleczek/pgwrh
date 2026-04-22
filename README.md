@@ -67,7 +67,7 @@ multiple machines by:
 | Name | Version |
 | :---- | :---: |
 | PostgreSQL | 16+ |
-| pg_background | 1.2+ |
+| pg_background | 1.6+ |
 
 ## Extension installation
 

@@ -42,6 +42,35 @@ BEGIN
 END
 $$;
 
+DO
+$$
+DECLARE
+    bg_schema text := '@extschema:pg_background@';
+    replica_role text := pgwrh_replica_role_name();
+BEGIN
+    IF
+            pg_catalog.to_regprocedure(format('%I.pg_background_launch_v2(pg_catalog.text, pg_catalog.int4)', bg_schema)) IS NULL
+        OR
+            pg_catalog.to_regprocedure(format('%I.pg_background_submit_v2(pg_catalog.text, pg_catalog.int4)', bg_schema)) IS NULL
+        OR
+            pg_catalog.to_regprocedure(format('%I.pg_background_result_v2(pg_catalog.int4, pg_catalog.int8)', bg_schema)) IS NULL
+        OR
+            pg_catalog.to_regprocedure(format('%I.pg_background_wait_v2(pg_catalog.int4, pg_catalog.int8)', bg_schema)) IS NULL
+        OR
+            pg_catalog.to_regprocedure(format('%I.pg_background_detach_v2(pg_catalog.int4, pg_catalog.int8)', bg_schema)) IS NULL
+    THEN
+        RAISE EXCEPTION 'pgwrh requires pg_background 1.6+ with v2 API support';
+    END IF;
+
+    EXECUTE format('GRANT USAGE ON TYPE %I.pg_background_handle TO %I', bg_schema, replica_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION %I.pg_background_launch_v2(pg_catalog.text, pg_catalog.int4) TO %I', bg_schema, replica_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION %I.pg_background_submit_v2(pg_catalog.text, pg_catalog.int4) TO %I', bg_schema, replica_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION %I.pg_background_result_v2(pg_catalog.int4, pg_catalog.int8) TO %I', bg_schema, replica_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION %I.pg_background_wait_v2(pg_catalog.int4, pg_catalog.int8) TO %I', bg_schema, replica_role);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION %I.pg_background_detach_v2(pg_catalog.int4, pg_catalog.int8) TO %I', bg_schema, replica_role);
+END
+$$;
+
 CREATE OR REPLACE FUNCTION add_ext_dependency(_classid regclass, _objid oid) RETURNS void LANGUAGE sql AS
 $$
     INSERT INTO pg_depend (classid, objid, refclassid, refobjid, deptype, objsubid, refobjsubid)
