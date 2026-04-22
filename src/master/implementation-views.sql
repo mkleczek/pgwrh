@@ -100,28 +100,28 @@ SELECT
     table_name,
     local,
     -- foreign server hosting shard
-    -- use target configuration server only when transitioning and all remote replicas subscribed to the shard (ie. we can run ANALYZE)
-    CASE WHEN current_version <> target_version AND target_subscribed AND target_online AND target_user_created
+    -- if target route is new, wait for target indexes before switching traffic to it
+    CASE WHEN target_route_ready
         THEN target_server_name
         ELSE current_server_name
     END AS shard_server_name,
-    CASE WHEN current_version <> target_version AND target_subscribed AND target_online AND target_user_created
+    CASE WHEN target_route_ready
         THEN target_host
         ELSE coalesce(current_host, '')
     END AS host,
-    CASE WHEN current_version <> target_version AND target_subscribed AND target_online AND target_user_created
+    CASE WHEN target_route_ready
         THEN target_port
         ELSE coalesce(current_port, '')
     END AS port,
     current_database() AS dbname,
-    CASE WHEN current_version <> target_version AND target_subscribed AND target_online AND target_user_created
+    CASE WHEN target_route_ready
         THEN target_credentials.username
         ELSE current_username
     END AS shard_server_user,
     -- If shard is remote in target version, and it is ready, connect it to slot instead of the local one
     -- (but keep the local one if it is still be marked as "local" above)
     CASE WHEN current_version <> target_version
-        THEN target_remote AND target_subscribed AND target_online AND target_user_created
+        THEN target_remote AND target_route_ready
         ELSE NOT local
     END AS connect_remote,
     pubname(schema_name, table_name) AS pubname,
@@ -153,7 +153,8 @@ FROM
                 -- did all target hosts confirmed subscription (so that clients can execute analyze)
                 bool_and(subscribes_local_shard)
                     FILTER (WHERE member_role <> m.member_role AND version = target_version) AS target_subscribed,
-                -- did all target version hosts confirm target version indexes (so that clients can expose them as foreign tables)
+                -- did all target version hosts confirm target version indexes
+                -- (so that fresh target copies can be exposed safely as foreign tables)
                 -- we want to avoid situation when clients issue queries to hosts that don't have required indexes
                 -- as that might disrupt whole cluster due to slow queries, that in turn cause
                 -- a) high resource usage and cache thrashing
@@ -206,6 +207,17 @@ FROM
             GROUP BY
                 1, 2
         ) s
+        CROSS JOIN LATERAL (
+            SELECT
+                current_version <> target_version
+                AND target_subscribed
+                AND target_online
+                AND target_user_created
+                AND (
+                    current_server_name IS NOT DISTINCT FROM target_server_name
+                    OR target_indexed
+                ) AS target_route_ready
+        ) route
         -- calculate current version foreign server host and port based on _online_ assigned hosts and this member availability zone
         LEFT JOIN LATERAL (
             SELECT
