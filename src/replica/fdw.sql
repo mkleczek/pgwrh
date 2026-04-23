@@ -49,7 +49,14 @@ CREATE FOREIGN TABLE IF NOT EXISTS fdw_shard_structure (
     schema_name text,
     table_name text,
     level int,
-    create_table text
+    parent_schema_name text,
+    parent_table_name text,
+    bound text,
+    parent_partkeydef text,
+    node_partkeydef text,
+    is_leaf boolean,
+    root_column_clause text,
+    local_constraint_clause text
 )
 SERVER replica_controller
 OPTIONS (table_name 'shard_structure');
