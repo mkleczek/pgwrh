@@ -20,12 +20,18 @@
 CREATE OR REPLACE VIEW shard_structure AS
 WITH stc AS (
     SELECT
-        st.replication_group_id,
+        g.replication_group_id,
         c.oid::regclass 
     FROM
         pg_class c
             JOIN pg_namespace n ON relnamespace = n.oid
-            JOIN sharded_table st ON (nspname, relname) = (sharded_table_schema, sharded_table_name)
+            JOIN replication_group g ON EXISTS (SELECT 1 FROM
+                sharded_table st
+                WHERE
+                        st.replication_group_id = g.replication_group_id
+                    AND
+                        (nspname, relname) = (st.sharded_table_schema, st.sharded_table_name)
+            )
 ),
 roots AS (
     SELECT *
