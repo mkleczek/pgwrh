@@ -6134,7 +6134,7 @@ import_fetched_statistics(Relation relation,
 }
 
 /*
- * Conenience routine to fetch the value for the row/column of the PGresult
+ * Convenience routine to fetch the value for the row/column of the PGresult
  */
 static char *
 get_opt_value(PGresult *res, int row, int col)
@@ -6147,7 +6147,7 @@ get_opt_value(PGresult *res, int row, int col)
 /*
  * Convenience routine for setting optional text arguments
  */
-void
+static void
 set_text_arg(NullableDatum *arg, const char *s)
 {
 	if (s)
@@ -6165,7 +6165,7 @@ set_text_arg(NullableDatum *arg, const char *s)
 /*
  * Convenience routine for setting optional int32 arguments
  */
-void
+static void
 set_int32_arg(NullableDatum *arg, const char *s)
 {
 	if (s)
@@ -6185,7 +6185,7 @@ set_int32_arg(NullableDatum *arg, const char *s)
 /*
  * Convenience routine for setting optional uint32 arguments
  */
-void
+static void
 set_uint32_arg(NullableDatum *arg, const char *s)
 {
 	if (s)
@@ -6205,7 +6205,7 @@ set_uint32_arg(NullableDatum *arg, const char *s)
 /*
  * Convenience routine for setting optional float arguments
  */
-void
+static void
 set_float_arg(NullableDatum *arg, const char *s)
 {
 	if (s)
@@ -6225,7 +6225,7 @@ set_float_arg(NullableDatum *arg, const char *s)
 /*
  * Convenience routine for setting optional float[] arguments
  */
-void
+static void
 set_floatarr_arg(NullableDatum *arg, const char *s)
 {
 	if (s)
