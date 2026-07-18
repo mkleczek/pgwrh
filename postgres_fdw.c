@@ -6029,7 +6029,7 @@ import_fetched_statistics(Relation relation,
 	NullableDatum args[ATTSTATS_NUM_FIELDS];
 
 	/* Set the 'version' parameter, which is common to both statistics. */
-	args[0].value = UInt32GetDatum(remstats->version);
+	args[0].value = Int32GetDatum(remstats->version);
 	args[0].isnull = false;
 
 	/*
