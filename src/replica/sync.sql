@@ -23,11 +23,14 @@ CREATE OR REPLACE VIEW sync(async, transactional, description, commands) AS
 WITH shard_assignment AS MATERIALIZED (
     SELECT * FROM shard_assignment_r
 ),
+remote_assignment AS MATERIALIZED (
+    SELECT * FROM remote_node_assignment
+),
 local_shard AS (
     SELECT * FROM shard_assignment WHERE local
 ),
 shard_structure AS MATERIALIZED (
-    SELECT * FROM shard_structure_r
+    SELECT DISTINCT * FROM shard_structure_r
 ),
 root_shard_structure AS (
     SELECT * FROM shard_structure WHERE level = 0
@@ -94,10 +97,10 @@ missing_template_shard_structure AS (
         s.table_name,
         s.template_rel_id,
         s.template_schema_name,
-        s.parent_partkeydef,
+        coalesce(s.parent_partkeydef, s.node_partkeydef) AS parent_partkeydef,
         original_rel.reg_class
     FROM
-        nonroot_shard_structure s
+        shard_structure s
             JOIN local_rel original_rel ON original_rel.rel_id = s.rel_id
     WHERE
         NOT EXISTS (SELECT 1 FROM local_rel WHERE rel_id = s.template_rel_id)
@@ -201,7 +204,7 @@ slot_schema AS (
 ),
 template_schema AS (
     SELECT DISTINCT template_schema_name
-    FROM nonroot_shard_structure
+    FROM shard_structure
 ),
 view_schema AS (
     SELECT DISTINCT view_schema_name
@@ -219,13 +222,13 @@ shard_server AS (
         dbname,
         shard_server_user
     FROM
-        shard_assignment
+        remote_assignment
     WHERE
         shard_server_name IS NOT NULL
 ),
 shard_server_schema AS (
     SELECT DISTINCT shard_server_schema_name
-    FROM shard_assignment
+    FROM remote_assignment
     WHERE shard_server_name IS NOT NULL
 ),
 server_host_port AS (
@@ -307,6 +310,48 @@ ready_local_shard AS (
             WHERE
                 reg_class = s.reg_class
         )
+),
+desired_attachment AS MATERIALIZED (
+    SELECT * FROM desired_shard_attachment
+),
+current_attachment AS MATERIALIZED (
+    SELECT * FROM current_shard_attachment
+),
+ready_root AS (
+    SELECT DISTINCT s.root_rel_id
+    FROM shard_structure s
+    WHERE NOT EXISTS (
+        SELECT 1 FROM desired_attachment d
+            LEFT JOIN local_rel child ON child.rel_id = d.rel_id
+            LEFT JOIN local_rel parent ON parent.rel_id = d.parent_rel_id
+        WHERE d.root_rel_id = s.root_rel_id AND (
+            child.reg_class IS NULL OR parent.reg_class IS NULL
+            OR (child.pc).relkind = 'f' AND NOT EXISTS (
+                SELECT 1 FROM ready_remote_shard r WHERE r.reg_class = child.reg_class
+            )
+            OR (child.pc).relkind = 'r' AND NOT EXISTS (
+                SELECT 1 FROM ready_local_shard r WHERE r.reg_class = child.reg_class
+            )
+        )
+    )
+),
+attachment_command AS (
+    SELECT c.root_rel_id, 0 AS phase, 0 AS depth, c.rel_id,
+           format('ALTER TABLE %s DETACH PARTITION %s', c.parent_reg_class, c.reg_class) AS command
+    FROM current_attachment c
+    WHERE NOT EXISTS (
+        SELECT 1 FROM desired_attachment d
+        WHERE (d.parent_rel_id, d.rel_id) = (c.parent_rel_id, c.rel_id)
+    )
+    UNION ALL
+    SELECT d.root_rel_id, 1, d.depth, d.rel_id,
+           format('ALTER TABLE %s ATTACH PARTITION %s %s',
+                  fqn(d.parent_rel_id), fqn(d.rel_id), d.bound)
+    FROM desired_attachment d
+    WHERE NOT EXISTS (
+        SELECT 1 FROM current_attachment c
+        WHERE (d.parent_rel_id, d.rel_id) = (c.parent_rel_id, c.rel_id)
+    )
 ),
 roles AS (
     SELECT * FROM fdw_credentials
@@ -414,7 +459,7 @@ scripts (async, transactional, description, commands) AS (
         format('Creating shield views [%s]', string_agg(fqn(s.view_rel_id), ', ')),
         coalesce(
             array_agg(
-                format('CREATE VIEW %s AS SELECT * FROM %s',
+                format('CREATE OR REPLACE VIEW %s AS SELECT * FROM %s',
                     fqn(s.view_rel_id),
                     fqn(s.rel_id)
                 )
@@ -466,7 +511,10 @@ scripts (async, transactional, description, commands) AS (
             SELECT 1 FROM view_schema WHERE n.nspname = view_schema_name
         )
         AND NOT EXISTS (
-            SELECT 1 FROM shard_assignment WHERE n.nspname IN (shard_server_schema_name, retained_shard_server_schema)
+            SELECT 1 FROM remote_assignment WHERE n.nspname = shard_server_schema_name
+        )
+        AND NOT EXISTS (
+            SELECT 1 FROM remote_shard r WHERE (r.pc).relnamespace = n.oid AND r.parent IS NOT NULL
         )
         -- Make sure not to drop schemas that contain subscribed tables
         -- This can happen because dropping publications from subscription
@@ -528,64 +576,15 @@ scripts (async, transactional, description, commands) AS (
     GROUP BY 1, 2
 
     UNION ALL
-    -- Attach ready local shards to slots replacing existing attachments if necessary
-    -- TODO partition check constraints handling to speed up attaching local shards
+    -- Change all attachments of a root together; never expose a partial expansion.
     SELECT
         FALSE,
         TRUE,
-        format('Attaching local shards [%s] to slots', string_agg(format('%s', ready_shard.reg_class), ', ')),
-        array_agg(format('ALTER TABLE %s DETACH PARTITION %s',
-                slot.reg_class,
-                i.inhrelid::regclass
-            )
-        ) FILTER (WHERE i IS NOT NULL)
-        ||
-        array_agg(format('ALTER TABLE %s ATTACH PARTITION %s %s',
-                slot.reg_class,
-                ready_shard.reg_class,
-                slot.bound
-            )
-        )
-    FROM
-        shard_assignment sa
-            JOIN local_rel slot ON slot.rel_id = sa.slot_rel_id
-            JOIN ready_local_shard ready_shard ON sa.rel_id = ready_shard.rel_id
-            LEFT JOIN pg_inherits i ON i.inhparent = slot.reg_class
-    WHERE
-            ready_shard.reg_class IS DISTINCT FROM i.inhrelid
-        AND sa.local
-    GROUP BY 1, 2
-
-    UNION ALL
-    -- Attach ready remote shards to slots replacing
-    -- existing attachments if necessary
-    SELECT
-        FALSE,
-        TRUE,
-        format('Attaching remote shards [%s] to slots', string_agg(format('%s', ready_shard.reg_class), ', ')),
-        array_agg(format('ALTER TABLE %s DETACH PARTITION %s',
-                slot.reg_class,
-                i.inhrelid::regclass
-            )
-        ) FILTER (WHERE i IS NOT NULL)
-        ||
-        array_agg(format('ALTER TABLE %s ATTACH PARTITION %s %s',
-                slot.reg_class,
-                ready_shard.reg_class,
-                slot.bound
-            )
-        )
-    FROM
-        shard_assignment sa
-            JOIN local_rel slot ON slot.rel_id = sa.slot_rel_id
-            JOIN ready_remote_shard ready_shard ON sa.remote_rel_id = ready_shard.rel_id
-            LEFT JOIN pg_inherits i ON i.inhparent = slot.reg_class
-    WHERE
-            ready_shard.reg_class IS DISTINCT FROM i.inhrelid
-        AND
-            sa.connect_remote
-        AND NOT sa.local
-    GROUP BY 1, 2
+        format('Switching query routes for %s', fqn(c.root_rel_id)),
+        ARRAY[format('LOCK TABLE ONLY %s IN ACCESS EXCLUSIVE MODE', fqn(c.root_rel_id))]
+        || array_agg(command ORDER BY phase, depth DESC, rel_id)
+    FROM attachment_command c JOIN ready_root USING (root_rel_id)
+    GROUP BY c.root_rel_id
 
     UNION ALL
     -- Subscriptions
@@ -769,7 +768,7 @@ scripts (async, transactional, description, commands) AS (
             format('CREATE FOREIGN TABLE %s PARTITION OF %s %s SERVER %I OPTIONS (schema_name %L)',
                 fqn(remote_rel_id),
                 template.reg_class,
-                slot.bound,
+                sa.remote_bound,
                 shard_server_name,
                 (sa).view_schema_name
             )
@@ -784,9 +783,8 @@ scripts (async, transactional, description, commands) AS (
             )
         )
     FROM
-        shard_assignment sa
+        remote_assignment sa
             JOIN local_rel template ON template.rel_id = sa.template_rel_id
-            JOIN local_rel slot ON slot.rel_id = sa.slot_rel_id
             JOIN pg_namespace ns ON ns.nspname = shard_server_schema_name
             JOIN pg_foreign_server fs ON fs.srvname = shard_server_name
     WHERE
@@ -797,9 +795,10 @@ scripts (async, transactional, description, commands) AS (
     GROUP BY 1, 2
 
     UNION ALL
-    -- Analyze remote shards in parallel
+    -- Finish parent shield reads within the sync pass before reporting routes.
+    -- Leaf analysis can run in the background while retained copies remain available.
     SELECT
-        TRUE,
+        is_leaf,
         TRUE,
         format('Analyze remote shards [%s]', reg_class),
         ARRAY [
@@ -808,10 +807,10 @@ scripts (async, transactional, description, commands) AS (
         ]
     FROM (
         SELECT
-            rs.reg_class
+            rs.reg_class, remote_assignment.is_leaf
         FROM
             remote_shard rs
-                JOIN shard_assignment ON rs.rel_id IN (remote_rel_id, retained_remote_rel_id)
+                JOIN remote_assignment ON rs.rel_id = remote_rel_id
         WHERE
                 NOT EXISTS (SELECT 1 FROM
                     pg_statistic s
@@ -847,13 +846,11 @@ scripts (async, transactional, description, commands) AS (
     FROM
         remote_shard rs
     WHERE
-        NOT EXISTS (SELECT 1 FROM pg_inherits WHERE inhrelid = rs.reg_class)
-        AND
         NOT EXISTS (SELECT 1 FROM
-            shard_assignment
-            WHERE
-                rs.rel_id IN (remote_rel_id, retained_remote_rel_id)
+            remote_assignment
+            WHERE rs.rel_id = remote_rel_id
         )
+        AND rs.parent IS NULL
     GROUP BY 1, 2
 
     UNION ALL
@@ -896,8 +893,9 @@ scripts (async, transactional, description, commands) AS (
     FROM
         owned_server fs
     WHERE
+        NOT EXISTS (SELECT 1 FROM remote_shard r WHERE r.srvname = fs.srvname)
+        AND
             fs.srvname <> 'replica_controller'
-        AND NOT EXISTS (SELECT 1 FROM pg_foreign_table ft JOIN pg_inherits i ON i.inhrelid = ft.ftrelid WHERE ft.ftserver = fs.oid)
         AND NOT EXISTS (SELECT 1 FROM
             shard_assignment WHERE fs.srvname IN (shard_server_name, retained_shard_server_name)
         )

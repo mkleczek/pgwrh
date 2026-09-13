@@ -30,7 +30,8 @@ CREATE FOREIGN TABLE IF NOT EXISTS fdw_shard_assignment (
     shard_server_user text,
     pubname text,
     connect_remote boolean,
-    retained_shard_server_name text
+    retained_shard_server_name text,
+    shard_server_members text[]
 )
 SERVER replica_controller
 OPTIONS (table_name 'shard_assignment');
@@ -56,7 +57,9 @@ CREATE FOREIGN TABLE IF NOT EXISTS fdw_shard_structure (
     node_partkeydef text,
     is_leaf boolean,
     root_column_clause text,
-    local_constraint_clause text
+    local_constraint_clause text,
+    root_schema_name text,
+    root_table_name text
 )
 SERVER replica_controller
 OPTIONS (table_name 'shard_structure');
@@ -67,7 +70,8 @@ CREATE FOREIGN TABLE fdw_replica_state (
     connected_local_shards json,
     connected_remote_shards json,
     users json,
-    prepared_remote_shards json
+    prepared_remote_shards json,
+    serving_subtrees json
 ) SERVER replica_controller
 OPTIONS (table_name 'replica_state');
 
@@ -76,3 +80,6 @@ CREATE FOREIGN TABLE fdw_credentials (
     password text
 ) SERVER replica_controller
 OPTIONS (table_name 'credentials');
+
+CREATE FOREIGN TABLE fdw_serving_subtree (member_role text, schema_name text, table_name text)
+SERVER replica_controller OPTIONS (table_name 'serving_subtree');

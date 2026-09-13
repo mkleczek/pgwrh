@@ -18,7 +18,9 @@ def test_shard_structure_exposes_structured_partition_metadata(
             node_partkeydef,
             is_leaf,
             root_column_clause,
-            local_constraint_clause
+            local_constraint_clause,
+            root_schema_name,
+            root_table_name
         FROM pgwrh.fdw_shard_structure
         WHERE
             (schema_name, table_name) IN (
@@ -41,6 +43,8 @@ def test_shard_structure_exposes_structured_partition_metadata(
             "is_leaf": is_leaf,
             "root_column_clause": root_column_clause,
             "local_constraint_clause": local_constraint_clause,
+            "root_schema_name": root_schema_name,
+            "root_table_name": root_table_name,
         }
         for (
             schema_name,
@@ -54,6 +58,8 @@ def test_shard_structure_exposes_structured_partition_metadata(
             is_leaf,
             root_column_clause,
             local_constraint_clause,
+            root_schema_name,
+            root_table_name,
         ) in rows
     }
 
@@ -69,6 +75,8 @@ def test_shard_structure_exposes_structured_partition_metadata(
     assert "col2 text" in root["root_column_clause"]
     assert "col3 date" in root["root_column_clause"]
     assert root["local_constraint_clause"] is None
+    assert root["root_schema_name"] == "test"
+    assert root["root_table_name"] == "my_data"
 
     year_partition = structure[("test", "my_data_2022")]
     assert year_partition["level"] == 1
@@ -80,6 +88,8 @@ def test_shard_structure_exposes_structured_partition_metadata(
     assert year_partition["is_leaf"] is False
     assert year_partition["root_column_clause"] is None
     assert year_partition["local_constraint_clause"] is None
+    assert year_partition["root_schema_name"] == "test"
+    assert year_partition["root_table_name"] == "my_data"
 
     leaf = structure[("test_shards", "my_data_2022_0")]
     assert leaf["level"] == 2
@@ -91,6 +101,8 @@ def test_shard_structure_exposes_structured_partition_metadata(
     assert leaf["is_leaf"] is True
     assert leaf["root_column_clause"] is None
     assert "PRIMARY KEY (col1)" in leaf["local_constraint_clause"]
+    assert leaf["root_schema_name"] == "test"
+    assert leaf["root_table_name"] == "my_data"
 
 
 def test_replica_bootstrap_uses_structured_slot_first_partition_tree(
@@ -123,6 +135,8 @@ def test_replica_bootstrap_uses_structured_slot_first_partition_tree(
         "is_leaf",
         "root_column_clause",
         "local_constraint_clause",
+        "root_schema_name",
+        "root_table_name",
     ]
 
     rows = replica.execute(

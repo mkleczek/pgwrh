@@ -129,7 +129,8 @@ SELECT
     pubname(schema_name, table_name) AS pubname,
     current_server_name AS retained_shard_server_name, -- do not drop foreign tables with this server name (to keep current tables during transition)
     --local AND hosted_shard_subscribed_confirmation IS NULL AS subscription_confirmation_required -- whether confirmation from this member is required
-    m AS replication_group_member
+    m AS replication_group_member,
+    CASE WHEN target_route_ready THEN target_members ELSE current_members END AS shard_server_members
 FROM
     replication_group_member m
         JOIN replication_group g USING (replication_group_id)
@@ -232,6 +233,7 @@ FROM
                 schema_name,
                 table_name,
                 string_agg(host_name, ',' ORDER BY sah.host_id) AS current_host,
+                array_agg(DISTINCT shm.member_role) AS current_members,
                 string_agg(port::text, ',' ORDER BY sah.host_id) AS current_port
             FROM
                 shard_assigned_host sah
@@ -273,10 +275,12 @@ FROM
                 schema_name,
                 table_name,
                 string_agg(host_name, ',' ORDER BY sah.host_id) AS target_host,
+                array_agg(DISTINCT member_role) AS target_members,
                 string_agg(port::text, ',' ORDER BY sah.host_id) AS target_port
             FROM
                 shard_assigned_host sah
-                    JOIN shard_host USING (replication_group_id, availability_zone, host_id),
+                    JOIN shard_host USING (replication_group_id, availability_zone, host_id)
+                    JOIN replication_group_member USING (replication_group_id, availability_zone, host_id),
                 -- multiply hosts in the same availability zone by same_zone_multiplier
                 generate_series(1, CASE WHEN m.availability_zone = sah.availability_zone THEN m.same_zone_multiplier ELSE 1 END)
             WHERE

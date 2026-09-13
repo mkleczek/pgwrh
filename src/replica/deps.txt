@@ -1,5 +1,9 @@
 tables          helpers
 helpers         sync
+helpers         aggregation
+fdw             aggregation
+aggregation     sync
+aggregation     status
 fdw             sync
 fdw             status
 helpers         status

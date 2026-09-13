@@ -19,7 +19,7 @@
 
 CREATE OR REPLACE VIEW shard_structure AS
 WITH stc AS (
-    SELECT
+    SELECT DISTINCT
         st.replication_group_id,
         c.oid::regclass 
     FROM
@@ -56,12 +56,16 @@ partition_node AS (
             WHEN level = 0 THEN cols.root_column_clause
             ELSE NULL
         END AS root_column_clause,
-        constraints.local_constraint_clause
+        constraints.local_constraint_clause,
+        root_n.nspname AS root_schema_name,
+        root_c.relname AS root_table_name
     FROM
         roots r
             JOIN replication_group_member m USING (replication_group_id)
-            JOIN replication_group USING (replication_group_id),
-            pg_partition_tree(oid) t
+            JOIN replication_group USING (replication_group_id)
+            JOIN pg_class root_c ON root_c.oid = r.oid
+            JOIN pg_namespace root_n ON root_n.oid = root_c.relnamespace
+            CROSS JOIN LATERAL pg_partition_tree(r.oid) t
             JOIN pg_class c ON t.relid = c.oid
             JOIN pg_namespace n ON c.relnamespace = n.oid
             LEFT JOIN pg_class p ON t.parentrelid = p.oid
@@ -166,7 +170,9 @@ SELECT
     node_partkeydef,
     is_leaf,
     root_column_clause,
-    local_constraint_clause
+    local_constraint_clause,
+    root_schema_name,
+    root_table_name
 FROM
     partition_node;
 
@@ -185,7 +191,8 @@ SELECT
     shard_server_user,
     pubname,
     connect_remote,
-    retained_shard_server_name
+    retained_shard_server_name,
+    shard_server_members
 FROM
     shard_assignment_per_member
 WHERE
@@ -222,7 +229,8 @@ CREATE VIEW replica_state AS
         connected_local_shards,
         connected_remote_shards,
         users,
-        prepared_remote_shards
+        prepared_remote_shards,
+        serving_subtrees
     FROM replication_group_member
     WHERE
         member_role = CURRENT_ROLE
@@ -243,6 +251,16 @@ CREATE VIEW replica_state AS
 -- $$;
 -- CREATE TRIGGER update_replica_state_trigger INSTEAD OF INSERT OR UPDATE ON replica_state FOR EACH ROW EXECUTE FUNCTION update_replica_state();
 GRANT SELECT, INSERT, UPDATE ON replica_state TO PUBLIC;
+
+-- Local-first retention keeps advertised trees intact until readers acknowledge
+-- target routes at commit (or restored routes at rollback completion).
+CREATE VIEW serving_subtree AS
+SELECT m.member_role, s.schema_name, s.table_name
+FROM replication_group_member reader
+    JOIN replication_group_member m USING (replication_group_id)
+    CROSS JOIN LATERAL json_to_recordset(m.serving_subtrees) s(schema_name text, table_name text)
+WHERE reader.member_role = CURRENT_ROLE;
+GRANT SELECT ON serving_subtree TO PUBLIC;
 
 CREATE VIEW credentials AS
 SELECT

@@ -124,6 +124,7 @@ CREATE TABLE  replication_group_member (
     connected_local_shards json NOT NULL DEFAULT '[]',
     connected_remote_shards json NOT NULL DEFAULT '[]',
     prepared_remote_shards json NOT NULL DEFAULT '[]',
+    serving_subtrees json NOT NULL DEFAULT '[]',
     users json NOT NULL DEFAULT '[]',
 
     PRIMARY KEY (replication_group_id, availability_zone, host_id)
