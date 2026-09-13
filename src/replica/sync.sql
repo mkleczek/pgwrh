@@ -26,17 +26,186 @@ WITH shard_assignment AS MATERIALIZED (
 local_shard AS (
     SELECT * FROM shard_assignment WHERE local
 ),
+shard_structure AS MATERIALIZED (
+    SELECT * FROM shard_structure_r
+),
+root_shard_structure AS (
+    SELECT * FROM shard_structure WHERE level = 0
+),
+nonroot_shard_structure AS (
+    SELECT * FROM shard_structure WHERE level > 0
+),
+missing_root_shard_structure AS (
+    SELECT DISTINCT ON (s.rel_id)
+        s.*
+    FROM
+        root_shard_structure s
+    WHERE
+        NOT EXISTS (SELECT 1 FROM local_rel WHERE rel_id = s.rel_id)
+    ORDER BY
+        s.rel_id,
+        s.level,
+        s.schema_name,
+        s.table_name
+),
+missing_nonroot_slot AS (
+    SELECT DISTINCT ON (s.slot_rel_id)
+        s.level,
+        s.schema_name,
+        s.table_name,
+        s.slot_rel_id,
+        s.parent_rel_id,
+        s.bound,
+        s.parent_partkeydef
+    FROM
+        nonroot_shard_structure s
+    WHERE
+        NOT EXISTS (SELECT 1 FROM local_rel WHERE rel_id = s.slot_rel_id)
+    ORDER BY
+        s.slot_rel_id,
+        s.level,
+        s.schema_name,
+        s.table_name
+),
+missing_nonroot_rel AS (
+    SELECT DISTINCT ON (s.rel_id)
+        s.level,
+        s.schema_name,
+        s.table_name,
+        s.rel_id,
+        s.slot_rel_id,
+        s.bound,
+        s.node_partkeydef,
+        s.is_leaf
+    FROM
+        nonroot_shard_structure s
+    WHERE
+        NOT EXISTS (SELECT 1 FROM local_rel WHERE rel_id = s.rel_id)
+    ORDER BY
+        s.rel_id,
+        s.level,
+        s.schema_name,
+        s.table_name
+),
+missing_template_shard_structure AS (
+    SELECT DISTINCT ON (s.template_rel_id)
+        s.level,
+        s.schema_name,
+        s.table_name,
+        s.template_rel_id,
+        s.template_schema_name,
+        s.parent_partkeydef,
+        original_rel.reg_class
+    FROM
+        nonroot_shard_structure s
+            JOIN local_rel original_rel ON original_rel.rel_id = s.rel_id
+    WHERE
+        NOT EXISTS (SELECT 1 FROM local_rel WHERE rel_id = s.template_rel_id)
+    ORDER BY
+        s.template_rel_id,
+        s.level,
+        s.schema_name,
+        s.table_name
+),
+missing_view_shard_structure AS (
+    SELECT DISTINCT ON (s.view_rel_id)
+        s.level,
+        s.schema_name,
+        s.table_name,
+        s.rel_id,
+        s.view_rel_id,
+        s.view_schema_name
+    FROM
+        shard_structure s
+            JOIN local_rel original_rel ON original_rel.rel_id = s.rel_id
+    WHERE
+        NOT EXISTS (SELECT 1 FROM rel WHERE rel_id = s.view_rel_id)
+    ORDER BY
+        s.view_rel_id,
+        s.level,
+        s.schema_name,
+        s.table_name
+),
+missing_nonroot_command AS (
+    SELECT
+        level,
+        1 AS phase,
+        schema_name,
+        table_name,
+        format('CREATE TABLE %s PARTITION OF %s %s PARTITION BY %s',
+            fqn(slot_rel_id),
+            fqn(parent_rel_id),
+            bound,
+            parent_partkeydef
+        ) AS command
+    FROM
+        missing_nonroot_slot
+
+    UNION ALL
+
+    SELECT
+        level,
+        2 AS phase,
+        schema_name,
+        table_name,
+        add_ext_dependency(slot_rel_id) AS command
+    FROM
+        missing_nonroot_slot
+
+    UNION ALL
+
+    SELECT
+        level,
+        3 AS phase,
+        schema_name,
+        table_name,
+        format('CREATE TABLE %s PARTITION OF %s %s%s',
+            fqn(rel_id),
+            fqn(slot_rel_id),
+            bound,
+            coalesce(' PARTITION BY ' || node_partkeydef, '')
+        ) AS command
+    FROM
+        missing_nonroot_rel
+
+    UNION ALL
+
+    SELECT
+        level,
+        4 AS phase,
+        schema_name,
+        table_name,
+        add_ext_dependency(rel_id) AS command
+    FROM
+        missing_nonroot_rel
+
+    UNION ALL
+
+    SELECT
+        level,
+        5 AS phase,
+        schema_name,
+        table_name,
+        format('ALTER TABLE %s DETACH PARTITION %s',
+            fqn(slot_rel_id),
+            fqn(rel_id)
+        ) AS command
+    FROM
+        missing_nonroot_rel
+    WHERE
+        is_leaf
+),
 slot_schema AS (
-    SELECT DISTINCT slot_schema_name FROM shard_assignment
+    SELECT DISTINCT slot_schema_name
+    FROM nonroot_shard_structure
 ),
 template_schema AS (
-    SELECT DISTINCT template_schema_name FROM shard_assignment
+    SELECT DISTINCT template_schema_name
+    FROM nonroot_shard_structure
 ),
 view_schema AS (
-    SELECT DISTINCT view_schema_name FROM shard_assignment
-),
-shard_structure AS MATERIALIZED (
-    SELECT * FROM fdw_shard_structure
+    SELECT DISTINCT view_schema_name
+    FROM shard_structure
 ),
 shard_schema AS (
     SELECT DISTINCT schema_name FROM shard_structure
@@ -171,16 +340,105 @@ scripts (async, transactional, description, commands) AS (
     SELECT
         FALSE,
         TRUE,
-        format('Found tables [%s] to create.',
+        format('Found root tables [%s] to create.',
             string_agg(format('%I.%I', schema_name, table_name), ', ')),
-        array_agg(create_table ORDER BY level)
+        array_agg(
+            format(
+                'CREATE TABLE IF NOT EXISTS %I.%I (%s%s)%s',
+                schema_name,
+                table_name,
+                root_column_clause,
+                coalesce(', ' || local_constraint_clause, ''),
+                coalesce(' PARTITION BY ' || node_partkeydef, '')
+            )
+            ORDER BY level, schema_name, table_name
+        )
         ||
-        array_agg(add_ext_dependency((schema_name, table_name)))
+        array_agg(add_ext_dependency(rel_id) ORDER BY level, schema_name, table_name)
     FROM
-        shard_structure s JOIN pg_namespace n ON nspname = s.schema_name
-    WHERE
-        NOT EXISTS (SELECT 1 FROM local_rel WHERE (schema_name, table_name) = (s.schema_name, s.table_name))
+        missing_root_shard_structure s
     GROUP BY 1, 2 -- make sure we produce empty set when no results
+
+    UNION ALL
+    -- Build the partition tree level by level: create all slots for a level first,
+    -- then create all original nodes for that same level.
+    (
+        SELECT
+            FALSE,
+            TRUE,
+            format('Creating partition structure for level %s', level),
+            array_agg(command ORDER BY phase, schema_name, table_name)
+        FROM
+            missing_nonroot_command
+        GROUP BY
+            1,
+            2,
+            level
+        ORDER BY
+            level
+    )
+
+    UNION ALL
+    -- Create partition templates for every non-root node. They stay detached and are
+    -- only used as DDL parents for remote tables.
+    SELECT
+        FALSE,
+        TRUE,
+        format('Creating partition templates [%s]', string_agg(fqn(s.template_rel_id), ', ')),
+        coalesce(
+            array_agg(
+                format('CREATE TABLE %s (LIKE %s) PARTITION BY %s',
+                    fqn(s.template_rel_id),
+                    s.reg_class,
+                    s.parent_partkeydef
+                )
+                ORDER BY s.level, s.schema_name, s.table_name
+            ),
+            ARRAY[]::text[]
+        )
+        ||
+        coalesce(
+            array_agg(add_ext_dependency(s.template_rel_id) ORDER BY s.level, s.schema_name, s.table_name),
+            ARRAY[]::text[]
+        )
+    FROM
+        missing_template_shard_structure s
+            JOIN pg_namespace n ON n.nspname = s.template_schema_name
+    GROUP BY 1, 2
+
+    UNION ALL
+    -- Create shield views for every managed partition node.
+    SELECT
+        FALSE,
+        TRUE,
+        format('Creating shield views [%s]', string_agg(fqn(s.view_rel_id), ', ')),
+        coalesce(
+            array_agg(
+                format('CREATE VIEW %s AS SELECT * FROM %s',
+                    fqn(s.view_rel_id),
+                    fqn(s.rel_id)
+                )
+                ORDER BY s.level, s.schema_name, s.table_name
+            ),
+            ARRAY[]::text[]
+        )
+        ||
+        coalesce(
+            array_agg(
+                format('GRANT SELECT ON %s TO %I', fqn(s.view_rel_id), pgwrh_replica_role_name())
+                ORDER BY s.level, s.schema_name, s.table_name
+            ),
+            ARRAY[]::text[]
+        )
+        ||
+        coalesce(
+            array_agg(add_ext_dependency(s.view_rel_id) ORDER BY s.level, s.schema_name, s.table_name),
+            ARRAY[]::text[]
+        )
+    FROM
+        missing_view_shard_structure s
+            JOIN pg_namespace n ON n.nspname = s.view_schema_name
+    GROUP BY 1, 2
 
     UNION ALL
     -- CLEANUP: DROP unnecessary slot and remote (per shard server) schemas
@@ -268,61 +526,6 @@ scripts (async, transactional, description, commands) AS (
                 AND NOT has_schema_privilege(rolname, n.oid, 'USAGE')
 
     GROUP BY 1, 2
-
-    UNION ALL
-    -- Create single table infrastructure: slot, template tables and views
-    SELECT
-        FALSE,
-        TRUE,
-        format('Found new shards [%s]. Preparing slot tables.', string_agg(reg_class::text, ', ')),
-        array_agg(
-            format('ALTER TABLE %s DETACH PARTITION %s',
-                (parent).reg_class,
-                reg_class
-            )
-        )
-        ||
-        array_agg(
-            format('CREATE TABLE %s PARTITION OF %s %s PARTITION BY %s',
-                fqn(slot_rel_id),
-                (parent).reg_class,
-                (lr).bound,
-                pg_get_partkeydef((parent).pc.oid)
-            )
-        )
-        ||
-        array_agg(add_ext_dependency(slot_rel_id))
-        ||
-        array_agg(
-            format('CREATE TABLE %s PARTITION OF %s %s PARTITION BY %s',
-                fqn(template_rel_id),
-                fqn(slot_rel_id),
-                (lr).bound,
-                pg_get_partkeydef((parent).pc.oid)
-            )
-        )
-        ||
-        array_agg(add_ext_dependency(template_rel_id))
-        ||
-        array_agg(
-            format('CREATE VIEW %s AS SELECT * FROM %s', fqn(view_rel_id), (lr).reg_class)
-        )
-        ||
-        array_agg(
-            format('GRANT SELECT ON %s TO %I', fqn(view_rel_id), pgwrh_replica_role_name())
-        )
-        ||
-        array_agg(add_ext_dependency(view_rel_id))
-    FROM
-        shard_assignment sc
-            JOIN pg_namespace sns ON sns.nspname = slot_schema_name
-            JOIN pg_namespace tns ON tns.nspname = template_schema_name
-            JOIN pg_namespace vns ON vns.nspname = view_schema_name
-    WHERE
-            parent IS NOT NULL
-        AND (parent).pn.oid <> sns.oid
-    GROUP BY
-        1, 2
 
     UNION ALL
     -- Attach ready local shards to slots replacing existing attachments if necessary

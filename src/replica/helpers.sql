@@ -127,6 +127,35 @@ FROM
         LEFT JOIN pg_inherits pi ON (r).pc.oid = pi.inhrelid
         LEFT JOIN rel AS parent ON (parent).pc.oid = pi.inhparent;
 
+CREATE OR REPLACE VIEW shard_structure_r AS
+SELECT
+    (schema_name, table_name)::rel_id AS rel_id,
+    CASE
+        WHEN level = 0 THEN NULL::rel_id
+        ELSE (parent_schema_name, parent_table_name)::rel_id
+    END AS parent_rel_id,
+    CASE
+        WHEN level = 0 THEN NULL::rel_id
+        ELSE ((schema_name || '_' || 'slot'), table_name)::rel_id
+    END AS slot_rel_id,
+    CASE
+        WHEN level = 0 THEN NULL::rel_id
+        ELSE ((schema_name || '_' || 'template'), table_name)::rel_id
+    END AS template_rel_id,
+    (format('%s_shield', schema_name), table_name)::rel_id AS view_rel_id,
+    CASE
+        WHEN level = 0 THEN NULL
+        ELSE format('%s_slot', schema_name)
+    END AS slot_schema_name,
+    CASE
+        WHEN level = 0 THEN NULL
+        ELSE format('%s_template', schema_name)
+    END AS template_schema_name,
+    format('%s_shield', schema_name) AS view_schema_name,
+    s.*
+FROM
+    fdw_shard_structure s;
+
 CREATE OR REPLACE VIEW shard_assignment_r AS
 SELECT
     lr.rel_id AS rel_id,
