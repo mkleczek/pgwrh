@@ -41,6 +41,12 @@ It is also possible to specify different levels of redundancy for different subt
 
 Thanks to this it is possible to have more replicas maintain _hot_ data and have _cold_ data storage requirements minimized.
 
+## Remote shard aggregation
+
+Replicas keep local shards attached through rollout while preparing their remote
+replacements. After an atomic handoff, they can combine complete remote subtrees
+behind native partitioned shield views. See [the protocol and tradeoffs](docs/remote-shard-aggregation.md).
+
 ## Ease of deployment and cluster administration
 
 

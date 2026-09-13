@@ -26,6 +26,12 @@ EXTRA_CLEAN = $(BUILD)
 MASTER = $(shell tsort src/master/deps.txt | sed -e 's/^/src\/master\//' -e 's/$$/\.sql/'  | xargs echo)
 REPLICA = $(shell tsort src/replica/deps.txt | sed -e 's/^/src\/replica\//' -e 's/$$/\.sql/'  | xargs echo)
 
+# Reuse the current definitions instead of maintaining a second copy of the SQL.
+UPGRADE_022 = src/updates/pgwrh--0.2.1--0.2.2.sql.in \
+	src/master/api-management.sql src/master/implementation-views.sql src/master/api-replica.sql \
+	src/master/triggers.sql src/replica/helpers.sql src/replica/aggregation.sql \
+	src/replica/status.sql src/replica/sync.sql
+
 PG_CONFIG = pg_config
 
 ifdef NO_PGXS
@@ -56,7 +62,11 @@ $(BUILD)/pgwrh/$(EXTENSION)--$(EXTVERSION).sql: src/common.sql $(MASTER) $(REPLI
 updates: $(wildcard src/updates/*.sql)
 	cp $^ $(BUILD)/pgwrh
 
-all: prepare $(EXTENSION).control $(BUILD)/pgwrh/$(EXTENSION)--$(EXTVERSION).sql updates
+$(BUILD)/pgwrh/pgwrh--0.2.1--0.2.2.sql: $(UPGRADE_022) | prepare
+	sed -E -e '/^CREATE TYPE .*rel_id AS/d' -e '/^\\echo /d' \
+		-e 's/^CREATE (FUNCTION|VIEW|TRIGGER) /CREATE OR REPLACE \1 /' $^ > $@
+
+all: prepare $(EXTENSION).control $(BUILD)/pgwrh/$(EXTENSION)--$(EXTVERSION).sql updates $(BUILD)/pgwrh/pgwrh--0.2.1--0.2.2.sql
 
 testgres-ext: all
 	mkdir -p $(TESTGRES_EXT_DIR)
