@@ -62,10 +62,7 @@ $$;
 
 CALL test.insert_test_data(2022, 2023, 2024, 2025);
 
-INSERT INTO pgwrh.replication_group
-        (replication_group_id, username, password)
-    VALUES
-        ('g1', 'u', 'p');
+SELECT pgwrh.create_replica_cluster('g1');
 INSERT INTO pgwrh.sharded_table
         (replication_group_id, sharded_table_schema, sharded_table_name, replication_factor)
     VALUES

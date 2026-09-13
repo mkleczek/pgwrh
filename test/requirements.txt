@@ -1,29 +1,7 @@
-# pgwrh
-# Copyright (C) 2024  Michal Kleczek
-
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU Affero General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Affero General Public License for more details.
-
-# You should have received a copy of the GNU Affero General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-asn1crypto==1.5.1
-iniconfig==2.0.0
-logging==0.4.9.6
-packaging==24.2
-pg8000==1.31.2
-pluggy==1.5.0
-port-for==0.7.4
-psutil==6.1.1
-pytest==8.3.4
-python-dateutil==2.9.0.post0
-scramp==1.4.5
-six==1.17.0
-testgres==1.10.3
+# The supported test environment is the repo `nix-shell`, which provides the
+# current nixpkgs versions of the Python test dependencies.
+#
+# If you need a non-Nix environment, install the top-level test tools and let
+# your resolver select compatible versions.
+pytest
+testgres

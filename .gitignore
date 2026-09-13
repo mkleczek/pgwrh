@@ -3,3 +3,4 @@
 /pgwrh--*.sql
 result
 /.idea/
+test/__pycache__/
