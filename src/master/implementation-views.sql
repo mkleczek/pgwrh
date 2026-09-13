@@ -26,11 +26,12 @@ WITH shard_class_index AS (
         table_name,
         index_name,
         index_template,
-        bool_or(version = current_version) is_current,
+        bool_or(version = current_version OR rollback_unlock IS NOT NULL) is_current,
         bool_or(version = target_version AND current_version <> target_version) AS is_target
     FROM
         shard_index_definition
             JOIN replication_group USING (replication_group_id)
+            JOIN replication_group_config_lock USING (replication_group_id, version)
     GROUP BY
         1, 2, 3, 4, 5
 ),
@@ -40,12 +41,13 @@ member_shard AS (
         member_role,
         schema_name,
         table_name,
-        bool_or(version = current_version) is_current,
+        bool_or(version = current_version OR rollback_unlock IS NOT NULL) is_current,
         bool_or(version = target_version AND current_version <> target_version) is_target
     FROM
         shard_assigned_host
             JOIN replication_group USING (replication_group_id)
             JOIN replication_group_member USING (replication_group_id, availability_zone, host_id)
+            JOIN replication_group_config_lock USING (replication_group_id, version)
     GROUP BY
         1, 2, 3, 4
 ),
@@ -100,29 +102,29 @@ SELECT
     table_name,
     local,
     -- foreign server hosting shard
-    -- use target configuration server only when transitioning and all remote replicas subscribed to the shard (ie. we can run ANALYZE)
-    CASE WHEN current_version <> target_version AND target_subscribed AND target_online AND target_user_created
+    -- if target route is new, wait for target indexes before switching traffic to it
+    CASE WHEN target_route_ready
         THEN target_server_name
         ELSE current_server_name
     END AS shard_server_name,
-    CASE WHEN current_version <> target_version AND target_subscribed AND target_online AND target_user_created
+    CASE WHEN target_route_ready
         THEN target_host
         ELSE coalesce(current_host, '')
     END AS host,
-    CASE WHEN current_version <> target_version AND target_subscribed AND target_online AND target_user_created
+    CASE WHEN target_route_ready
         THEN target_port
         ELSE coalesce(current_port, '')
     END AS port,
     current_database() AS dbname,
-    CASE WHEN current_version <> target_version AND target_subscribed AND target_online AND target_user_created
+    CASE WHEN target_route_ready
         THEN target_credentials.username
         ELSE current_username
     END AS shard_server_user,
-    -- If shard is remote in target version, and it is ready, connect it to slot instead of the local one
-    -- (but keep the local one if it is still be marked as "local" above)
+    -- Prepare the effective remote route when eligible. Replicas keep retained
+    -- local copies attached until they are no longer assigned locally.
     CASE WHEN current_version <> target_version
-        THEN target_remote AND target_subscribed AND target_online AND target_user_created
-        ELSE NOT local
+        THEN target_remote AND target_route_ready
+        ELSE current_remote
     END AS connect_remote,
     pubname(schema_name, table_name) AS pubname,
     current_server_name AS retained_shard_server_name, -- do not drop foreign tables with this server name (to keep current tables during transition)
@@ -141,6 +143,8 @@ FROM
                 -- every host has to retain shards from both current and target version
                 bool_or(member_role = m.member_role) AS local,
                 bool_and(member_role <> m.member_role)
+                    FILTER (WHERE version = current_version) AS current_remote,
+                bool_and(member_role <> m.member_role)
                     FILTER ( WHERE version = target_version) AS target_remote,
                 -- server names are independent of shard
                 md5(string_agg(sah.availability_zone || sah.host_id, ',' ORDER BY sah.availability_zone, sah.host_id)
@@ -153,7 +157,8 @@ FROM
                 -- did all target hosts confirmed subscription (so that clients can execute analyze)
                 bool_and(subscribes_local_shard)
                     FILTER (WHERE member_role <> m.member_role AND version = target_version) AS target_subscribed,
-                -- did all target version hosts confirm target version indexes (so that clients can expose them as foreign tables)
+                -- did all target version hosts confirm target version indexes
+                -- (so that fresh target copies can be exposed safely as foreign tables)
                 -- we want to avoid situation when clients issue queries to hosts that don't have required indexes
                 -- as that might disrupt whole cluster due to slow queries, that in turn cause
                 -- a) high resource usage and cache thrashing
@@ -202,10 +207,25 @@ FROM
             WHERE
                     sah.replication_group_id = m.replication_group_id
                 AND
-                    version IN (current_version, target_version)
+                    (version IN (current_version, target_version) OR EXISTS (
+                        SELECT 1 FROM replication_group_config_lock l
+                        WHERE (l.replication_group_id, l.version) = (sah.replication_group_id, sah.version)
+                            AND l.rollback_unlock IS NOT NULL
+                    ))
             GROUP BY
                 1, 2
         ) s
+        CROSS JOIN LATERAL (
+            SELECT
+                current_version <> target_version
+                AND target_subscribed
+                AND target_online
+                AND target_user_created
+                AND (
+                    current_server_name IS NOT DISTINCT FROM target_server_name
+                    OR target_indexed
+                ) AS target_route_ready
+        ) route
         -- calculate current version foreign server host and port based on _online_ assigned hosts and this member availability zone
         LEFT JOIN LATERAL (
             SELECT
@@ -322,7 +342,40 @@ CREATE VIEW missing_connected_remote_shard AS
         remote_shard s
     WHERE
         NOT EXISTS (SELECT 1 FROM
-            json_to_recordset(connected_remote_shards) AS c(schema_name text, table_name text)
-                    WHERE (schema_name, table_name) = (s.schema_name, s.table_name)
+            json_to_recordset(connected_remote_shards) AS c(schema_name text, table_name text, shard_server_name text, shard_server_user text)
+            WHERE (c.schema_name, c.table_name) = (s.schema_name, s.table_name)
+                AND c.shard_server_user = (
+                    SELECT username FROM replication_group_credentials creds
+                    WHERE (creds.replication_group_id, creds.version) = (s.replication_group_id, s.version)
+                )
+                AND c.shard_server_name = (
+                    SELECT md5(string_agg(a.availability_zone || a.host_id, ',' ORDER BY a.availability_zone, a.host_id))
+                    FROM shard_assigned_host a
+                    WHERE (a.replication_group_id, a.version, a.schema_name, a.table_name) =
+                          (s.replication_group_id, s.version, s.schema_name, s.table_name)
+                )
         )
 ;
+
+-- A prepared replacement is sufficient only while the leaf is served locally.
+CREATE VIEW missing_ready_remote_shard AS
+SELECT s.*
+FROM missing_connected_remote_shard s
+    JOIN replication_group_member m USING (replication_group_id, availability_zone, host_id)
+    JOIN replication_group_credentials creds USING (replication_group_id, version)
+WHERE NOT EXISTS (
+    SELECT 1 FROM json_to_recordset(m.prepared_remote_shards)
+        AS p(schema_name text, table_name text, shard_server_name text, shard_server_user text)
+    WHERE (p.schema_name, p.table_name) = (s.schema_name, s.table_name)
+        AND p.shard_server_user = creds.username
+        AND p.shard_server_name = (
+            SELECT md5(string_agg(a.availability_zone || a.host_id, ',' ORDER BY a.availability_zone, a.host_id))
+            FROM shard_assigned_host a
+            WHERE (a.replication_group_id, a.version, a.schema_name, a.table_name) =
+                  (s.replication_group_id, s.version, s.schema_name, s.table_name)
+        )
+        AND EXISTS (
+            SELECT 1 FROM json_to_recordset(m.connected_local_shards) AS l(schema_name text, table_name text)
+            WHERE (l.schema_name, l.table_name) = (s.schema_name, s.table_name)
+        )
+);

@@ -221,7 +221,8 @@ CREATE VIEW replica_state AS
         indexes,
         connected_local_shards,
         connected_remote_shards,
-        users
+        users,
+        prepared_remote_shards
     FROM replication_group_member
     WHERE
         member_role = CURRENT_ROLE

@@ -96,6 +96,9 @@ CREATE TABLE  replication_group_config_lock (
     -- most probably it should be separate
     -- but for now it is simpler here
     seed uuid NOT NULL DEFAULT gen_random_uuid(),
+    -- NULL normally; during rollback, retain this snapshot until every replica
+    -- has restored current routes, then unlock it if requested.
+    rollback_unlock boolean,
 
     PRIMARY KEY (replication_group_id, version),
     FOREIGN KEY (replication_group_id, version)
@@ -120,6 +123,7 @@ CREATE TABLE  replication_group_member (
     indexes json NOT NULL DEFAULT '[]',
     connected_local_shards json NOT NULL DEFAULT '[]',
     connected_remote_shards json NOT NULL DEFAULT '[]',
+    prepared_remote_shards json NOT NULL DEFAULT '[]',
     users json NOT NULL DEFAULT '[]',
 
     PRIMARY KEY (replication_group_id, availability_zone, host_id)

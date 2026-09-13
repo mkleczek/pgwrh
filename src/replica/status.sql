@@ -34,21 +34,27 @@ Local shard is considered ready if
 * all non-optional indexes are created
 $$;
 
--- TODO maybe better would be to use pg_depend to link local and foreign tables for the same shard
+-- The destination comes from the actual catalog, not the desired assignment.
 CREATE VIEW connected_remote_shard AS
-    SELECT
-        ls.rel_id
-    FROM
-        remote_shard rs
-            JOIN rel slot ON slot.reg_class = (rs).parent.reg_class
-            JOIN local_rel ls ON ls.slot_rel_id = slot.rel_id
-;
-COMMENT ON VIEW connected_remote_shard IS
-$$
-Remote shards ready to use and connected to slots.
+SELECT ls.rel_id, rs.srvname AS shard_server_name, u.value AS shard_server_user
+FROM remote_shard rs
+    JOIN rel slot ON slot.reg_class = (rs).parent.reg_class
+    JOIN local_rel ls ON ls.slot_rel_id = slot.rel_id
+    JOIN pg_user_mappings um ON um.srvname = rs.srvname AND um.umuser = 0
+    CROSS JOIN LATERAL opts(um.umoptions) u
+WHERE u.key = 'user';
 
-Remote shard is considered ready if ANALYZE was performed on corresponding foreign table.
-$$;
+CREATE VIEW prepared_remote_shard AS
+SELECT sa.rel_id, rs.srvname AS shard_server_name, u.value AS shard_server_user
+FROM shard_assignment_r sa JOIN remote_shard rs ON rs.rel_id = sa.remote_rel_id
+    JOIN pg_user_mappings um ON um.srvname = rs.srvname AND um.umuser = 0
+    CROSS JOIN LATERAL opts(um.umoptions) u
+WHERE u.key = 'user' AND (
+    EXISTS (SELECT 1 FROM pg_statistic WHERE starelid = rs.reg_class)
+    OR EXISTS (SELECT 1 FROM analyzed_remote_pg_class WHERE oid = rs.reg_class)
+);
+COMMENT ON VIEW prepared_remote_shard IS
+'Analyzed foreign leaf replacements, including those staged behind retained local copies.';
 
 CREATE VIEW local_shard_index AS
     SELECT
@@ -69,13 +75,23 @@ $$
 Indexes on local shards except constraint indexes.
 $$;
 
-CREATE FUNCTION report_state() RETURNS void LANGUAGE sql AS
+CREATE FUNCTION report_state() RETURNS void LANGUAGE plpgsql AS
 $$
+BEGIN
+    -- A report must describe a completed sync pass, never an in-flight handoff.
+    IF NOT pg_try_advisory_xact_lock(2895359559) THEN RETURN; END IF;
     UPDATE "@extschema@".fdw_replica_state
         SET
             subscribed_local_shards = (SELECT coalesce((SELECT json_agg(rel_id) FROM "@extschema@".subscribed_local_shard), '[]')),
             connected_local_shards = (SELECT coalesce((SELECT json_agg(rel_id) FROM "@extschema@".connected_local_shard), '[]')),
-            connected_remote_shards = (SELECT coalesce((SELECT json_agg(rel_id) FROM "@extschema@".connected_remote_shard), '[]')),
+            connected_remote_shards = (SELECT coalesce(json_agg(json_build_object(
+                'schema_name', (rel_id).schema_name, 'table_name', (rel_id).table_name,
+                'shard_server_name', shard_server_name, 'shard_server_user', shard_server_user)), '[]')
+                FROM "@extschema@".connected_remote_shard),
+            prepared_remote_shards = (SELECT coalesce(json_agg(json_build_object(
+                'schema_name', (rel_id).schema_name, 'table_name', (rel_id).table_name,
+                'shard_server_name', shard_server_name, 'shard_server_user', shard_server_user)), '[]')
+                FROM "@extschema@".prepared_remote_shard),
             indexes = (SELECT coalesce((SELECT json_agg(i) FROM "@extschema@".local_shard_index i), '[]')),
             users = (SELECT coalesce((SELECT json_agg(u.rolname)
                                       FROM pg_roles u
@@ -84,6 +100,7 @@ $$
                                                     gr.oid = roleid
                                                 AND gr.rolname = format('pgwrh_replica_%s', current_database())),
                                      '[]'));
+END
 $$;
 COMMENT ON FUNCTION report_state() IS
 $$

@@ -554,7 +554,6 @@ scripts (async, transactional, description, commands) AS (
     WHERE
             ready_shard.reg_class IS DISTINCT FROM i.inhrelid
         AND sa.local
-        AND NOT sa.connect_remote
     GROUP BY 1, 2
 
     UNION ALL
@@ -585,6 +584,7 @@ scripts (async, transactional, description, commands) AS (
             ready_shard.reg_class IS DISTINCT FROM i.inhrelid
         AND
             sa.connect_remote
+        AND NOT sa.local
     GROUP BY 1, 2
 
     UNION ALL
@@ -660,6 +660,7 @@ scripts (async, transactional, description, commands) AS (
                 shard_index t
                 WHERE ic.relname = t.index_name AND i.indrelid = reg_class
             )
+        AND (sa.local OR NOT EXISTS (SELECT 1 FROM pg_inherits WHERE inhrelid = i.indrelid))
         AND NOT EXISTS (SELECT 1 FROM
                 pg_constraint
                 WHERE conindid = i.indexrelid
@@ -696,6 +697,11 @@ scripts (async, transactional, description, commands) AS (
             SELECT 1 FROM local_shard WHERE pubname = pub.name
         )
         AND pub.name NOT IN ('pgwrh_controller_ping')
+        AND NOT EXISTS (
+            SELECT 1 FROM pg_subscription_rel sr JOIN pg_inherits i ON i.inhrelid = sr.srrelid
+            WHERE sr.srsubid = s.oid
+                AND NOT EXISTS (SELECT 1 FROM local_shard WHERE reg_class = sr.srrelid)
+        )
     GROUP BY
         s.oid, s.subname
 
@@ -715,7 +721,7 @@ scripts (async, transactional, description, commands) AS (
                     truncatable ''false'',
                     extensions %L,
                     fdw_tuple_cost ''99999'',
-                    analyze_sampling ''system'')',
+                    analyze_sampling ''auto'')',
                 shard_server_name,
                 host, port,
                 dbname,
@@ -841,6 +847,8 @@ scripts (async, transactional, description, commands) AS (
     FROM
         remote_shard rs
     WHERE
+        NOT EXISTS (SELECT 1 FROM pg_inherits WHERE inhrelid = rs.reg_class)
+        AND
         NOT EXISTS (SELECT 1 FROM
             shard_assignment
             WHERE
@@ -889,6 +897,7 @@ scripts (async, transactional, description, commands) AS (
         owned_server fs
     WHERE
             fs.srvname <> 'replica_controller'
+        AND NOT EXISTS (SELECT 1 FROM pg_foreign_table ft JOIN pg_inherits i ON i.inhrelid = ft.ftrelid WHERE ft.ftserver = fs.oid)
         AND NOT EXISTS (SELECT 1 FROM
             shard_assignment WHERE fs.srvname IN (shard_server_name, retained_shard_server_name)
         )

@@ -21,9 +21,14 @@ CREATE FUNCTION start_rollout(
         _replication_group_id text)
     RETURNS void
     SET SEARCH_PATH FROM CURRENT
-    LANGUAGE sql
+    LANGUAGE plpgsql
     AS
 $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM replication_group_config_lock
+               WHERE replication_group_id = _replication_group_id AND rollback_unlock IS NOT NULL) THEN
+        RAISE EXCEPTION 'Rollback has not finished on all replicas';
+    END IF;
     INSERT INTO replication_group_config_lock (replication_group_id, version)
     SELECT
         replication_group_id, version
@@ -41,6 +46,7 @@ $$
                 g.replication_group_id = l.replication_group_id
             AND l.version = next_version(current_version)
             AND g.replication_group_id = $1;
+END
 $$;
 COMMENT ON FUNCTION start_rollout(_replication_group_id text) IS
 $$
@@ -138,7 +144,8 @@ $$;
 COMMENT ON FUNCTION commit_rollout(group_id text, keep_old_config boolean) IS
 $$
 Marks the version being rolled out as current.
-If any of the replicas did not report all remote and local shards as ready error is raised.
+Requires connected target local shards and ready target remote routes. A prepared
+foreign replacement qualifies only while its leaf is still served locally.
 
 # WARNING
 This is destructive operation. During rollout replicas maintain shards from both versions.
@@ -151,19 +158,25 @@ CREATE FUNCTION rollback_rollout(_replication_group_id text, unlock boolean DEFA
     LANGUAGE sql
     AS
 $$
-    UPDATE replication_group
-        SET target_version = current_version
+    -- Keep target copies, indexes and credentials alive while readers restore
+    -- current routes. Clearing acknowledgements also covers in-flight sync plans.
+    UPDATE replication_group_config_lock l SET rollback_unlock = unlock
+    FROM replication_group g
+    WHERE g.replication_group_id = _replication_group_id
+        AND (l.replication_group_id, l.version) = (g.replication_group_id, g.target_version)
+        AND g.current_version <> g.target_version;
+    UPDATE replication_group_member m
+        SET connected_local_shards = '[]', connected_remote_shards = '[]', prepared_remote_shards = '[]'
+    FROM replication_group g
+    WHERE m.replication_group_id = g.replication_group_id
+        AND g.replication_group_id = _replication_group_id
+        AND g.current_version <> g.target_version;
+    UPDATE replication_group SET target_version = current_version
     WHERE replication_group_id = _replication_group_id;
-    DELETE FROM replication_group_config_lock l
-        USING replication_group g
-        WHERE
-                g.replication_group_id = _replication_group_id
-            AND l.replication_group_id = g.replication_group_id
-            AND l.version <> g.current_version
-            AND unlock;
 $$;
 COMMENT ON FUNCTION rollback_rollout(_replication_group_id text, unlock boolean) IS
 $$
 Rolls back any changes that are effects of roll out of new configuration version.
-Unlocks configuration version being rolled out.
+Retains target copies until all replicas report current routes again, then unlocks
+the abandoned configuration if requested. A new rollout waits for that acknowledgement.
 $$;

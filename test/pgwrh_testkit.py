@@ -370,7 +370,7 @@ class MasterHandle:
             ),
             "connected_remote": int(
                 self.query_scalar(
-                    "SELECT count(*) FROM pgwrh.missing_connected_remote_shard "
+                    "SELECT count(*) FROM pgwrh.missing_ready_remote_shard "
                     f"WHERE {filters}"
                 )
             ),

@@ -66,7 +66,8 @@ CREATE FOREIGN TABLE fdw_replica_state (
     indexes json,
     connected_local_shards json,
     connected_remote_shards json,
-    users json
+    users json,
+    prepared_remote_shards json
 ) SERVER replica_controller
 OPTIONS (table_name 'replica_state');
 

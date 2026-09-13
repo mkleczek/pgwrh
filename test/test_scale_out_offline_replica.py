@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+from collections import Counter
 from typing import Iterable
 
 from .pgwrh_testkit import (
@@ -33,6 +34,13 @@ def _set_pending_replication_factor(master, *, factor: int) -> None:
 def _assert_current_shard_replica_count(cluster, *, expected_count: int) -> None:
     current_shards = cluster.master.current_shards()
     assert current_shards, "expected current shard assignments to exist"
+    # Commit permits prepared remote replacements behind retained local copies.
+    # Wait for the subsequent attachment pass before checking the final placement.
+    def converged():
+        counts = Counter(RelationRef(*row) for replica in cluster.replicas
+                         for row in replica.execute("SELECT (rel_id).schema_name, (rel_id).table_name FROM pgwrh.connected_local_shard"))
+        return all(counts[shard] == expected_count for shard in current_shards)
+    wait_until(converged, timeout=60, message='local attachments did not converge after commit')
     for shard in current_shards:
         assert_shard_hosting_replica_count(
             cluster.replicas,
