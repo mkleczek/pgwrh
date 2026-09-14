@@ -1,0 +1,58 @@
+name: PostgreSQL 18
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pg18:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch the pinned PostgreSQL release
+        uses: actions/checkout@v4
+        with:
+          repository: postgres/postgres
+          ref: 62d6c7d3df6287f1bd83199c1a746e50d31571a0
+          path: .build/postgres-source
+          persist-credentials: false
+      - name: Install build and TAP dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bison flex zlib1g-dev libipc-run-perl
+      - name: Build PostgreSQL 18.3 and stock postgres_fdw
+        run: |
+          cd .build/postgres-source
+          ./configure --prefix="$RUNNER_TEMP/pgsql" --without-icu --without-readline --enable-cassert
+          make -j2
+          make install
+          make -C contrib/postgres_fdw -j2 install
+          echo "PG_CONFIG=$RUNNER_TEMP/pgsql/bin/pg_config" >> "$GITHUB_ENV"
+          echo "PG_SOURCE=$GITHUB_WORKSPACE/.build/postgres-source" >> "$GITHUB_ENV"
+      - name: Build the extension and audit exports
+        run: |
+          make -j2
+          python3 tools/check-symbols.py
+      - name: Context integration tests
+        run: python3 test/test_context.py
+      - name: Upstream SQL and isolation regressions
+        run: python3 tools/run-upstream.py
+      - name: Upstream SCRAM authentication TAP
+        run: python3 tools/run-tap.py
+      - name: Preserve test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-18-test-logs
+          path: |
+            regression.diffs
+            regression.out
+            results/
+            output_iso/
+            tmp_check/
+            log/
+            /tmp/pgwrh-fdw-*/postgres.log
