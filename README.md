@@ -47,6 +47,11 @@ Thanks to this it is possible to have more replicas maintain _hot_ data and have
 ## Pure SQL/PGSQL
 This makes it easy to use _pgwrh_ in cloud environments that limit possibilities of custom extension installation.
 
+An optional PostgreSQL 18 C component, `pgwrh_wait`, monitors committed logical
+apply progress and provides waits for read-your-writes barriers. See
+[LSN waiting](docs/lsn-wait.md) for installation, snapshot requirements, and
+the limits of the guarantee. Use `WITH_LSN_WAIT=0` when building SQL-only pgwrh.
+
 ***
 _Caveat_ at the moment _pgwrh_ requires _pg_background_ to operate as it needs a way to execute SQL commands
 outside current transaction (_CREATE/ALTER SUBSCRIPTION_ must not be executed in transaction).
@@ -80,6 +85,10 @@ Install the extension.
 cd pgwrh
 make install
 ```
+The default build includes `pgwrh_wait` and requires PostgreSQL 18 development
+files. On PostgreSQL 16/17 or without the optional component, run
+`make WITH_LSN_WAIT=0 install` instead. Add `pgwrh_wait` to
+`shared_preload_libraries` and restart before using its wait APIs.
 Create extension in PostgreSQL database.
 ```sh
 psql -c "CREATE EXTENSION pgwrh CASCADE"
