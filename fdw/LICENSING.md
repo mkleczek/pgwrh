@@ -27,8 +27,10 @@ upstream branch and release tag remain unmodified.
 
 ## Corresponding source
 
-Source and build/test instructions are available at
-https://github.com/mkleczek/pgwrh_fdw. A source offer for a deployed modified
+Current source and build/test instructions are maintained in the `fdw/`
+subdirectory of https://github.com/mkleczek/pgwrh. The initial standalone release
+came from https://github.com/mkleczek/pgwrh_fdw and its history is preserved.
+A source offer for a deployed modified
 version must cover the corresponding source for that version, including its
 modifications and required build material, as specified by the license.
 Publishing this repository does not automatically publish an operator's later

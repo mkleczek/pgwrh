@@ -71,24 +71,28 @@ per-connection propagation flag can become stale after rollback.
 
 ## Upstream strategy
 
-pgwrh_fdw uses its own release and SQL extension versions, starting at `0.1.0`.
+pgwrh_fdw retains its own SQL extension version, starting at `0.1.0`, while
+source releases are now coordinated with pgwrh.
 The initial SQL install script directly defines the final upstream function
 signatures rather than replaying postgres_fdw's historical upgrades. The C
 entry point `pgwrh_fdw_get_connections_1_2` retains its upstream API suffix;
 that suffix is not a pgwrh_fdw release version. Future upstream SQL changes
 must be adapted to pgwrh_fdw's own install and upgrade paths.
 
-This is a **partial repository fork**, not a full PostgreSQL checkout or a
-library copied under an unrelated vendor tree. `upstream/postgres_fdw` retains
-history filtered to `contrib/postgres_fdw`, with that directory at its root.
+This is a **Git subtree in pgwrh**, imported with the existing fork's full history.
+`upstream/postgres_fdw` retains history filtered to `contrib/postgres_fdw`, with
+that directory at the upstream branch's root. The working component lives at
+`fdw/` in pgwrh and keeps its own PGXS Makefile and SQL extension identity.
 The source release and original full-repository commit are recorded separately.
 
 The initial history extraction uses Git's `filter-branch --subdirectory-filter`
 on a disposable local clone. It is equivalent in scope to `git subtree split`;
 it efficiently visits the commits affecting this directory. Never run this on
 the original PostgreSQL repository or on the working fork. Future releases use
-the same deterministic extraction, fetch its branch, verify ancestry and merge.
-See `tools/import-upstream.py` and [UPSTREAM.md](../UPSTREAM.md).
+the same deterministic extraction, fetch its branch, verify ancestry and merge
+using `git subtree merge --prefix=fdw upstream/postgres_fdw` from the pgwrh root.
+The import helper is `fdw/tools/import-upstream.py`; see
+[UPSTREAM.md](../UPSTREAM.md). No separate fork repository is required.
 
 Keep pristine upstream history, mechanical namespace/PGXS changes, and behavior
 changes separate. Preserve the upstream PostgreSQL notices; pgwrh_fdw additions

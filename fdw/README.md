@@ -12,9 +12,16 @@ can run together in the same database and backend.
 The fork is licensed under **AGPL-3.0-only**, with PostgreSQL's original notices
 and permissions preserved. See [LICENSING.md](LICENSING.md).
 
-The first release is **0.1.0**, tagged `v0.1.0`.
+This directory is maintained as a Git subtree inside pgwrh. Builds, integration,
+and future releases are coordinated in the pgwrh repository. The initial import
+preserves the standalone **0.1.0** release and its PostgreSQL ancestry; `v0.1.0`
+was a tag in that former repository, not a pgwrh release tag. See
+[upstream maintenance](UPSTREAM.md) and [combined packaging](../docs/packaging.md).
 
 ## Build and install
+
+The commands in this README run from the `fdw/` directory. The parent Makefile
+also builds and installs this extension by default.
 
 You need PostgreSQL 18 server development headers, PGXS, libpq, a C compiler,
 and Make. Select the installation explicitly if you have several versions:

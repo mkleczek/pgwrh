@@ -8,13 +8,15 @@ import os
 import tempfile
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[2]
+
 
 def git(*args):
-    return subprocess.check_output(["git", *args], text=True).strip()
+    return subprocess.check_output(["git", "-C", str(ROOT), *args], text=True).strip()
 
 
 if len(sys.argv) != 3 or not re.fullmatch(r"REL_18_\d+", sys.argv[2]):
-    sys.exit("usage: tools/import-upstream.py /local/postgres/repo REL_18_N")
+    sys.exit("usage: python3 fdw/tools/import-upstream.py /local/postgres/repo REL_18_N")
 source = str(Path(sys.argv[1]).resolve(strict=True))
 tag = sys.argv[2]
 if git("status", "--porcelain"):
@@ -38,5 +40,5 @@ git("tag", "-a", "upstream/" + tag, snapshot, "-m",
     f"PostgreSQL {tag}\nUpstream commit: {commit}\n"
     "Filtered path: contrib/postgres_fdw")
 print(f"Imported {tag} ({commit}); filtered tip {snapshot}")
-print("Next: git merge upstream/postgres_fdw")
-print("Update UPSTREAM.md and COPYRIGHT, review lifecycle changes, and test.")
+print("From the pgwrh root: git subtree merge --prefix=fdw upstream/postgres_fdw")
+print("Update fdw/UPSTREAM.md and fdw/COPYRIGHT, review lifecycle changes, and test.")
