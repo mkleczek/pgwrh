@@ -1,6 +1,12 @@
 .build
 .work
+/.ci/
 /pgwrh--*.sql
 result
 /.idea/
-test/__pycache__/
+*.o
+*.so
+*.dylib
+*.bc
+__pycache__/
+.pytest_cache/
