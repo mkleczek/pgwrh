@@ -35,7 +35,7 @@ the deployment by calling `pgwrh.applied_lsn(subscription_name)` in a separate
 health-check transaction before using the GUC protocol.
 
 For the original SQL-only installation (PostgreSQL 16+), use
-`make WITH_LSN_WAIT=0 install`, or the existing `NO_PGXS=1` path. No pgwrh version
+`make WITH_LSN_WAIT=0 WITH_FDW=0 install`, or the existing `NO_PGXS=1` path. No pgwrh version
 upgrade is needed: `pgwrh_wait` is a separate optional extension whose functions
 live in the `pgwrh` schema. Dropping it removes its SQL functions; removing a
 preloaded library requires a server restart.
@@ -80,8 +80,10 @@ disabled subscription **before** starting a wait that needs new progress.
 This guards reads on this subscriber only. With foreign tables, every actual
 remote transaction must execute the same barrier before its snapshot, including
 connections opened after reconnects. Stock `postgres_fdw` does not propagate
-these settings. A coordinator-side wait alone is insufficient. The separate
-`pgwrh_fdw` project can provide that propagation independently.
+these settings. A coordinator-side wait alone is insufficient. The bundled
+[`pgwrh_fdw`](../fdw/README.md) extension provides configurable propagation;
+the receiving extension implements waiting. Packaging the FDW does not convert
+existing foreign servers or configure propagation automatically.
 
 ## SQL API
 

@@ -50,7 +50,9 @@ This makes it easy to use _pgwrh_ in cloud environments that limit possibilities
 An optional PostgreSQL 18 C component, `pgwrh_wait`, monitors committed logical
 apply progress and provides waits for read-your-writes barriers. See
 [LSN waiting](docs/lsn-wait.md) for installation, snapshot requirements, and
-the limits of the guarantee. Use `WITH_LSN_WAIT=0` when building SQL-only pgwrh.
+the limits of the guarantee. The bundled `pgwrh_fdw` extension propagates selected
+transaction settings to foreign servers; see [the FDW documentation](fdw/README.md).
+Use `WITH_LSN_WAIT=0 WITH_FDW=0` when building SQL-only pgwrh.
 
 ***
 _Caveat_ at the moment _pgwrh_ requires _pg_background_ to operate as it needs a way to execute SQL commands
@@ -85,10 +87,15 @@ Install the extension.
 cd pgwrh
 make install
 ```
-The default build includes `pgwrh_wait` and requires PostgreSQL 18 development
-files. On PostgreSQL 16/17 or without the optional component, run
-`make WITH_LSN_WAIT=0 install` instead. Add `pgwrh_wait` to
+The default build includes `pgwrh`, `pgwrh_wait`, and `pgwrh_fdw` and requires
+PostgreSQL 18 development files. The FDW sources are included in this repository
+and release archives; no separate checkout or download is needed to build them.
+On PostgreSQL 16/17 or for SQL-only pgwrh, run
+`make WITH_LSN_WAIT=0 WITH_FDW=0 install` instead. Add `pgwrh_wait` to
 `shared_preload_libraries` and restart before using its wait APIs.
+See [packaging](docs/packaging.md) for a single staged installation suitable for
+one RPM, build options, and package validation. Installing the bundled files does
+not change existing foreign servers or enable transaction-parameter propagation.
 Create extension in PostgreSQL database.
 ```sh
 psql -c "CREATE EXTENSION pgwrh CASCADE"
