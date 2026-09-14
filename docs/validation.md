@@ -1,6 +1,6 @@
 # Validation record
 
-Validated locally on 2026-09-14, macOS arm64.
+Validated on 2026-09-14, locally on macOS arm64 and in Linux CI.
 
 | Check | PostgreSQL 18.1 (Homebrew) | PostgreSQL 18.3 (built from pinned tag) |
 | --- | --- | --- |
@@ -37,6 +37,11 @@ Investigation resolved these initial test failures:
   returns `22023` for the tested GUC validation failure and `08000` when rejecting
   the incomplete connection. Assertions now check those codes.
 
-CI targets Linux with the same pinned PostgreSQL 18.3 sources and assertions
-enabled. Its configured checks do not, by themselves, establish a completed
-Linux validation run. No other PostgreSQL version or platform is claimed tested.
+Linux CI (Ubuntu 24.04, PostgreSQL 18.3, assertions enabled) also passed the
+build, all 22 integration tests, both upstream SQL suites, the isolation suite,
+all seven SCRAM assertions, and the dynamic export audit. This includes both
+extension load orders under ELF, in addition to the macOS checks above.
+
+Evidence: [successful CI run 34825897295](https://github.com/mkleczek/pgwrh_fdw/actions/runs/34825897295)
+for implementation commit `2230540766d846529f7548555c3f4a48465e0efc`.
+No other PostgreSQL version or platform is claimed tested.
