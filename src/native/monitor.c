@@ -249,6 +249,7 @@ pgwrh_applied_lsn(PG_FUNCTION_ARGS)
 void
 _PG_init(void)
 {
+	pgwrh_init_wait();
 	if (!process_shared_preload_libraries_in_progress)
 		return;
 	DefineCustomIntVariable("pgwrh.max_tracked_subscriptions",

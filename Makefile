@@ -34,7 +34,7 @@ $(error WITH_LSN_WAIT=1 requires PGXS; omit NO_PGXS)
 endif
 EXTENSION += pgwrh_wait
 MODULE_big = pgwrh_wait
-OBJS = src/native/monitor.o
+OBJS = src/native/monitor.o src/native/wait.o
 DATA += src/native/pgwrh_wait--1.0.sql
 endif
 
@@ -77,4 +77,4 @@ prepare:
 
 .PHONY: all prepare updates
 
-src/native/monitor.o: src/native/monitor.h
+src/native/monitor.o src/native/wait.o: src/native/monitor.h
