@@ -15,16 +15,33 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 EXTENSION = pgwrh
-EXTVERSION = $(shell grep default_version $(EXTENSION).control | \
+.DEFAULT_GOAL := all
+EXTVERSION = $(shell grep default_version pgwrh.control | \
                sed -e "s/default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/")
 BUILD = .build
-DATA = $(wildcard $(BUILD)/pgwrh/*.sql)
+DATA = $(BUILD)/pgwrh/pgwrh--$(EXTVERSION).sql $(wildcard src/updates/*.sql)
 EXTRA_CLEAN = $(BUILD)
+
+# Keep the original SQL-only installation available.
+ifdef NO_PGXS
+WITH_LSN_WAIT ?= 0
+else
+WITH_LSN_WAIT ?= 1
+endif
+ifeq ($(WITH_LSN_WAIT),1)
+ifdef NO_PGXS
+$(error WITH_LSN_WAIT=1 requires PGXS; omit NO_PGXS)
+endif
+EXTENSION += pgwrh_wait
+MODULE_big = pgwrh_wait
+OBJS = src/native/monitor.o
+DATA += src/native/pgwrh_wait--1.0.sql
+endif
 
 MASTER = $(shell tsort src/master/deps.txt | sed -e 's/^/src\/master\//' -e 's/$$/\.sql/'  | xargs echo)
 REPLICA = $(shell tsort src/replica/deps.txt | sed -e 's/^/src\/replica\//' -e 's/$$/\.sql/'  | xargs echo)
 
-PG_CONFIG = pg_config
+PG_CONFIG ?= pg_config
 
 ifdef NO_PGXS
 # Simple install for systems without pgxs
@@ -48,14 +65,16 @@ include $(PGXS)
 
 endif # NO_PGXS
 
-$(BUILD)/pgwrh/$(EXTENSION)--$(EXTVERSION).sql: src/common.sql $(MASTER) $(REPLICA)
+$(BUILD)/pgwrh/pgwrh--$(EXTVERSION).sql: src/common.sql $(MASTER) $(REPLICA) | prepare
 	cat $^ > $@
 
-updates: $(wildcard src/updates/*.sql)
+updates: $(wildcard src/updates/*.sql) | prepare
 	cp $^ $(BUILD)/pgwrh
 
-all: prepare $(EXTENSION).control $(BUILD)/pgwrh/$(EXTENSION)--$(EXTVERSION).sql updates
+all: prepare pgwrh.control $(BUILD)/pgwrh/pgwrh--$(EXTVERSION).sql updates
 prepare:
 	mkdir -p ${BUILD}/pgwrh
 
-PHONY: all prepare
+.PHONY: all prepare updates
+
+src/native/monitor.o: src/native/monitor.h

@@ -17,8 +17,10 @@
           src = ./.;
           buildInputs = [ pkgs.coreutils pkgs.postgresql ];
           buildPhase = ''
-            USEPGXS=1 make DESTDIR=$out all
+            # The existing lock file predates PostgreSQL 18.
+            USEPGXS=1 make WITH_LSN_WAIT=0 DESTDIR=$out all
           '';
+          makeFlags = [ "WITH_LSN_WAIT=0" ];
           meta = defaultMeta;
         };
 

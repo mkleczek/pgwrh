@@ -3,3 +3,9 @@
 /pgwrh--*.sql
 result
 /.idea/
+*.o
+*.so
+*.dylib
+*.bc
+__pycache__/
+.pytest_cache/
