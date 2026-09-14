@@ -25,6 +25,7 @@
 #include "commands/extension.h"
 #include "libpq/libpq-be.h"
 #include "pgwrh_fdw.h"
+#include "transaction_context.h"
 #include "utils/guc.h"
 #include "utils/varlena.h"
 
@@ -161,6 +162,10 @@ pgwrh_fdw_validator(PG_FUNCTION_ARGS)
 						 errmsg("\"%s\" must be a floating point value greater than or equal to zero",
 								def->defname)));
 		}
+		else if (strcmp(def->defname, "transaction_parameters") == 0)
+		{
+			list_free_deep(pgwrh_fdw_parse_parameters(defGetString(def)));
+		}
 		else if (strcmp(def->defname, "extensions") == 0)
 		{
 			/* check list syntax, warn about uninstalled extensions */
@@ -249,6 +254,7 @@ InitPgFdwOptions(void)
 
 	/* non-libpq FDW-specific FDW options */
 	static const PgFdwOption non_libpq_options[] = {
+		{"transaction_parameters", ForeignServerRelationId, false},
 		{"schema_name", ForeignTableRelationId, false},
 		{"table_name", ForeignTableRelationId, false},
 		{"column_name", AttributeRelationId, false},
@@ -581,6 +587,8 @@ process_pgfdw_appname(const char *appname)
 void
 _PG_init(void)
 {
+	pgwrh_fdw_context_init();
+
 	/*
 	 * Unlike application_name GUC, don't set GUC_IS_NAME flag nor check_hook
 	 * to allow pgwrh_fdw.application_name to be any string more than
