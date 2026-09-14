@@ -82,6 +82,20 @@ class ContextTests(unittest.TestCase):
         if fragment:
             self.assertIn(fragment, str(cm.exception))
 
+    def test_initial_release_installation(self):
+        self.assertEqual(self.c.scalar(
+            "SELECT extversion FROM pg_extension WHERE extname = 'pgwrh_fdw'"), "0.1.0")
+        self.assertEqual(self.c.sql(
+            "SELECT version FROM pg_available_extension_versions WHERE name = 'pgwrh_fdw'"),
+            [("0.1.0",)])
+        self.assertEqual(self.c.sql("SELECT * FROM pg_extension_update_paths('pgwrh_fdw')"), [])
+        self.assertEqual(self.c.scalar(
+            "SELECT version FROM pg_get_loaded_modules() WHERE module_name = 'pgwrh_fdw'"), "0.1.0")
+        self.assertEqual(self.c.scalar("SELECT count(*) FROM pgwrh_fdw_get_connections()"), "0")
+        self.assertEqual(self.c.scalar("SELECT count(*) FROM pgwrh_fdw_get_connections(true)"), "0")
+        self.assertEqual(self.c.scalar("SELECT pgwrh_fdw_disconnect('s_a')"), "f")
+        self.assertEqual(self.c.scalar("SELECT pgwrh_fdw_disconnect_all()"), "f")
+
     def test_multiple_participants_and_opaque_values(self):
         self.begin(watermark="opaque, not necessarily an LSN")
         rows = self.c.sql("SELECT request_id, watermark FROM a UNION ALL SELECT request_id, watermark FROM b")

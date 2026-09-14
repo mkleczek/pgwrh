@@ -2,6 +2,22 @@
 
 Validated on 2026-09-14, locally on macOS arm64 and in Linux CI.
 
+## Initial 0.1.0 release
+
+The release version and consolidated installation script were validated locally
+on PostgreSQL 18.3 (macOS arm64):
+
+* All 23 integration tests passed, including a fresh installation with SQL and
+  module version `0.1.0`, no inherited extension versions or upgrade paths,
+  and working connection-management functions.
+* Both upstream SQL suites, the isolation suite, and all seven SCRAM TAP
+  assertions passed.
+* The dynamic export audit passed with the same 14 prescribed symbols.
+* PGXS installation into a fresh staging directory produced the library,
+  control file, and exactly one SQL script: `pgwrh_fdw--0.1.0.sql`.
+
+## Implementation validation before release versioning
+
 | Check | PostgreSQL 18.1 (Homebrew) | PostgreSQL 18.3 (built from pinned tag) |
 | --- | --- | --- |
 | PGXS extension build | Pass | Pass |

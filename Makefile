@@ -15,7 +15,7 @@ PG_CPPFLAGS = -I$(libpq_srcdir)
 SHLIB_LINK_INTERNAL = $(libpq)
 
 EXTENSION = pgwrh_fdw
-DATA = pgwrh_fdw--1.0.sql pgwrh_fdw--1.0--1.1.sql pgwrh_fdw--1.1--1.2.sql
+DATA = pgwrh_fdw--0.1.0.sql
 
 REGRESS = pgwrh_fdw query_cancel
 ISOLATION = eval_plan_qual

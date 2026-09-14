@@ -107,6 +107,9 @@ class Cluster:
         subprocess.run(["make", "-s", "-C", "test", "PG_CONFIG=" + PG_CONFIG],
                        cwd=ROOT, check=True)
         (self.stage / "extension").mkdir(parents=True, exist_ok=True)
+        # A previous build may have staged SQL versions that no longer ship.
+        for p in (self.stage / "extension").glob("pgwrh_fdw--*.sql"):
+            p.unlink()
         for p in ROOT.glob("pgwrh_fdw--*.sql"):
             shutil.copy(p, self.stage / "extension" / p.name)
         control = (ROOT / "pgwrh_fdw.control").read_text()

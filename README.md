@@ -12,6 +12,8 @@ can run together in the same database and backend.
 The fork is licensed under **AGPL-3.0-only**, with PostgreSQL's original notices
 and permissions preserved. See [LICENSING.md](LICENSING.md).
 
+The first release is **0.1.0**, tagged `v0.1.0`.
+
 ## Build and install
 
 You need PostgreSQL 18 server development headers, PGXS, libpq, a C compiler,
@@ -23,9 +25,18 @@ make PG_CONFIG=/path/to/postgresql-18/bin/pg_config install
 ```
 
 The install command needs write access to that PostgreSQL installation.
-Builds for other major versions are rejected. The SQL catalog version `1.2`
-and its upgrade scripts are inherited from the upstream FDW API; they do not
-refer to a pgwrh release.
+Builds for other major versions are rejected. Both the SQL extension version
+and the library's module version are `0.1.0`. A fresh `CREATE EXTENSION pgwrh_fdw`
+uses the single `pgwrh_fdw--0.1.0.sql` installation script, including all
+connection-management functions. There are no upgrade scripts for this first
+release; future releases will add them when their SQL definitions need changes.
+
+The former `1.0`/`1.1`/`1.2` install chain was inherited during development and
+was never a pgwrh_fdw release. There is no migration path from those development
+snapshots. Existing experimental installations need a planned recreation of
+the extension and its dependent foreign objects; installing the new files
+alone does not change their catalog version. No existing objects are removed
+automatically.
 
 ## Configuration
 

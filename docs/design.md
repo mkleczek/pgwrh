@@ -71,6 +71,13 @@ per-connection propagation flag can become stale after rollback.
 
 ## Upstream strategy
 
+pgwrh_fdw uses its own release and SQL extension versions, starting at `0.1.0`.
+The initial SQL install script directly defines the final upstream function
+signatures rather than replaying postgres_fdw's historical upgrades. The C
+entry point `pgwrh_fdw_get_connections_1_2` retains its upstream API suffix;
+that suffix is not a pgwrh_fdw release version. Future upstream SQL changes
+must be adapted to pgwrh_fdw's own install and upgrade paths.
+
 This is a **partial repository fork**, not a full PostgreSQL checkout or a
 library copied under an unrelated vendor tree. `upstream/postgres_fdw` retains
 history filtered to `contrib/postgres_fdw`, with that directory at its root.
