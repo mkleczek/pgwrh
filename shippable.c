@@ -1,3 +1,8 @@
+/*
+ * pgwrh_fdw modifications Copyright (c) 2026, pgwrh_fdw contributors.
+ * Licensed under GNU AGPL version 3 only; see LICENSE and LICENSING.md.
+ * Original PostgreSQL notices and permissions are retained below.
+ */
 /*-------------------------------------------------------------------------
  *
  * shippable.c
@@ -16,7 +21,7 @@
  * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
- *	  contrib/postgres_fdw/shippable.c
+ *	  contrib/pgwrh_fdw/shippable.c
  *
  *-------------------------------------------------------------------------
  */
@@ -25,7 +30,7 @@
 
 #include "access/transam.h"
 #include "catalog/dependency.h"
-#include "postgres_fdw.h"
+#include "pgwrh_fdw.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
 #include "utils/syscache.h"

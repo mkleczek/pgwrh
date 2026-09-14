@@ -2,20 +2,20 @@
 -- create FDW objects
 -- ===================================================================
 
-CREATE EXTENSION postgres_fdw;
+CREATE EXTENSION pgwrh_fdw;
 
-CREATE SERVER testserver1 FOREIGN DATA WRAPPER postgres_fdw;
+CREATE SERVER testserver1 FOREIGN DATA WRAPPER pgwrh_fdw;
 DO $d$
     BEGIN
-        EXECUTE $$CREATE SERVER loopback FOREIGN DATA WRAPPER postgres_fdw
+        EXECUTE $$CREATE SERVER loopback FOREIGN DATA WRAPPER pgwrh_fdw
             OPTIONS (dbname '$$||current_database()||$$',
                      port '$$||current_setting('port')||$$'
             )$$;
-        EXECUTE $$CREATE SERVER loopback2 FOREIGN DATA WRAPPER postgres_fdw
+        EXECUTE $$CREATE SERVER loopback2 FOREIGN DATA WRAPPER pgwrh_fdw
             OPTIONS (dbname '$$||current_database()||$$',
                      port '$$||current_setting('port')||$$'
             )$$;
-        EXECUTE $$CREATE SERVER loopback3 FOREIGN DATA WRAPPER postgres_fdw
+        EXECUTE $$CREATE SERVER loopback3 FOREIGN DATA WRAPPER pgwrh_fdw
             OPTIONS (dbname '$$||current_database()||$$',
                      port '$$||current_setting('port')||$$'
             )$$;
@@ -373,7 +373,7 @@ SELECT * FROM ft1 WHERE c1 = ANY (ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
 SELECT * FROM ft2 WHERE c1 = ANY (ARRAY(SELECT c1 FROM ft1 WHERE c1 < 5));
 
 -- user-defined operator/function
-CREATE FUNCTION postgres_fdw_abs(int) RETURNS int AS $$
+CREATE FUNCTION pgwrh_fdw_abs(int) RETURNS int AS $$
 BEGIN
 RETURN abs($1);
 END
@@ -395,8 +395,8 @@ SELECT count(c3) FROM ft1 t1 WHERE t1.c1 = t1.c2;
 
 -- by default, user-defined ones cannot
 EXPLAIN (VERBOSE, COSTS OFF)
-  SELECT count(c3) FROM ft1 t1 WHERE t1.c1 = postgres_fdw_abs(t1.c2);
-SELECT count(c3) FROM ft1 t1 WHERE t1.c1 = postgres_fdw_abs(t1.c2);
+  SELECT count(c3) FROM ft1 t1 WHERE t1.c1 = pgwrh_fdw_abs(t1.c2);
+SELECT count(c3) FROM ft1 t1 WHERE t1.c1 = pgwrh_fdw_abs(t1.c2);
 EXPLAIN (VERBOSE, COSTS OFF)
   SELECT count(c3) FROM ft1 t1 WHERE t1.c1 === t1.c2;
 SELECT count(c3) FROM ft1 t1 WHERE t1.c1 === t1.c2;
@@ -407,14 +407,14 @@ EXPLAIN (VERBOSE, COSTS OFF)
 SELECT * FROM ft1 t1 WHERE t1.c1 === t1.c2 order by t1.c2 limit 1;
 
 -- but let's put them in an extension ...
-ALTER EXTENSION postgres_fdw ADD FUNCTION postgres_fdw_abs(int);
-ALTER EXTENSION postgres_fdw ADD OPERATOR === (int, int);
-ALTER SERVER loopback OPTIONS (ADD extensions 'postgres_fdw');
+ALTER EXTENSION pgwrh_fdw ADD FUNCTION pgwrh_fdw_abs(int);
+ALTER EXTENSION pgwrh_fdw ADD OPERATOR === (int, int);
+ALTER SERVER loopback OPTIONS (ADD extensions 'pgwrh_fdw');
 
 -- ... now they can be shipped
 EXPLAIN (VERBOSE, COSTS OFF)
-  SELECT count(c3) FROM ft1 t1 WHERE t1.c1 = postgres_fdw_abs(t1.c2);
-SELECT count(c3) FROM ft1 t1 WHERE t1.c1 = postgres_fdw_abs(t1.c2);
+  SELECT count(c3) FROM ft1 t1 WHERE t1.c1 = pgwrh_fdw_abs(t1.c2);
+SELECT count(c3) FROM ft1 t1 WHERE t1.c1 = pgwrh_fdw_abs(t1.c2);
 EXPLAIN (VERBOSE, COSTS OFF)
   SELECT count(c3) FROM ft1 t1 WHERE t1.c1 === t1.c2;
 SELECT count(c3) FROM ft1 t1 WHERE t1.c1 === t1.c2;
@@ -468,7 +468,7 @@ WHERE c1 = 642 AND length(to_tsvector('custom_search'::regconfig, c3)) > 0;
 SELECT c1, to_tsvector('custom_search'::regconfig, c3) FROM ft1
 WHERE c1 = 642 AND length(to_tsvector('custom_search'::regconfig, c3)) > 0;
 -- but if it's in a shippable extension, it can be shipped
-ALTER EXTENSION postgres_fdw ADD TEXT SEARCH CONFIGURATION public.custom_search;
+ALTER EXTENSION pgwrh_fdw ADD TEXT SEARCH CONFIGURATION public.custom_search;
 -- however, that doesn't flush the shippability cache, so do a quick reconnect
 \c -
 EXPLAIN (VERBOSE, COSTS OFF)
@@ -613,12 +613,12 @@ SELECT t1.c1, t2.c1 FROM ft4 t1 FULL JOIN ft5 t2 ON (t1.c1 = t2.c1) WHERE (t1.c1
 SELECT t1.c1, t2.c1 FROM ft4 t1 FULL JOIN ft5 t2 ON (t1.c1 = t2.c1) WHERE (t1.c1 = t2.c1 OR t1.c1 IS NULL) ORDER BY t1.c1, t2.c1 OFFSET 10 LIMIT 10;
 -- full outer join + WHERE clause with shippable extensions set
 EXPLAIN (VERBOSE, COSTS OFF)
-SELECT t1.c1, t2.c2, t1.c3 FROM ft1 t1 FULL JOIN ft2 t2 ON (t1.c1 = t2.c1) WHERE postgres_fdw_abs(t1.c1) > 0 OFFSET 10 LIMIT 10;
+SELECT t1.c1, t2.c2, t1.c3 FROM ft1 t1 FULL JOIN ft2 t2 ON (t1.c1 = t2.c1) WHERE pgwrh_fdw_abs(t1.c1) > 0 OFFSET 10 LIMIT 10;
 ALTER SERVER loopback OPTIONS (DROP extensions);
 -- full outer join + WHERE clause with shippable extensions not set
 EXPLAIN (VERBOSE, COSTS OFF)
-SELECT t1.c1, t2.c2, t1.c3 FROM ft1 t1 FULL JOIN ft2 t2 ON (t1.c1 = t2.c1) WHERE postgres_fdw_abs(t1.c1) > 0 OFFSET 10 LIMIT 10;
-ALTER SERVER loopback OPTIONS (ADD extensions 'postgres_fdw');
+SELECT t1.c1, t2.c2, t1.c3 FROM ft1 t1 FULL JOIN ft2 t2 ON (t1.c1 = t2.c1) WHERE pgwrh_fdw_abs(t1.c1) > 0 OFFSET 10 LIMIT 10;
+ALTER SERVER loopback OPTIONS (ADD extensions 'pgwrh_fdw');
 -- join two tables with FOR UPDATE clause
 -- tests whole-row reference for row marks
 EXPLAIN (VERBOSE, COSTS OFF)
@@ -731,9 +731,9 @@ SELECT * FROM local_tbl LEFT JOIN (SELECT ft1.*, COALESCE(ft1.c3 || ft2.c3, 'foo
 ALTER SERVER loopback OPTIONS (DROP extensions);
 ALTER SERVER loopback OPTIONS (ADD fdw_startup_cost '10000.0');
 EXPLAIN (VERBOSE, COSTS OFF)
-SELECT * FROM local_tbl LEFT JOIN (SELECT ft1.* FROM ft1 INNER JOIN ft2 ON (ft1.c1 = ft2.c1 AND ft1.c1 < 100 AND (ft1.c1 - postgres_fdw_abs(ft2.c2)) = 0)) ss ON (local_tbl.c3 = ss.c3) ORDER BY local_tbl.c1 FOR UPDATE OF local_tbl;
+SELECT * FROM local_tbl LEFT JOIN (SELECT ft1.* FROM ft1 INNER JOIN ft2 ON (ft1.c1 = ft2.c1 AND ft1.c1 < 100 AND (ft1.c1 - pgwrh_fdw_abs(ft2.c2)) = 0)) ss ON (local_tbl.c3 = ss.c3) ORDER BY local_tbl.c1 FOR UPDATE OF local_tbl;
 ALTER SERVER loopback OPTIONS (DROP fdw_startup_cost);
-ALTER SERVER loopback OPTIONS (ADD extensions 'postgres_fdw');
+ALTER SERVER loopback OPTIONS (ADD extensions 'pgwrh_fdw');
 
 DROP TABLE local_tbl;
 
@@ -951,9 +951,9 @@ explain (verbose, costs off)
 select c2, least_agg(c1) from ft1 group by c2 order by c2;
 
 -- Add function and aggregate into extension
-alter extension postgres_fdw add function least_accum(anyelement, variadic anyarray);
-alter extension postgres_fdw add aggregate least_agg(variadic items anyarray);
-alter server loopback options (set extensions 'postgres_fdw');
+alter extension pgwrh_fdw add function least_accum(anyelement, variadic anyarray);
+alter extension pgwrh_fdw add aggregate least_agg(variadic items anyarray);
+alter server loopback options (set extensions 'pgwrh_fdw');
 
 -- Now aggregate will be pushed.  Aggregate will display VARIADIC argument.
 explain (verbose, costs off)
@@ -961,9 +961,9 @@ select c2, least_agg(c1) from ft1 where c2 < 100 group by c2 order by c2;
 select c2, least_agg(c1) from ft1 where c2 < 100 group by c2 order by c2;
 
 -- Remove function and aggregate from extension
-alter extension postgres_fdw drop function least_accum(anyelement, variadic anyarray);
-alter extension postgres_fdw drop aggregate least_agg(variadic items anyarray);
-alter server loopback options (set extensions 'postgres_fdw');
+alter extension pgwrh_fdw drop function least_accum(anyelement, variadic anyarray);
+alter extension pgwrh_fdw drop aggregate least_agg(variadic items anyarray);
+alter server loopback options (set extensions 'pgwrh_fdw');
 
 -- Not pushed down as we have dropped objects from extension.
 explain (verbose, costs off)
@@ -1022,13 +1022,13 @@ select * from ft2 order by c1 using operator(public.<^);
 ANALYZE ft2;
 
 -- Add into extension
-alter extension postgres_fdw add operator class my_op_class using btree;
-alter extension postgres_fdw add function my_op_cmp(a int, b int);
-alter extension postgres_fdw add operator family my_op_family using btree;
-alter extension postgres_fdw add operator public.<^(int, int);
-alter extension postgres_fdw add operator public.=^(int, int);
-alter extension postgres_fdw add operator public.>^(int, int);
-alter server loopback options (set extensions 'postgres_fdw');
+alter extension pgwrh_fdw add operator class my_op_class using btree;
+alter extension pgwrh_fdw add function my_op_cmp(a int, b int);
+alter extension pgwrh_fdw add operator family my_op_family using btree;
+alter extension pgwrh_fdw add operator public.<^(int, int);
+alter extension pgwrh_fdw add operator public.=^(int, int);
+alter extension pgwrh_fdw add operator public.>^(int, int);
+alter server loopback options (set extensions 'pgwrh_fdw');
 
 -- Now this will be pushed as sort operator is part of the extension.
 alter server loopback options (add fdw_tuple_cost '0.5');
@@ -1042,13 +1042,13 @@ explain (verbose, costs off)
 select * from ft2 order by c1 using operator(public.<^);
 
 -- Remove from extension
-alter extension postgres_fdw drop operator class my_op_class using btree;
-alter extension postgres_fdw drop function my_op_cmp(a int, b int);
-alter extension postgres_fdw drop operator family my_op_family using btree;
-alter extension postgres_fdw drop operator public.<^(int, int);
-alter extension postgres_fdw drop operator public.=^(int, int);
-alter extension postgres_fdw drop operator public.>^(int, int);
-alter server loopback options (set extensions 'postgres_fdw');
+alter extension pgwrh_fdw drop operator class my_op_class using btree;
+alter extension pgwrh_fdw drop function my_op_cmp(a int, b int);
+alter extension pgwrh_fdw drop operator family my_op_family using btree;
+alter extension pgwrh_fdw drop operator public.<^(int, int);
+alter extension pgwrh_fdw drop operator public.=^(int, int);
+alter extension pgwrh_fdw drop operator public.>^(int, int);
+alter server loopback options (set extensions 'pgwrh_fdw');
 
 -- This will not be pushed as sort operator is now removed from the extension.
 explain (verbose, costs off)
@@ -1219,7 +1219,7 @@ EXPLAIN (VERBOSE, COSTS OFF) EXECUTE st8;
 ALTER SERVER loopback OPTIONS (DROP extensions);
 EXPLAIN (VERBOSE, COSTS OFF) EXECUTE st8;
 EXECUTE st8;
-ALTER SERVER loopback OPTIONS (ADD extensions 'postgres_fdw');
+ALTER SERVER loopback OPTIONS (ADD extensions 'pgwrh_fdw');
 
 -- cleanup
 DEALLOCATE st1;
@@ -1612,10 +1612,10 @@ INSERT INTO ft2 (c1,c2,c3)
 -- this will do a remote seqscan, causing unstable result order, so sort
 EXPLAIN (verbose, costs off)
 WITH cte AS (
-  UPDATE ft2 SET c3 = 'bar' WHERE postgres_fdw_abs(c1) > 2000 RETURNING *
+  UPDATE ft2 SET c3 = 'bar' WHERE pgwrh_fdw_abs(c1) > 2000 RETURNING *
 ) SELECT * FROM cte ORDER BY c1;          -- can't be pushed down
 WITH cte AS (
-  UPDATE ft2 SET c3 = 'bar' WHERE postgres_fdw_abs(c1) > 2000 RETURNING *
+  UPDATE ft2 SET c3 = 'bar' WHERE pgwrh_fdw_abs(c1) > 2000 RETURNING *
 ) SELECT * FROM cte ORDER BY c1;
 
 EXPLAIN (verbose, costs off)
@@ -1637,7 +1637,7 @@ DELETE FROM ft2
   WHERE ft2.c1 > 2000 AND ft2.c2 = ft4.c1
   RETURNING ft2.c1, ft2.c2, ft2.c3;
 DELETE FROM ft2 WHERE ft2.c1 > 2000;
-ALTER SERVER loopback OPTIONS (ADD extensions 'postgres_fdw');
+ALTER SERVER loopback OPTIONS (ADD extensions 'pgwrh_fdw');
 
 -- Test that trigger on remote table works as expected
 CREATE OR REPLACE FUNCTION "S 1".F_BRTRIG() RETURNS trigger AS $$
@@ -3204,7 +3204,7 @@ ROLLBACK;
 BEGIN;
 
 
-CREATE SERVER fetch101 FOREIGN DATA WRAPPER postgres_fdw OPTIONS( fetch_size '101' );
+CREATE SERVER fetch101 FOREIGN DATA WRAPPER pgwrh_fdw OPTIONS( fetch_size '101' );
 
 SELECT count(*)
 FROM pg_foreign_server
@@ -3366,7 +3366,7 @@ SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b HAVING sum(a) < 700 
 -- Non-superuser cannot create a FDW without a password in the connstr
 CREATE ROLE regress_nosuper NOSUPERUSER;
 
-GRANT USAGE ON FOREIGN DATA WRAPPER postgres_fdw TO regress_nosuper;
+GRANT USAGE ON FOREIGN DATA WRAPPER pgwrh_fdw TO regress_nosuper;
 
 SET ROLE regress_nosuper;
 
@@ -3375,7 +3375,7 @@ SHOW is_superuser;
 -- This will be OK, we can create the FDW
 DO $d$
     BEGIN
-        EXECUTE $$CREATE SERVER loopback_nopw FOREIGN DATA WRAPPER postgres_fdw
+        EXECUTE $$CREATE SERVER loopback_nopw FOREIGN DATA WRAPPER pgwrh_fdw
             OPTIONS (dbname '$$||current_database()||$$',
                      port '$$||current_setting('port')||$$'
             )$$;
@@ -3503,12 +3503,12 @@ SELECT 1 FROM ft1 LIMIT 1;    -- should fail
 COMMIT;
 
 -- =============================================================================
--- test connection invalidation cases and postgres_fdw_get_connections function
+-- test connection invalidation cases and pgwrh_fdw_get_connections function
 -- =============================================================================
 -- Let's ensure to close all the existing cached connections.
-SELECT 1 FROM postgres_fdw_disconnect_all();
+SELECT 1 FROM pgwrh_fdw_disconnect_all();
 -- No cached connections, so no records should be output.
-SELECT server_name FROM postgres_fdw_get_connections() ORDER BY 1;
+SELECT server_name FROM pgwrh_fdw_get_connections() ORDER BY 1;
 -- This test case is for closing the connection in pgfdw_xact_callback
 BEGIN;
 -- Connection xact depth becomes 1 i.e. the connection is in midst of the xact.
@@ -3516,7 +3516,7 @@ SELECT 1 FROM ft1 LIMIT 1;
 SELECT 1 FROM ft7 LIMIT 1;
 -- List all the existing cached connections. loopback and loopback3 should be
 -- output.
-SELECT server_name FROM postgres_fdw_get_connections() ORDER BY 1;
+SELECT server_name FROM pgwrh_fdw_get_connections() ORDER BY 1;
 -- Connections are not closed at the end of the alter and drop statements.
 -- That's because the connections are in midst of this xact,
 -- they are just marked as invalid in pgfdw_inval_callback.
@@ -3532,15 +3532,15 @@ SELECT server_name, user_name = CURRENT_USER as "user_name = CURRENT_USER",
   remote_backend_pid = ANY(SELECT pid FROM pg_stat_activity
   WHERE backend_type = 'client backend' AND pid <> pg_backend_pid())
   as remote_backend_pid
-  FROM postgres_fdw_get_connections() ORDER BY 1;
+  FROM pgwrh_fdw_get_connections() ORDER BY 1;
 -- The invalid connections get closed in pgfdw_xact_callback during commit.
 COMMIT;
 -- All cached connections were closed while committing above xact, so no
 -- records should be output.
-SELECT server_name FROM postgres_fdw_get_connections() ORDER BY 1;
+SELECT server_name FROM pgwrh_fdw_get_connections() ORDER BY 1;
 
 -- =======================================================================
--- test postgres_fdw_disconnect and postgres_fdw_disconnect_all functions
+-- test pgwrh_fdw_disconnect and pgwrh_fdw_disconnect_all functions
 -- =======================================================================
 BEGIN;
 -- Ensure to cache loopback connection.
@@ -3549,30 +3549,30 @@ SELECT 1 FROM ft1 LIMIT 1;
 SELECT 1 FROM ft6 LIMIT 1;
 -- List all the existing cached connections. loopback and loopback2 should be
 -- output.
-SELECT server_name FROM postgres_fdw_get_connections() ORDER BY 1;
+SELECT server_name FROM pgwrh_fdw_get_connections() ORDER BY 1;
 -- Issue a warning and return false as loopback connection is still in use and
 -- can not be closed.
-SELECT postgres_fdw_disconnect('loopback');
+SELECT pgwrh_fdw_disconnect('loopback');
 -- List all the existing cached connections. loopback and loopback2 should be
 -- output.
-SELECT server_name FROM postgres_fdw_get_connections() ORDER BY 1;
+SELECT server_name FROM pgwrh_fdw_get_connections() ORDER BY 1;
 -- Return false as connections are still in use, warnings are issued.
 -- But disable warnings temporarily because the order of them is not stable.
 SET client_min_messages = 'ERROR';
-SELECT postgres_fdw_disconnect_all();
+SELECT pgwrh_fdw_disconnect_all();
 RESET client_min_messages;
 COMMIT;
 -- Ensure that loopback2 connection is closed.
-SELECT 1 FROM postgres_fdw_disconnect('loopback2');
-SELECT server_name FROM postgres_fdw_get_connections() WHERE server_name = 'loopback2';
+SELECT 1 FROM pgwrh_fdw_disconnect('loopback2');
+SELECT server_name FROM pgwrh_fdw_get_connections() WHERE server_name = 'loopback2';
 -- Return false as loopback2 connection is closed already.
-SELECT postgres_fdw_disconnect('loopback2');
+SELECT pgwrh_fdw_disconnect('loopback2');
 -- Return an error as there is no foreign server with given name.
-SELECT postgres_fdw_disconnect('unknownserver');
+SELECT pgwrh_fdw_disconnect('unknownserver');
 -- Let's ensure to close all the existing cached connections.
-SELECT 1 FROM postgres_fdw_disconnect_all();
+SELECT 1 FROM pgwrh_fdw_disconnect_all();
 -- No cached connections, so no records should be output.
-SELECT server_name FROM postgres_fdw_get_connections() ORDER BY 1;
+SELECT server_name FROM pgwrh_fdw_get_connections() ORDER BY 1;
 
 -- =============================================================================
 -- test case for having multiple cached connections for a foreign server
@@ -3594,12 +3594,12 @@ SELECT 1 FROM ft1 LIMIT 1;
 RESET ROLE;
 
 -- Should output two connections for loopback server
-SELECT server_name FROM postgres_fdw_get_connections() ORDER BY 1;
+SELECT server_name FROM pgwrh_fdw_get_connections() ORDER BY 1;
 COMMIT;
 -- Let's ensure to close all the existing cached connections.
-SELECT 1 FROM postgres_fdw_disconnect_all();
+SELECT 1 FROM pgwrh_fdw_disconnect_all();
 -- No cached connections, so no records should be output.
-SELECT server_name FROM postgres_fdw_get_connections() ORDER BY 1;
+SELECT server_name FROM pgwrh_fdw_get_connections() ORDER BY 1;
 
 -- Clean up
 DROP USER MAPPING FOR regress_multi_conn_user1 SERVER loopback;
@@ -3617,7 +3617,7 @@ ALTER SERVER loopback OPTIONS (keep_connections 'off');
 -- as keep_connections was set to off.
 SELECT 1 FROM ft1 LIMIT 1;
 -- No cached connections, so no records should be output.
-SELECT server_name FROM postgres_fdw_get_connections() ORDER BY 1;
+SELECT server_name FROM pgwrh_fdw_get_connections() ORDER BY 1;
 ALTER SERVER loopback OPTIONS (SET keep_connections 'on');
 
 -- ===================================================================
@@ -3626,7 +3626,7 @@ ALTER SERVER loopback OPTIONS (SET keep_connections 'on');
 
 BEGIN;
 
-CREATE SERVER batch10 FOREIGN DATA WRAPPER postgres_fdw OPTIONS( batch_size '10' );
+CREATE SERVER batch10 FOREIGN DATA WRAPPER pgwrh_fdw OPTIONS( batch_size '10' );
 
 SELECT count(*)
 FROM pg_foreign_server
@@ -4217,10 +4217,10 @@ ALTER SERVER loopback2 OPTIONS (DROP async_capable);
 -- test invalid server, foreign table and foreign data wrapper options
 -- ===================================================================
 -- Invalid fdw_startup_cost option
-CREATE SERVER inv_scst FOREIGN DATA WRAPPER postgres_fdw
+CREATE SERVER inv_scst FOREIGN DATA WRAPPER pgwrh_fdw
 	OPTIONS(fdw_startup_cost '100$%$#$#');
 -- Invalid fdw_tuple_cost option
-CREATE SERVER inv_scst FOREIGN DATA WRAPPER postgres_fdw
+CREATE SERVER inv_scst FOREIGN DATA WRAPPER pgwrh_fdw
 	OPTIONS(fdw_tuple_cost '100$%$#$#');
 -- Invalid fetch_size option
 CREATE FOREIGN TABLE inv_fsz (c1 int )
@@ -4230,10 +4230,10 @@ CREATE FOREIGN TABLE inv_bsz (c1 int )
 	SERVER loopback OPTIONS (batch_size '100$%$#$#');
 
 -- No option is allowed to be specified at foreign data wrapper level
-ALTER FOREIGN DATA WRAPPER postgres_fdw OPTIONS (nonexistent 'fdw');
+ALTER FOREIGN DATA WRAPPER pgwrh_fdw OPTIONS (nonexistent 'fdw');
 
 -- ===================================================================
--- test postgres_fdw.application_name GUC
+-- test pgwrh_fdw.application_name GUC
 -- ===================================================================
 -- To avoid race conditions in checking the remote session's application_name,
 -- use this view to make the remote session itself read its application_name.
@@ -4261,15 +4261,15 @@ SELECT count(*) FROM remote_application_name
     substring('fdw_' || current_database() || pg_backend_pid() for
       current_setting('max_identifier_length')::int);
 
--- postgres_fdw.application_name overrides application_name option
+-- pgwrh_fdw.application_name overrides application_name option
 -- of a server object if both settings are present.
 ALTER SERVER loopback2 OPTIONS (SET application_name 'fdw_wrong');
-SET postgres_fdw.application_name TO 'fdw_%a%u%%';
+SET pgwrh_fdw.application_name TO 'fdw_%a%u%%';
 SELECT count(*) FROM remote_application_name
   WHERE application_name =
     substring('fdw_' || current_setting('application_name') ||
       CURRENT_USER || '%' for current_setting('max_identifier_length')::int);
-RESET postgres_fdw.application_name;
+RESET pgwrh_fdw.application_name;
 
 -- Test %c (session ID) and %C (cluster name) escape sequences.
 ALTER SERVER loopback2 OPTIONS (SET application_name 'fdw_%C%c');
@@ -4393,7 +4393,7 @@ DROP FOREIGN TABLE analyze_ftable;
 DROP TABLE analyze_table;
 
 -- ===================================================================
--- test for postgres_fdw_get_connections function with check_conn = true
+-- test for pgwrh_fdw_get_connections function with check_conn = true
 -- ===================================================================
 
 -- Disable debug_discard_caches in order to manage remote connections
@@ -4402,7 +4402,7 @@ SET debug_discard_caches TO '0';
 -- The text of the error might vary across platforms, so only show SQLSTATE.
 \set VERBOSITY sqlstate
 
-SELECT 1 FROM postgres_fdw_disconnect_all();
+SELECT 1 FROM pgwrh_fdw_disconnect_all();
 ALTER SERVER loopback OPTIONS (SET application_name 'fdw_conn_check');
 SELECT 1 FROM ft1 LIMIT 1;
 
@@ -4415,7 +4415,7 @@ SELECT server_name,
   CASE WHEN closed IS NOT true THEN false ELSE true END AS closed,
   remote_backend_pid = (SELECT pid FROM pg_stat_activity
   WHERE application_name = 'fdw_conn_check') AS remote_backend_pid
-  FROM postgres_fdw_get_connections(true);
+  FROM pgwrh_fdw_get_connections(true);
 
 -- After terminating the remote backend, since the connection is closed,
 -- "closed" should be TRUE, or NULL if the connection status check
@@ -4428,7 +4428,7 @@ END $$;
 SELECT server_name,
   CASE WHEN closed IS NOT false THEN true ELSE false END AS closed,
   remote_backend_pid <> 0 AS remote_backend_pid
-  FROM postgres_fdw_get_connections(true);
+  FROM pgwrh_fdw_get_connections(true);
 
 -- Clean up
 \set VERBOSITY default

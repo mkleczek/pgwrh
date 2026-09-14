@@ -1,12 +1,17 @@
+/*
+ * pgwrh_fdw modifications Copyright (c) 2026, pgwrh_fdw contributors.
+ * Licensed under GNU AGPL version 3 only; see LICENSE and LICENSING.md.
+ * Original PostgreSQL notices and permissions are retained below.
+ */
 /*-------------------------------------------------------------------------
  *
  * connection.c
- *		  Connection management functions for postgres_fdw
+ *		  Connection management functions for pgwrh_fdw
  *
  * Portions Copyright (c) 2012-2025, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
- *		  contrib/postgres_fdw/connection.c
+ *		  contrib/pgwrh_fdw/connection.c
  *
  *-------------------------------------------------------------------------
  */
@@ -26,7 +31,7 @@
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "pgstat.h"
-#include "postgres_fdw.h"
+#include "pgwrh_fdw.h"
 #include "storage/latch.h"
 #include "utils/builtins.h"
 #include "utils/hsearch.h"
@@ -127,10 +132,10 @@ enum pgfdwVersion
 /*
  * SQL functions
  */
-PG_FUNCTION_INFO_V1(postgres_fdw_get_connections);
-PG_FUNCTION_INFO_V1(postgres_fdw_get_connections_1_2);
-PG_FUNCTION_INFO_V1(postgres_fdw_disconnect);
-PG_FUNCTION_INFO_V1(postgres_fdw_disconnect_all);
+PG_FUNCTION_INFO_V1(pgwrh_fdw_get_connections);
+PG_FUNCTION_INFO_V1(pgwrh_fdw_get_connections_1_2);
+PG_FUNCTION_INFO_V1(pgwrh_fdw_disconnect);
+PG_FUNCTION_INFO_V1(pgwrh_fdw_disconnect_all);
 
 /* prototypes of private functions */
 static void make_new_connection(ConnCacheEntry *entry, UserMapping *user);
@@ -180,7 +185,7 @@ static void pgfdw_security_check(const char **keywords, const char **values,
 static bool UserMappingPasswordRequired(UserMapping *user);
 static bool UseScramPassthrough(ForeignServer *server, UserMapping *user);
 static bool disconnect_cached_connections(Oid serverid);
-static void postgres_fdw_get_connections_internal(FunctionCallInfo fcinfo,
+static void pgwrh_fdw_get_connections_internal(FunctionCallInfo fcinfo,
 												  enum pgfdwVersion api_version);
 static int	pgfdw_conn_check(PGconn *conn);
 static bool pgfdw_conn_checkable(void);
@@ -215,11 +220,11 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 
 		if (pgfdw_we_get_result == 0)
 			pgfdw_we_get_result =
-				WaitEventExtensionNew("PostgresFdwGetResult");
+				WaitEventExtensionNew("PgwrhFdwGetResult");
 
 		ctl.keysize = sizeof(ConnCacheKey);
 		ctl.entrysize = sizeof(ConnCacheEntry);
-		ConnectionHash = hash_create("postgres_fdw connections", 8,
+		ConnectionHash = hash_create("pgwrh_fdw connections", 8,
 									 &ctl,
 									 HASH_ELEM | HASH_BLOBS);
 
@@ -418,7 +423,7 @@ make_new_connection(ConnCacheEntry *entry, UserMapping *user)
 	/* Now try to make the connection */
 	entry->conn = connect_pg_server(server, user);
 
-	elog(DEBUG3, "new postgres_fdw connection %p for server \"%s\" (user mapping oid %u, userid %u)",
+	elog(DEBUG3, "new pgwrh_fdw connection %p for server \"%s\" (user mapping oid %u, userid %u)",
 		 entry->conn, server->servername, user->umid, user->userid);
 }
 
@@ -557,9 +562,9 @@ connect_pg_server(ForeignServer *server, UserMapping *user)
 			}
 		}
 
-		/* Use "postgres_fdw" as fallback_application_name */
+		/* Use "pgwrh_fdw" as fallback_application_name */
 		keywords[n] = "fallback_application_name";
-		values[n] = "postgres_fdw";
+		values[n] = "pgwrh_fdw";
 		n++;
 
 		/* Set client_encoding so that libpq can convert encoding properly. */
@@ -611,7 +616,7 @@ connect_pg_server(ForeignServer *server, UserMapping *user)
 
 		/* first time, allocate or get the custom wait event */
 		if (pgfdw_we_connect == 0)
-			pgfdw_we_connect = WaitEventExtensionNew("PostgresFdwConnect");
+			pgfdw_we_connect = WaitEventExtensionNew("PgwrhFdwConnect");
 
 		/* OK to make connection */
 		conn = libpqsrv_connect_params(keywords, values,
@@ -787,7 +792,7 @@ configure_remote_session(PGconn *conn)
 	/*
 	 * Set values needed to ensure unambiguous data output from remote.  (This
 	 * logic should match what pg_dump does.  See also set_transmission_modes
-	 * in postgres_fdw.c.)
+	 * in pgwrh_fdw.c.)
 	 */
 	do_sql_command(conn, "SET datestyle = ISO");
 	if (remoteversion >= 80400)
@@ -1090,7 +1095,7 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 					 * probably not worth trying harder.
 					 *
 					 * DEALLOCATE ALL only exists in 8.3 and later, so this
-					 * constrains how old a server postgres_fdw can
+					 * constrains how old a server pgwrh_fdw can
 					 * communicate with.  We intentionally ignore errors in
 					 * the DEALLOCATE, so that we can hobble along to some
 					 * extent with older servers (leaking prepared statements
@@ -1119,7 +1124,7 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 					 */
 					ereport(ERROR,
 							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-							 errmsg("cannot PREPARE a transaction that has operated on postgres_fdw foreign tables")));
+							 errmsg("cannot PREPARE a transaction that has operated on pgwrh_fdw foreign tables")));
 					break;
 				case XACT_EVENT_PARALLEL_COMMIT:
 				case XACT_EVENT_COMMIT:
@@ -1672,7 +1677,7 @@ pgfdw_get_cleanup_result(PGconn *conn, TimestampTz endtime,
 
 				/* first time, allocate or get the custom wait event */
 				if (pgfdw_we_cleanup_result == 0)
-					pgfdw_we_cleanup_result = WaitEventExtensionNew("PostgresFdwCleanupResult");
+					pgfdw_we_cleanup_result = WaitEventExtensionNew("PgwrhFdwCleanupResult");
 
 				/* Sleep until there's something to do */
 				wc = WaitLatchOrSocket(MyLatch,
@@ -2131,12 +2136,12 @@ pgfdw_finish_abort_cleanup(List *pending_entries, List *cancel_requested,
 }
 
 /* Number of output arguments (columns) for various API versions */
-#define POSTGRES_FDW_GET_CONNECTIONS_COLS_V1_1	2
-#define POSTGRES_FDW_GET_CONNECTIONS_COLS_V1_2	6
-#define POSTGRES_FDW_GET_CONNECTIONS_COLS	6	/* maximum of above */
+#define PGWRH_FDW_GET_CONNECTIONS_COLS_V1_1	2
+#define PGWRH_FDW_GET_CONNECTIONS_COLS_V1_2	6
+#define PGWRH_FDW_GET_CONNECTIONS_COLS	6	/* maximum of above */
 
 /*
- * Internal function used by postgres_fdw_get_connections variants.
+ * Internal function used by pgwrh_fdw_get_connections variants.
  *
  * For API version 1.1, this function takes no input parameter and
  * returns a set of records with the following values:
@@ -2162,7 +2167,7 @@ pgfdw_finish_abort_cleanup(List *pending_entries, List *cancel_requested,
  * No records are returned when there are no cached connections at all.
  */
 static void
-postgres_fdw_get_connections_internal(FunctionCallInfo fcinfo,
+pgwrh_fdw_get_connections_internal(FunctionCallInfo fcinfo,
 									  enum pgfdwVersion api_version)
 {
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
@@ -2178,11 +2183,11 @@ postgres_fdw_get_connections_internal(FunctionCallInfo fcinfo,
 	/* Check we have the expected number of output arguments */
 	switch (rsinfo->setDesc->natts)
 	{
-		case POSTGRES_FDW_GET_CONNECTIONS_COLS_V1_1:
+		case PGWRH_FDW_GET_CONNECTIONS_COLS_V1_1:
 			if (api_version != PGFDW_V1_1)
 				elog(ERROR, "incorrect number of output arguments");
 			break;
-		case POSTGRES_FDW_GET_CONNECTIONS_COLS_V1_2:
+		case PGWRH_FDW_GET_CONNECTIONS_COLS_V1_2:
 			if (api_version != PGFDW_V1_2)
 				elog(ERROR, "incorrect number of output arguments");
 			break;
@@ -2194,8 +2199,8 @@ postgres_fdw_get_connections_internal(FunctionCallInfo fcinfo,
 	while ((entry = (ConnCacheEntry *) hash_seq_search(&scan)))
 	{
 		ForeignServer *server;
-		Datum		values[POSTGRES_FDW_GET_CONNECTIONS_COLS] = {0};
-		bool		nulls[POSTGRES_FDW_GET_CONNECTIONS_COLS] = {0};
+		Datum		values[PGWRH_FDW_GET_CONNECTIONS_COLS] = {0};
+		bool		nulls[PGWRH_FDW_GET_CONNECTIONS_COLS] = {0};
 		int			i = 0;
 
 		/* We only look for open remote connections */
@@ -2314,17 +2319,17 @@ postgres_fdw_get_connections_internal(FunctionCallInfo fcinfo,
  * we continue to support the older API versions.
  */
 Datum
-postgres_fdw_get_connections_1_2(PG_FUNCTION_ARGS)
+pgwrh_fdw_get_connections_1_2(PG_FUNCTION_ARGS)
 {
-	postgres_fdw_get_connections_internal(fcinfo, PGFDW_V1_2);
+	pgwrh_fdw_get_connections_internal(fcinfo, PGFDW_V1_2);
 
 	PG_RETURN_VOID();
 }
 
 Datum
-postgres_fdw_get_connections(PG_FUNCTION_ARGS)
+pgwrh_fdw_get_connections(PG_FUNCTION_ARGS)
 {
-	postgres_fdw_get_connections_internal(fcinfo, PGFDW_V1_1);
+	pgwrh_fdw_get_connections_internal(fcinfo, PGFDW_V1_1);
 
 	PG_RETURN_VOID();
 }
@@ -2333,7 +2338,7 @@ postgres_fdw_get_connections(PG_FUNCTION_ARGS)
  * Disconnect the specified cached connections.
  *
  * This function discards the open connections that are established by
- * postgres_fdw from the local session to the foreign server with
+ * pgwrh_fdw from the local session to the foreign server with
  * the given name. Note that there can be multiple connections to
  * the given server using different user mappings. If the connections
  * are used in the current local transaction, they are not disconnected
@@ -2342,7 +2347,7 @@ postgres_fdw_get_connections(PG_FUNCTION_ARGS)
  * foreign server with the given name is found, an error is reported.
  */
 Datum
-postgres_fdw_disconnect(PG_FUNCTION_ARGS)
+pgwrh_fdw_disconnect(PG_FUNCTION_ARGS)
 {
 	ForeignServer *server;
 	char	   *servername;
@@ -2357,13 +2362,13 @@ postgres_fdw_disconnect(PG_FUNCTION_ARGS)
  * Disconnect all the cached connections.
  *
  * This function discards all the open connections that are established by
- * postgres_fdw from the local session to the foreign servers.
+ * pgwrh_fdw from the local session to the foreign servers.
  * If the connections are used in the current local transaction, they are
  * not disconnected and warning messages are reported. This function
  * returns true if it disconnects at least one connection, otherwise false.
  */
 Datum
-postgres_fdw_disconnect_all(PG_FUNCTION_ARGS)
+pgwrh_fdw_disconnect_all(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_BOOL(disconnect_cached_connections(InvalidOid));
 }
@@ -2514,7 +2519,7 @@ pgfdw_conn_checkable(void)
  * keys used to pass-through are coming from the initial connection from the
  * client with the server.
  *
- * All required SCRAM options are set by postgres_fdw, so we just need to
+ * All required SCRAM options are set by pgwrh_fdw, so we just need to
  * ensure that these options are not overwritten by the user.
  */
 static bool

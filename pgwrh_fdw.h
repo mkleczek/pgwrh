@@ -1,17 +1,28 @@
+/*
+ * pgwrh_fdw modifications Copyright (c) 2026, pgwrh_fdw contributors.
+ * Licensed under GNU AGPL version 3 only; see LICENSE and LICENSING.md.
+ * Original PostgreSQL notices and permissions are retained below.
+ */
 /*-------------------------------------------------------------------------
  *
- * postgres_fdw.h
+ * pgwrh_fdw.h
  *		  Foreign-data wrapper for remote PostgreSQL servers
  *
  * Portions Copyright (c) 2012-2025, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
- *		  contrib/postgres_fdw/postgres_fdw.h
+ *		  contrib/pgwrh_fdw/pgwrh_fdw.h
  *
  *-------------------------------------------------------------------------
  */
-#ifndef POSTGRES_FDW_H
-#define POSTGRES_FDW_H
+#ifndef PGWRH_FDW_H
+#define PGWRH_FDW_H
+
+#include "namespace.h"
+
+#if PG_VERSION_NUM < 180000 || PG_VERSION_NUM >= 190000
+#error "pgwrh_fdw supports PostgreSQL 18 only"
+#endif
 
 #include "foreign/foreign.h"
 #include "lib/stringinfo.h"
@@ -22,7 +33,7 @@
 
 /*
  * FDW-specific planner information kept in RelOptInfo.fdw_private for a
- * postgres_fdw foreign table.  For a baserel, this struct is created by
+ * pgwrh_fdw foreign table.  For a baserel, this struct is created by
  * postgresGetForeignRelSize, although some fields are not filled till later.
  * postgresGetForeignJoinPaths creates it for a joinrel, and
  * postgresGetForeignUpperPaths creates it for an upperrel.
@@ -151,7 +162,7 @@ typedef enum PgFdwSamplingMethod
 	ANALYZE_SAMPLE_BERNOULLI,	/* TABLESAMPLE bernoulli */
 } PgFdwSamplingMethod;
 
-/* in postgres_fdw.c */
+/* in pgwrh_fdw.c */
 extern int	set_transmission_modes(void);
 extern void reset_transmission_modes(int nestlevel);
 extern void process_pending_request(AsyncRequest *areq);
@@ -257,4 +268,4 @@ extern const char *get_jointype_name(JoinType jointype);
 extern bool is_builtin(Oid objectId);
 extern bool is_shippable(Oid objectId, Oid classId, PgFdwRelationInfo *fpinfo);
 
-#endif							/* POSTGRES_FDW_H */
+#endif							/* PGWRH_FDW_H */

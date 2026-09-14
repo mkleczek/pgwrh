@@ -1,12 +1,17 @@
+/*
+ * pgwrh_fdw modifications Copyright (c) 2026, pgwrh_fdw contributors.
+ * Licensed under GNU AGPL version 3 only; see LICENSE and LICENSING.md.
+ * Original PostgreSQL notices and permissions are retained below.
+ */
 /*-------------------------------------------------------------------------
  *
  * option.c
- *		  FDW and GUC option handling for postgres_fdw
+ *		  FDW and GUC option handling for pgwrh_fdw
  *
  * Portions Copyright (c) 2012-2025, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
- *		  contrib/postgres_fdw/option.c
+ *		  contrib/pgwrh_fdw/option.c
  *
  *-------------------------------------------------------------------------
  */
@@ -19,7 +24,7 @@
 #include "commands/defrem.h"
 #include "commands/extension.h"
 #include "libpq/libpq-be.h"
-#include "postgres_fdw.h"
+#include "pgwrh_fdw.h"
 #include "utils/guc.h"
 #include "utils/varlena.h"
 
@@ -34,10 +39,10 @@ typedef struct PgFdwOption
 } PgFdwOption;
 
 /*
- * Valid options for postgres_fdw.
+ * Valid options for pgwrh_fdw.
  * Allocated and filled in InitPgFdwOptions.
  */
-static PgFdwOption *postgres_fdw_options;
+static PgFdwOption *pgwrh_fdw_options;
 
 /*
  * Valid options for libpq.
@@ -61,14 +66,14 @@ static bool is_libpq_option(const char *keyword);
 
 /*
  * Validate the generic options given to a FOREIGN DATA WRAPPER, SERVER,
- * USER MAPPING or FOREIGN TABLE that uses postgres_fdw.
+ * USER MAPPING or FOREIGN TABLE that uses pgwrh_fdw.
  *
  * Raise an ERROR if the option or its value is considered invalid.
  */
-PG_FUNCTION_INFO_V1(postgres_fdw_validator);
+PG_FUNCTION_INFO_V1(pgwrh_fdw_validator);
 
 Datum
-postgres_fdw_validator(PG_FUNCTION_ARGS)
+pgwrh_fdw_validator(PG_FUNCTION_ARGS)
 {
 	List	   *options_list = untransformRelOptions(PG_GETARG_DATUM(0));
 	Oid			catalog = PG_GETARG_OID(1);
@@ -78,7 +83,7 @@ postgres_fdw_validator(PG_FUNCTION_ARGS)
 	InitPgFdwOptions();
 
 	/*
-	 * Check that only options supported by postgres_fdw, and allowed for the
+	 * Check that only options supported by pgwrh_fdw, and allowed for the
 	 * current object type, are given.
 	 */
 	foreach(cell, options_list)
@@ -97,7 +102,7 @@ postgres_fdw_validator(PG_FUNCTION_ARGS)
 			bool		has_valid_options = false;
 
 			initClosestMatch(&match_state, def->defname, 4);
-			for (opt = postgres_fdw_options; opt->keyword; opt++)
+			for (opt = pgwrh_fdw_options; opt->keyword; opt++)
 			{
 				if (catalog == opt->optcontext)
 				{
@@ -300,7 +305,7 @@ InitPgFdwOptions(void)
 	};
 
 	/* Prevent redundant initialization. */
-	if (postgres_fdw_options)
+	if (pgwrh_fdw_options)
 		return;
 
 	/*
@@ -324,22 +329,22 @@ InitPgFdwOptions(void)
 
 	/*
 	 * Construct an array which consists of all valid options for
-	 * postgres_fdw, by appending FDW-specific options to libpq options.
+	 * pgwrh_fdw, by appending FDW-specific options to libpq options.
 	 *
-	 * We use plain malloc here to allocate postgres_fdw_options because it
+	 * We use plain malloc here to allocate pgwrh_fdw_options because it
 	 * lives as long as the backend process does.  Besides, keeping
 	 * libpq_options in memory allows us to avoid copying every keyword
 	 * string.
 	 */
-	postgres_fdw_options = (PgFdwOption *)
+	pgwrh_fdw_options = (PgFdwOption *)
 		malloc(sizeof(PgFdwOption) * num_libpq_opts +
 			   sizeof(non_libpq_options));
-	if (postgres_fdw_options == NULL)
+	if (pgwrh_fdw_options == NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_FDW_OUT_OF_MEMORY),
 				 errmsg("out of memory")));
 
-	popt = postgres_fdw_options;
+	popt = pgwrh_fdw_options;
 	for (lopt = libpq_options; lopt->keyword; lopt++)
 	{
 		/* Hide debug options, as well as settings we override internally. */
@@ -376,7 +381,7 @@ InitPgFdwOptions(void)
 }
 
 /*
- * Check whether the given option is one of the valid postgres_fdw options.
+ * Check whether the given option is one of the valid pgwrh_fdw options.
  * context is the Oid of the catalog holding the object the option is for.
  */
 static bool
@@ -384,9 +389,9 @@ is_valid_option(const char *keyword, Oid context)
 {
 	PgFdwOption *opt;
 
-	Assert(postgres_fdw_options);	/* must be initialized already */
+	Assert(pgwrh_fdw_options);	/* must be initialized already */
 
-	for (opt = postgres_fdw_options; opt->keyword; opt++)
+	for (opt = pgwrh_fdw_options; opt->keyword; opt++)
 	{
 		if (context == opt->optcontext && strcmp(opt->keyword, keyword) == 0)
 			return true;
@@ -403,9 +408,9 @@ is_libpq_option(const char *keyword)
 {
 	PgFdwOption *opt;
 
-	Assert(postgres_fdw_options);	/* must be initialized already */
+	Assert(pgwrh_fdw_options);	/* must be initialized already */
 
-	for (opt = postgres_fdw_options; opt->keyword; opt++)
+	for (opt = pgwrh_fdw_options; opt->keyword; opt++)
 	{
 		if (opt->is_libpq_opt && strcmp(opt->keyword, keyword) == 0)
 			return true;
@@ -578,13 +583,13 @@ _PG_init(void)
 {
 	/*
 	 * Unlike application_name GUC, don't set GUC_IS_NAME flag nor check_hook
-	 * to allow postgres_fdw.application_name to be any string more than
+	 * to allow pgwrh_fdw.application_name to be any string more than
 	 * NAMEDATALEN characters and to include non-ASCII characters. Instead,
 	 * remote server truncates application_name of remote connection to less
 	 * than NAMEDATALEN and replaces any non-ASCII characters in it with a '?'
 	 * character.
 	 */
-	DefineCustomStringVariable("postgres_fdw.application_name",
+	DefineCustomStringVariable("pgwrh_fdw.application_name",
 							   "Sets the application name to be used on the remote server.",
 							   NULL,
 							   &pgfdw_application_name,
@@ -595,5 +600,5 @@ _PG_init(void)
 							   NULL,
 							   NULL);
 
-	MarkGUCPrefixReserved("postgres_fdw");
+	MarkGUCPrefixReserved("pgwrh_fdw");
 }
