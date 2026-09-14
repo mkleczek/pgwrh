@@ -78,3 +78,15 @@ prepare:
 .PHONY: all prepare updates
 
 src/native/monitor.o src/native/wait.o: src/native/monitor.h
+
+# PostgreSQL 18 can load extension files from a writable staging directory.
+test-stage: all
+	mkdir -p $(BUILD)/test-stage/extension
+	cp pgwrh.control pgwrh_wait.control $(BUILD)/test-stage/extension/
+	cp $(DATA) $(BUILD)/test-stage/extension/
+	cp $(shlib) $(BUILD)/test-stage/
+
+test-wait: test-stage
+	python3 -m pytest test/native -v
+
+.PHONY: test-stage test-wait
