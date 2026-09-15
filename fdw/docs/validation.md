@@ -2,6 +2,26 @@
 
 Validated on 2026-09-14, locally on macOS arm64 and in Linux CI.
 
+## Virtual servers and connection reuse
+
+Validated locally on 2026-09-15 using the pinned PostgreSQL 18.3 runtime on
+macOS arm64. The standalone routing change passed 38 integration tests (23
+existing context tests and 15 virtual-server tests), both upstream SQL suites,
+the isolation suite, and the export audit before adding connection preference.
+
+The completed stack passed:
+
+* All 45 integration tests, including seven additional connection-reuse tests.
+* Both upstream SQL suites and `eval_plan_qual` isolation.
+* All seven retained SCRAM TAP assertions.
+* The dynamic export audit with the same 14 prescribed symbols.
+
+Overlapping virtual servers were verified to share one remote backend PID,
+including async Append with single-row fetches. Tests also distinguish active
+and idle candidates, prevent borrowing a different user mapping's connection,
+and execute a generic partition-pruned query with an unreachable unused member.
+These new changes have not yet been validated in Linux CI.
+
 ## Initial 0.1.0 release
 
 The release version and consolidated installation script were validated locally

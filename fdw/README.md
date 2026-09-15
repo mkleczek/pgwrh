@@ -89,8 +89,10 @@ to disable propagation. An empty option string is an error.
 
 A server with `members 'replica_a,replica_b'` delegates connections to ordinary
 pgwrh_fdw servers. It requires an empty user mapping; credentials and transaction
-settings come from the selected member's mapping and server. Selection remains
-fixed for the local transaction. See [virtual servers](docs/virtual-servers.md)
+settings come from the selected member's mapping and server. Routing prefers an
+existing connection to an eligible member, so overlapping virtual servers can
+share one remote transaction. Selection remains fixed for the local transaction.
+See [virtual servers](docs/virtual-servers.md)
 for configuration, access checks, option ownership and error behavior.
 
 ## Frozen transaction context

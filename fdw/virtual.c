@@ -178,6 +178,7 @@ check_member(ForeignServer *server, Oid fdwid)
 
 UserMapping *
 pgwrh_fdw_resolve_virtual_mapping(UserMapping *user,
+								  PgwrhFdwRankConnection rank_connection,
 								  PgwrhFdwVirtualBinding **binding)
 {
 	VirtualKey	key = {user->serverid, user->userid};
@@ -188,6 +189,8 @@ pgwrh_fdw_resolve_virtual_mapping(UserMapping *user,
 	List	   *candidates = NIL;
 	ListCell   *lc;
 	bool		found;
+	bool		have_access = false;
+	PgwrhFdwConnectionRank best_rank = PGWRH_FDW_CONNECTION_UNUSABLE;
 
 	*binding = virtual_state ?
 		hash_search(virtual_state->bindings, &key, HASH_FIND, NULL) : NULL;
@@ -231,17 +234,39 @@ pgwrh_fdw_resolve_virtual_mapping(UserMapping *user,
 	foreach(lc, names)
 	{
 		ForeignServer *member = GetForeignServerByName(lfirst(lc), false);
+		UserMapping *candidate;
+		PgwrhFdwConnectionRank rank;
 
 		check_member(member, server->fdwid);
-		if (can_use_member(server->owner, user->userid, member->serverid))
-			candidates = lappend(candidates, GetUserMapping(user->userid, member->serverid));
+		if (!can_use_member(server->owner, user->userid, member->serverid))
+			continue;
+		have_access = true;
+		candidate = GetUserMapping(user->userid, member->serverid);
+		rank = rank_connection(candidate->umid);
+		if (rank == PGWRH_FDW_CONNECTION_UNUSABLE)
+			continue;
+		if (rank > best_rank)
+		{
+			list_free(candidates);
+			candidates = NIL;
+			best_rank = rank;
+		}
+		if (rank == best_rank)
+			candidates = lappend(candidates, candidate);
 	}
 	list_free_deep(names);
 	if (candidates == NIL)
+	{
+		if (have_access)
+			ereport(ERROR,
+					(errcode(ERRCODE_CONNECTION_EXCEPTION),
+					 errmsg("no usable member connections for virtual server \"%s\"", server->servername),
+					 errhint("Roll back the local transaction before retrying.")));
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("no accessible members for virtual server \"%s\"", server->servername),
 				 errhint("The virtual server owner needs USAGE and the effective local user needs a user mapping on at least one member server.")));
+	}
 
 	target = list_nth(candidates,
 					 pg_prng_uint64_range(&pg_global_prng_state, 0,

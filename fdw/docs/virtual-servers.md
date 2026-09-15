@@ -71,11 +71,31 @@ disable writes on the virtual server and use read-only remote credentials.
 
 ## Selection and transactions
 
-The initial selection is uniform among accessible members. It is pinned for
-the local top-level transaction, separately for each virtual server and effective
-local user. Selection is not repeated for another scan, statement or savepoint.
-A direct reference to the selected actual server uses the same physical
-connection when it resolves to the same actual mapping.
+The initial selection prefers an accessible member with an existing connection
+for the exact applicable user mapping:
+
+1. An active connection already participating in this local transaction.
+2. An idle cached connection.
+3. A member that needs a new connection.
+
+Ties are chosen uniformly. Cache inspection does not open connections, start
+transactions, or drain pending async requests on unselected members. Incomplete
+connections and invalidated/broken active connections cannot accept new virtual
+bindings. Dead idle connections are handled by the existing reconnect path when
+selected; inspecting local libpq status is not a network health probe.
+
+Selection is pinned for the local top-level transaction, separately for each
+virtual server and effective local user. It is not repeated for another scan,
+statement or savepoint. A direct reference to the selected actual server uses
+the same physical connection when it resolves to the same actual mapping.
+
+For `members 'a,b,c'` and `members 'b,c,d'`, an existing applicable connection to
+`b` can serve both virtual servers. If the first route has already selected `a`,
+it stays on `a`; routing does not anticipate later scans or minimize the cold
+query's total connection count. Reuse is backend-local and preserves one physical
+connection per actual mapping. Independent connections still permit concurrent
+work; scans sharing one connection serialize their remote requests. Idle affinity
+can persist across transactions until disconnect, invalidation or session end.
 
 The physical connection remains managed entirely by the existing FDW cache:
 one transaction, savepoint stack, pending async request, and prepared-statement
@@ -117,7 +137,9 @@ The only existing execution function changed is `GetConnection()` in
 cache, checks a previously bound connection, and marks successful acquisition.
 `virtual.c` owns routing and validation. Its binding hash and reset callback live
 in `TopTransactionContext`; no existing transaction callback is modified, and
-bindings never own or free libpq connections. The validator additionally registers
+bindings never own or free libpq connections. A read-only ranking callback in
+`connection.c` lets routing inspect the existing private cache without exposing
+its structure or changing its ownership. The validator additionally registers
 the option and checks virtual-server option combinations.
 
 `python3 test/test_virtual.py` runs the routing tests against private PostgreSQL
@@ -125,4 +147,6 @@ clusters. The existing `python3 test/test_context.py` entry point also runs them
 so the parent repository's test command and CI include them unchanged. Tests
 cover mapping and privilege resolution, view owners, context propagation,
 savepoint affinity, failed acquisition, connection loss, catalog changes,
-planning, generic plans, ANALYZE, IMPORT, joins and modifications.
+planning, generic plans, ANALYZE, IMPORT, joins and modifications. Reuse tests
+cover overlapping/disjoint memberships, mapping isolation, active versus idle
+preference, invalidated connections, shared async state and runtime pruning.
