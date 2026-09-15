@@ -54,6 +54,7 @@ REPLICA = $(shell tsort src/replica/deps.txt | sed -e 's/^/src\/replica\//' -e '
 
 # Reuse the current definitions instead of maintaining a second copy of the SQL.
 UPGRADE_022 = src/updates/pgwrh--0.2.1--0.2.2.sql.in \
+	src/common.sql \
 	src/master/api-management.sql src/master/implementation-views.sql src/master/api-replica.sql \
 	src/master/triggers.sql src/replica/helpers.sql src/replica/aggregation.sql \
 	src/replica/status.sql src/replica/sync.sql

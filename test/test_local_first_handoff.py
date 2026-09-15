@@ -84,10 +84,10 @@ def test_prepared_replacements_allow_commit_only_for_local_readers(handoff_clust
             WHERE replication_group_id = 'g1')''') == 2
     with source.node.connect() as paused:
         paused.execute('SELECT pg_advisory_lock(2895359559)')
-        for field in ('shard_server_name', 'shard_server_user'):
+        for field, stale in (('shard_server_targets', "'[\"stale\"]'::jsonb"), ('shard_server_user', "'\"stale\"'::jsonb")):
             with cluster.master.node.connect() as report:
                 report.execute(f"""UPDATE pgwrh.replication_group_member
-                    SET prepared_remote_shards = (SELECT jsonb_agg(p || jsonb_build_object('{field}', 'stale'))
+                    SET prepared_remote_shards = (SELECT jsonb_agg(p || jsonb_build_object('{field}', {stale}))
                         FROM jsonb_array_elements(prepared_remote_shards::jsonb) p)
                     WHERE host_id = 'source' """)
                 with pytest.raises(Exception, match='required remote shards'):

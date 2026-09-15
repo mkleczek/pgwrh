@@ -106,6 +106,10 @@ def postgres_node_factory():
                     node.execute("SHOW extension_control_path")[0][0],
                 )
             node.execute("CREATE EXTENSION pgwrh CASCADE")
+            assert node.execute("SELECT extname FROM pg_extension WHERE extname='postgres_fdw'") == []
+            assert node.execute("""SELECT f.fdwname FROM pg_foreign_server s
+                JOIN pg_foreign_data_wrapper f ON f.oid = s.srvfdw
+                WHERE s.srvname = 'replica_controller'""") == [("pgwrh_fdw",)]
             return node
 
         yield build

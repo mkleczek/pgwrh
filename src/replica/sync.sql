@@ -220,11 +220,18 @@ shard_server AS (
         host,
         port,
         dbname,
-        shard_server_user
+        shard_server_user,
+        target_servers
     FROM
         remote_assignment
     WHERE
         shard_server_name IS NOT NULL
+),
+target_server AS (
+    SELECT a.server_name, a.host, a.port, a.dbname, a.shard_server_user, max(a.weight) AS weight
+    FROM assignment_target a
+    WHERE EXISTS (SELECT 1 FROM shard_server s WHERE a.server_name = ANY(s.target_servers))
+    GROUP BY a.server_name, a.host, a.port, a.dbname, a.shard_server_user
 ),
 shard_server_schema AS (
     SELECT DISTINCT shard_server_schema_name
@@ -283,11 +290,21 @@ missing_required_index AS (
     WHERE
         NOT optional
 ),
+-- A retained foreign table can still have a route from an earlier topology.
+-- Configure it before analysis or reattachment, even when statistics survive.
+configured_remote_shard AS (
+    SELECT rs.*
+    FROM remote_shard rs
+        JOIN remote_assignment a ON a.remote_rel_id = rs.rel_id
+        JOIN remote_server_route r ON r.srvname = rs.srvname
+    WHERE r.shard_server_targets = a.target_servers
+        AND r.shard_server_user = a.shard_server_user
+),
 ready_remote_shard AS (
     SELECT
         *
     FROM
-        remote_shard
+        configured_remote_shard
     WHERE
         EXISTS (SELECT 1 FROM
             pg_statistic s
@@ -511,7 +528,7 @@ scripts (async, transactional, description, commands) AS (
             SELECT 1 FROM view_schema WHERE n.nspname = view_schema_name
         )
         AND NOT EXISTS (
-            SELECT 1 FROM remote_assignment WHERE n.nspname = shard_server_schema_name
+            SELECT 1 FROM shard_structure WHERE n.nspname = format('%s_remote', schema_name)
         )
         AND NOT EXISTS (
             SELECT 1 FROM remote_shard r WHERE (r.pc).relnamespace = n.oid AND r.parent IS NOT NULL
@@ -706,41 +723,36 @@ scripts (async, transactional, description, commands) AS (
 
 ----- REMOTE SHARDS ------
     UNION ALL
-    -- create missing foreign servers
-    SELECT
-        FALSE,
-        TRUE,
-        format('Found foreign servers [%s] to create.', string_agg(format('%I', shard_server_name), ', ')),
-        array_agg(
-            format('CREATE SERVER IF NOT EXISTS %I FOREIGN DATA WRAPPER postgres_fdw OPTIONS
-                    ( host %L, port %L, dbname %L,
-                    load_balance_hosts ''random'',
-                    async_capable ''true'',
-                    updatable ''false'',
-                    truncatable ''false'',
-                    extensions %L,
-                    fdw_tuple_cost ''99999'',
-                    analyze_sampling ''auto'')',
-                shard_server_name,
-                host, port,
-                dbname,
-                (SELECT string_agg(extname, ', ') FROM pg_extension) -- assume remote server has all the same extensions
-            )
-        )
-        ||
-        array_agg(
-            format('CREATE USER MAPPING FOR PUBLIC SERVER %I OPTIONS (user %L, password %L)',
-                shard_server_name,
-                username,
-                password
-            ))
-        ||
-        array_agg(select_add_ext_dependency('pg_foreign_server'::regclass, 'srvname', shard_server_name))
-    FROM
-        shard_server
-            JOIN roles ON shard_server_user = username
-    WHERE
-        NOT EXISTS (SELECT 1 FROM pg_foreign_server WHERE srvname = shard_server_name)
+    -- Actual servers are shared by every shard using the same endpoint and user.
+    SELECT FALSE, TRUE,
+        format('Creating target servers [%s]', string_agg(server_name, ', ')),
+        array_agg(format('CREATE SERVER %I FOREIGN DATA WRAPPER pgwrh_fdw OPTIONS
+            (host %L, port %L, dbname %L, load_balance_weight %L)',
+            server_name, host, port, dbname, weight::text))
+        || array_agg(format('CREATE USER MAPPING FOR PUBLIC SERVER %I OPTIONS (user %L, password %L)',
+            server_name, username, password))
+        -- The virtual server owner authorizes target access. Querying roles use
+        -- the PUBLIC mapping with ordinary table permissions, without server USAGE.
+        || array_agg(select_add_ext_dependency('pg_foreign_server'::regclass, 'srvname', server_name))
+    FROM target_server JOIN roles ON shard_server_user = username
+    WHERE NOT EXISTS (SELECT 1 FROM pg_foreign_server WHERE srvname = server_name)
+    GROUP BY 1, 2
+
+    UNION ALL
+    -- Each logical shard keeps one virtual server and an empty mapping.
+    SELECT FALSE, TRUE,
+        format('Creating virtual shard servers [%s]', string_agg(shard_server_name, ', ')),
+        array_agg(format('CREATE SERVER %I FOREIGN DATA WRAPPER pgwrh_fdw OPTIONS
+            (members %L, async_capable ''true'', updatable ''false'', truncatable ''false'',
+             extensions %L, fdw_tuple_cost ''99999'', analyze_sampling ''auto'')',
+            shard_server_name, array_to_string(target_servers, ','),
+            (SELECT string_agg(extname, ', ') FROM pg_extension)))
+        || array_agg(format('CREATE USER MAPPING FOR PUBLIC SERVER %I', shard_server_name))
+        || array_agg(select_add_ext_dependency('pg_foreign_server'::regclass, 'srvname', shard_server_name))
+    FROM shard_server
+    WHERE NOT EXISTS (SELECT 1 FROM pg_foreign_server WHERE srvname = shard_server_name)
+        AND NOT EXISTS (SELECT 1 FROM unnest(target_servers) t(name)
+                        WHERE NOT EXISTS (SELECT 1 FROM pg_foreign_server WHERE srvname = t.name))
     GROUP BY 1, 2
 
     UNION ALL
@@ -809,7 +821,7 @@ scripts (async, transactional, description, commands) AS (
         SELECT
             rs.reg_class, remote_assignment.is_leaf
         FROM
-            remote_shard rs
+            configured_remote_shard rs
                 JOIN remote_assignment ON rs.rel_id = remote_rel_id
         WHERE
                 NOT EXISTS (SELECT 1 FROM
@@ -847,41 +859,35 @@ scripts (async, transactional, description, commands) AS (
         remote_shard rs
     WHERE
         NOT EXISTS (SELECT 1 FROM
-            remote_assignment
-            WHERE rs.rel_id = remote_rel_id
+            shard_structure s
+            WHERE rs.rel_id = (format('%s_remote', s.schema_name), s.table_name)::rel_id
+              AND rs.srvname = pgwrh_shard_server(s.schema_name, s.table_name)
         )
         AND rs.parent IS NULL
     GROUP BY 1, 2
 
     UNION ALL
-    -- Update foreign servers with updated host/port if changed
-    SELECT
-        FALSE,
-        TRUE,
-        format('Found modified host and port for server %I', srvname),
-        ARRAY[
-            cmd
-        ]
-    FROM
-        owned_server
-            JOIN shard_server ON srvname = shard_server_name,
-            update_server_options(srvname, srvoptions, host, port) AS cmd
+    -- This worker transaction waits for old readers, then publishes membership.
+    -- The existing sync loop reports readiness only after the worker commits.
+    SELECT FALSE, TRUE, format('Updating targets of virtual server %I', srvname),
+        ARRAY[format('SELECT "@extschema:pgwrh_fdw@".pgwrh_fdw_set_members(%L, %L::text[])',
+                     srvname, target_servers::text)]
+    FROM owned_server JOIN shard_server ON srvname = shard_server_name
+    WHERE target_servers IS DISTINCT FROM
+          (SELECT array_agg(name ORDER BY name) FROM opts(srvoptions), unnest(vals) name
+           WHERE key = 'members')
+        AND NOT EXISTS (SELECT 1 FROM unnest(target_servers) t(name)
+                        WHERE NOT EXISTS (SELECT 1 FROM pg_foreign_server WHERE srvname = t.name))
 
     UNION ALL
-    -- Update user mapping with updated user/pass if changed
-    SELECT
-        FALSE,
-        TRUE,
-        format('Found modified user and pass for server %I', s.srvname),
-        ARRAY[
-            cmd
-        ]
-    FROM
-        owned_server s
-            JOIN pg_user_mappings um ON um.srvid = s.oid AND um.umuser = 0
-            JOIN shard_server ON s.srvname = shard_server_name
-            JOIN roles ON shard_server_user = username,
-            update_user_mapping(s.srvname, umoptions, username, password) AS cmd
+    -- Preference changes do not replace endpoint identity or require a handoff.
+    SELECT FALSE, TRUE, format('Updating routing weight of target %I', srvname),
+        ARRAY[format('ALTER SERVER %I OPTIONS (%s load_balance_weight %L)', srvname,
+                     CASE WHEN current_weight IS NULL THEN 'ADD' ELSE 'SET' END, weight::text)]
+    FROM owned_server JOIN target_server ON srvname = server_name
+        CROSS JOIN LATERAL (SELECT (SELECT value FROM opts(srvoptions)
+                                   WHERE key = 'load_balance_weight') AS current_weight) w
+    WHERE current_weight IS DISTINCT FROM weight::text
 
     UNION ALL
     -- DROP remote servers (and all dependent objects) for non-existent remote shards
@@ -896,9 +902,10 @@ scripts (async, transactional, description, commands) AS (
         NOT EXISTS (SELECT 1 FROM remote_shard r WHERE r.srvname = fs.srvname)
         AND
             fs.srvname <> 'replica_controller'
-        AND NOT EXISTS (SELECT 1 FROM
-            shard_assignment WHERE fs.srvname IN (shard_server_name, retained_shard_server_name)
-        )
+        AND NOT EXISTS (SELECT 1 FROM shard_server WHERE fs.srvname = shard_server_name)
+        AND NOT EXISTS (SELECT 1 FROM target_server WHERE fs.srvname = server_name)
+        AND NOT EXISTS (SELECT 1 FROM owned_server v, LATERAL opts(v.srvoptions) o
+                        WHERE o.key = 'members' AND fs.srvname = ANY(o.vals))
     GROUP BY 1, 2 -- make sure we produce empty set when no results
 
 

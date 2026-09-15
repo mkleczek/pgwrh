@@ -232,9 +232,9 @@ FROM
             SELECT
                 schema_name,
                 table_name,
-                string_agg(host_name, ',' ORDER BY sah.host_id) AS current_host,
-                array_agg(DISTINCT shm.member_role) AS current_members,
-                string_agg(port::text, ',' ORDER BY sah.host_id) AS current_port
+                string_agg(host_name, ',' ORDER BY sah.availability_zone, sah.host_id) AS current_host,
+                array_agg(shm.member_role ORDER BY sah.availability_zone, sah.host_id) AS current_members,
+                string_agg(port::text, ',' ORDER BY sah.availability_zone, sah.host_id) AS current_port
             FROM
                 shard_assigned_host sah
                     JOIN shard_host USING (replication_group_id, availability_zone, host_id)
@@ -274,9 +274,9 @@ FROM
             SELECT
                 schema_name,
                 table_name,
-                string_agg(host_name, ',' ORDER BY sah.host_id) AS target_host,
-                array_agg(DISTINCT member_role) AS target_members,
-                string_agg(port::text, ',' ORDER BY sah.host_id) AS target_port
+                string_agg(host_name, ',' ORDER BY sah.availability_zone, sah.host_id) AS target_host,
+                array_agg(member_role ORDER BY sah.availability_zone, sah.host_id) AS target_members,
+                string_agg(port::text, ',' ORDER BY sah.availability_zone, sah.host_id) AS target_port
             FROM
                 shard_assigned_host sah
                     JOIN shard_host USING (replication_group_id, availability_zone, host_id)
@@ -325,6 +325,21 @@ WHERE
     )
 ;
 
+-- Allowed concrete destinations for each retained controller configuration.
+-- A route may exclude offline replicas, but every published target must belong
+-- to the configuration being confirmed before old local copies can retire.
+CREATE VIEW shard_destinations AS
+SELECT a.replication_group_id, a.version, a.schema_name, a.table_name,
+       c.username,
+       md5(string_agg(a.availability_zone || a.host_id, ',' ORDER BY a.availability_zone, a.host_id)) AS legacy_server_name,
+       array_agg(DISTINCT pgwrh_target_server(m.member_role, h.host_name, h.port::text, current_database(), c.username)
+                 ORDER BY pgwrh_target_server(m.member_role, h.host_name, h.port::text, current_database(), c.username)) AS target_servers
+FROM shard_assigned_host a
+    JOIN shard_host h USING (replication_group_id, availability_zone, host_id)
+    JOIN replication_group_member m USING (replication_group_id, availability_zone, host_id)
+    JOIN replication_group_credentials c USING (replication_group_id, version)
+GROUP BY a.replication_group_id, a.version, a.schema_name, a.table_name, c.username;
+
 CREATE VIEW missing_connected_remote_shard AS
     WITH remote_shard AS (
         SELECT
@@ -344,20 +359,18 @@ CREATE VIEW missing_connected_remote_shard AS
         replication_group_id, version, availability_zone, host_id, schema_name, table_name
     FROM
         remote_shard s
+            LEFT JOIN shard_destinations d USING (replication_group_id, version, schema_name, table_name)
     WHERE
         NOT EXISTS (SELECT 1 FROM
-            json_to_recordset(connected_remote_shards) AS c(schema_name text, table_name text, shard_server_name text, shard_server_user text)
+            json_to_recordset(connected_remote_shards) AS c(schema_name text, table_name text, shard_server_name text, shard_server_user text, shard_server_targets text[])
             WHERE (c.schema_name, c.table_name) = (s.schema_name, s.table_name)
-                AND c.shard_server_user = (
-                    SELECT username FROM replication_group_credentials creds
-                    WHERE (creds.replication_group_id, creds.version) = (s.replication_group_id, s.version)
-                )
-                AND c.shard_server_name = (
-                    SELECT md5(string_agg(a.availability_zone || a.host_id, ',' ORDER BY a.availability_zone, a.host_id))
-                    FROM shard_assigned_host a
-                    WHERE (a.replication_group_id, a.version, a.schema_name, a.table_name) =
-                          (s.replication_group_id, s.version, s.schema_name, s.table_name)
-                )
+                AND c.shard_server_user = d.username
+                AND CASE WHEN c.shard_server_targets IS NULL
+                    -- Accept reports from replicas not yet migrated to virtual servers.
+                    THEN c.shard_server_name = d.legacy_server_name
+                    ELSE cardinality(c.shard_server_targets) > 0
+                         AND c.shard_server_targets <@ d.target_servers
+                    END
         )
 ;
 
@@ -366,18 +379,17 @@ CREATE VIEW missing_ready_remote_shard AS
 SELECT s.*
 FROM missing_connected_remote_shard s
     JOIN replication_group_member m USING (replication_group_id, availability_zone, host_id)
-    JOIN replication_group_credentials creds USING (replication_group_id, version)
+    LEFT JOIN shard_destinations d USING (replication_group_id, version, schema_name, table_name)
 WHERE NOT EXISTS (
     SELECT 1 FROM json_to_recordset(m.prepared_remote_shards)
-        AS p(schema_name text, table_name text, shard_server_name text, shard_server_user text)
+        AS p(schema_name text, table_name text, shard_server_name text, shard_server_user text, shard_server_targets text[])
     WHERE (p.schema_name, p.table_name) = (s.schema_name, s.table_name)
-        AND p.shard_server_user = creds.username
-        AND p.shard_server_name = (
-            SELECT md5(string_agg(a.availability_zone || a.host_id, ',' ORDER BY a.availability_zone, a.host_id))
-            FROM shard_assigned_host a
-            WHERE (a.replication_group_id, a.version, a.schema_name, a.table_name) =
-                  (s.replication_group_id, s.version, s.schema_name, s.table_name)
-        )
+        AND p.shard_server_user = d.username
+        AND CASE WHEN p.shard_server_targets IS NULL
+            THEN p.shard_server_name = d.legacy_server_name
+            ELSE cardinality(p.shard_server_targets) > 0
+                 AND p.shard_server_targets <@ d.target_servers
+            END
         AND EXISTS (
             SELECT 1 FROM json_to_recordset(m.connected_local_shards) AS l(schema_name text, table_name text)
             WHERE (l.schema_name, l.table_name) = (s.schema_name, s.table_name)

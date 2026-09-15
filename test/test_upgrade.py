@@ -22,8 +22,16 @@ def test_upgrade_preserves_existing_replica_data_and_root_identity(postgres_node
     (extension_dir / 'pgwrh--0.2.1.sql').write_text('\n'.join(release_file(path) for path in sources))
 
     def legacy_node(name):
-        node = postgres_node_factory(name)
-        node.execute("DROP EXTENSION pgwrh CASCADE; CREATE EXTENSION pgwrh VERSION '0.2.1' CASCADE")
+        # Use the released control file too: the old installation did not
+        # depend on pgwrh_fdw, so it must not be preinstalled by the fixture.
+        control = extension_dir / 'pgwrh.control'
+        current_control = control.read_text()
+        try:
+            control.write_text(release_file('pgwrh.control'))
+            node = postgres_node_factory(name)
+        finally:
+            control.write_text(current_control)
+        assert node.execute("SELECT count(*) FROM pg_extension WHERE extname = 'pgwrh_fdw'") == [(0,)]
         return node
 
     master = MasterHandle(legacy_node('master'))
@@ -45,9 +53,9 @@ def test_upgrade_preserves_existing_replica_data_and_root_identity(postgres_node
         paused = [stack.enter_context(replica.node.connect()) for replica in cluster.replicas]
         for conn in paused:
             conn.execute('SELECT pg_advisory_lock(2895359559)')
-        master.execute("ALTER EXTENSION pgwrh UPDATE TO '0.2.2'")
+        master.execute("CREATE EXTENSION pgwrh_fdw; ALTER EXTENSION pgwrh UPDATE TO '0.2.2'")
         for replica in cluster.replicas:
-            replica.execute("ALTER EXTENSION pgwrh UPDATE TO '0.2.2'")
+            replica.execute("CREATE EXTENSION pgwrh_fdw; ALTER EXTENSION pgwrh UPDATE TO '0.2.2'")
         for conn in paused:
             conn.execute('SELECT pg_advisory_unlock(2895359559)')
     for replica, oid in zip(cluster.replicas, roots):

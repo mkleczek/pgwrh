@@ -157,7 +157,7 @@ SELECT
     lr.slot_rel_id AS slot_rel_id,
     (lr).slot_rel_id.schema_name AS slot_schema_name,
     remote_rel_id,
-    shard_server_name,
+    pgwrh_shard_server(sa.schema_name, sa.table_name) AS shard_server_name,
     shard_server_schema AS shard_server_schema_name,
     template_rel_id,
     shard_template_schema AS template_schema_name,
@@ -182,7 +182,7 @@ SELECT
 FROM
     fdw_shard_assignment sa
         JOIN local_rel lr ON (sa.schema_name, sa.table_name) = ((lr).rel_id.schema_name, (lr).rel_id.table_name),
-        format('%s_%s', sa.schema_name, shard_server_name) AS shard_server_schema,
+        format('%s_remote', sa.schema_name) AS shard_server_schema,
         format('%s_%s', sa.schema_name, retained_shard_server_name) AS retained_shard_server_schema,
         format('%s_template', sa.schema_name) AS shard_template_schema,
         format('%s_shield', sa.schema_name) AS view_schema
@@ -193,6 +193,18 @@ FROM
                 (retained_shard_server_schema, (rel_id).table_name)::rel_id AS retained_remote_rel_id,
                 (view_schema, (rel_id).table_name)::rel_id AS view_rel_id
         ) AS rels;
+
+-- One endpoint definition per assigned leaf. Repeated positions retain the
+-- controller's same-zone preference without adding an assignment field.
+CREATE VIEW assignment_target AS
+SELECT (a.schema_name, a.table_name)::rel_id AS node_rel_id,
+       pgwrh_target_server(e.member_role, e.host, e.port, a.dbname, a.shard_server_user) AS server_name,
+       e.host, e.port, a.dbname, a.shard_server_user, count(*)::integer AS weight
+FROM fdw_shard_assignment a,
+     LATERAL unnest(a.shard_server_members, string_to_array(a.host, ','), string_to_array(a.port, ','))
+         AS e(member_role, host, port)
+WHERE pgwrh_target_servers(a.shard_server_members, a.host, a.port, a.dbname, a.shard_server_user) IS NOT NULL
+GROUP BY a.schema_name, a.table_name, e.member_role, e.host, e.port, a.dbname, a.shard_server_user;
 
 CREATE VIEW subscribed_local_shard AS
     SELECT
