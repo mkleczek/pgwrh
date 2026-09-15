@@ -136,5 +136,7 @@ reports remain accepted while replicas replace their old host-set foreign tables
 through the existing attachment reconciliation. Reconnect sessions that loaded
 an older pgwrh_fdw library before relying on its membership locking.
 The upgrade regression builds 0.2.1 from its release tag and checks existing rows and
-root OIDs after upgrade. The existing background-worker API is unchanged; the
-integration suite uses PostgreSQL 18.3 and pg_background 1.9.2.
+root OIDs after upgrade. The upgrade also moves worker execution to pg_background's
+cookie-protected v2 API. Use pg_background 1.6–1.x during the pgwrh upgrade, then
+move to pg_background 2.x after every node has upgraded. The integration shell pins
+pg_background 1.9.2 so it can still start the released pgwrh 0.2.1 for this test.
