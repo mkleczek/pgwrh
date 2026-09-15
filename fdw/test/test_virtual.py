@@ -259,6 +259,218 @@ class VirtualServerTests(unittest.TestCase):
         self.assertEqual(self.c.scalar("SELECT member FROM v"), "virtual_remote_b")
         self.c.sql("COMMIT")
 
+    def join_tables(self, left="s_a,s_b", right="s_b,s_c", estimates=True):
+        options = ", use_remote_estimate 'true'" if estimates else ""
+        self.virtual("v1", left, options=options)
+        self.virtual("v2", right, options=options)
+        for name in ("v1", "v2"):
+            self.c.sql(f"CREATE FOREIGN TABLE {name}_data(id int, value text) "
+                       f"SERVER {name} OPTIONS (table_name 'data')")
+        return "SELECT x.id FROM v1_data x JOIN v2_data y USING (id) ORDER BY x.id"
+
+    def remote_joins(self, query):
+        plan = json.loads(self.c.scalar("EXPLAIN (VERBOSE, FORMAT JSON) " + query))[0]["Plan"]
+        def walk(node):
+            result = [node["Remote SQL"]] if "JOIN" in node.get("Remote SQL", "") else []
+            for child in node.get("Plans", []):
+                result += walk(child)
+            return result
+        return walk(plan)
+
+    def test_cross_virtual_join_and_transaction_pins(self):
+        query = self.join_tables()
+        self.c.sql("BEGIN; SAVEPOINT before_join")
+        self.assertEqual(len(self.remote_joins(query)), 1)
+        self.assertEqual(self.c.sql(query), [("1",), ("2",)])
+        self.c.sql("ROLLBACK TO before_join")
+        self.assertEqual(self.c.scalar("SELECT member FROM v1"), "virtual_remote_b")
+        self.assertEqual(self.c.sql("SELECT pid FROM v1"), self.c.sql("SELECT pid FROM v2"))
+        self.c.sql("ALTER SERVER v1 OPTIONS (SET members 's_a'); "
+                   "ALTER SERVER v2 OPTIONS (SET members 's_c')")
+        self.assertEqual(self.c.sql(query), [("1",), ("2",)])
+        self.c.sql("COMMIT")
+        self.assertEqual(self.remote_joins(query), [])
+
+    def test_cross_virtual_join_prefers_cached_common_member(self):
+        query = self.join_tables("s_a,s_b,s_c", "s_b,s_c,s_d", estimates=False)
+        self.c.sql("ANALYZE v1_data; ANALYZE v2_data")
+        self.c.sql("SELECT pgwrh_fdw_disconnect_all()")
+        pid = self.c.scalar("SELECT pid FROM c")
+        self.c.sql("BEGIN")
+        self.assertEqual(len(self.remote_joins(query)), 1)
+        self.assertEqual(self.c.sql(query), [("1",), ("2",)])
+        self.assertEqual(self.c.sql("SELECT member, pid FROM v1"), [("virtual_remote_c", pid)])
+        self.assertEqual(self.c.sql("SELECT pid FROM v2"), [(pid,)])
+        self.assertEqual(self.c.scalar("SELECT count(*) FROM pgwrh_fdw_get_connections()"), "1")
+        self.c.sql("COMMIT")
+
+    def test_cross_virtual_join_uses_full_three_way_intersection(self):
+        self.join_tables("s_a,s_b", "s_b,s_c")
+        self.virtual("v3", "s_a,s_c", options=", use_remote_estimate 'true'")
+        self.c.sql("CREATE FOREIGN TABLE v3_data(id int, value text) SERVER v3 "
+                   "OPTIONS (table_name 'data'); SET join_collapse_limit = 1")
+        query = ("SELECT x.id FROM (v1_data x JOIN v2_data y USING (id)) "
+                 "JOIN v3_data z USING (id) ORDER BY x.id")
+        # Every pair intersects, but the three-way join cannot run remotely.
+        self.assertTrue(all(sql.count("JOIN") == 1 for sql in self.remote_joins(query)))
+        self.assertEqual(self.c.sql(query), [("1",), ("2",)])
+        self.c.sql("ALTER SERVER v3 OPTIONS (SET members 's_b,s_c')")
+        self.assertTrue(any(sql.count("JOIN") == 2 for sql in self.remote_joins(query)))
+        self.assertEqual(self.c.sql(query), [("1",), ("2",)])
+
+    def test_cross_virtual_join_respects_existing_binding(self):
+        query = self.join_tables()
+        self.c.sql("BEGIN; SELECT * FROM a; SELECT * FROM v1")
+        self.assertEqual(self.c.scalar("SELECT member FROM v1"), "virtual_remote_a")
+        self.assertEqual(self.remote_joins(query), [])
+        self.assertEqual(self.c.sql(query), [("1",), ("2",)])
+        self.c.sql("COMMIT")
+
+    def test_cross_virtual_join_generic_plan_retargets_and_falls_back(self):
+        query = self.join_tables("s_a,s_b", "s_a,s_b")
+        self.c.sql("SET plan_cache_mode = force_generic_plan; PREPARE j AS " + query)
+        self.assertEqual(self.c.sql("EXECUTE j"), [("1",), ("2",)])
+        self.c.sql("ALTER SERVER v1 OPTIONS (SET members 's_c'); "
+                   "ALTER SERVER v2 OPTIONS (SET members 's_c')")
+        self.c.sql("BEGIN")
+        self.assertEqual(len(self.remote_joins("EXECUTE j")), 1)
+        self.assertEqual(self.c.sql("EXECUTE j"), [("1",), ("2",)])
+        self.assertEqual(self.c.scalar("SELECT member FROM v1"), "virtual_remote_c")
+        self.c.sql("COMMIT")
+        self.c.sql("ALTER SERVER v2 OPTIONS (SET members 's_d')")
+        self.assertEqual(self.remote_joins("EXECUTE j"), [])
+        self.assertEqual(self.c.sql("EXECUTE j"), [("1",), ("2",)])
+
+    def test_cross_virtual_outer_joins_and_aggregation(self):
+        self.join_tables()
+        for kind in ("LEFT", "RIGHT", "FULL"):
+            query = (f"SELECT x.id, y.id FROM v1_data x {kind} JOIN v2_data y "
+                     "ON x.id = y.id AND y.id = 1 ORDER BY x.id, y.id")
+            self.assertEqual(len(self.remote_joins(query)), 1)
+            rows = self.c.sql(query)
+            expected = [("1", "1"), ("2", None)] if kind == "LEFT" else (
+                [("1", "1"), (None, "2")] if kind == "RIGHT" else
+                [("1", "1"), ("2", None), (None, "2")])
+            self.assertEqual(rows, expected)
+        query = "SELECT count(*) FROM v1_data x JOIN v2_data y USING (id)"
+        self.assertEqual(len(self.remote_joins(query)), 1)
+        self.assertEqual(self.c.scalar(query), "2")
+
+    def test_cross_virtual_join_does_not_bypass_target_privileges(self):
+        query = self.join_tables()
+        self.c.sql("""CREATE USER MAPPING FOR v_alice SERVER s_a
+                        OPTIONS (user 'v_remote_a', password_required 'false');
+                      CREATE USER MAPPING FOR v_alice SERVER s_c
+                        OPTIONS (user 'v_remote_a', password_required 'false');
+                      GRANT SELECT ON v1_data, v2_data TO v_alice;
+                      SET ROLE v_alice""")
+        self.assertEqual(self.remote_joins(query), [])
+        self.assertEqual(self.c.sql(query), [("1",), ("2",)])
+
+    def test_cross_virtual_join_failure_poisons_every_input(self):
+        query = self.join_tables(estimates=False)
+        self.c.sql("ANALYZE v1_data; ANALYZE v2_data")
+        self.c.sql("ALTER SERVER s_b OPTIONS (ADD transaction_parameters 'missing.required')")
+        self.c.sql("BEGIN; SAVEPOINT attempt")
+        self.assertEqual(len(self.remote_joins(query)), 1)
+        self.error(query, "42704", "was not available")
+        for name in ("v1", "v2"):
+            self.c.sql("ROLLBACK TO attempt")
+            self.error("SELECT * FROM " + name, "08000", "previous connection acquisition")
+        self.c.sql("ROLLBACK")
+
+    def test_cross_virtual_join_generic_plan_checks_later_binding(self):
+        query = self.join_tables()
+        self.c.sql("SET plan_cache_mode = force_generic_plan; PREPARE j AS " + query)
+        self.assertEqual(len(self.remote_joins("EXECUTE j")), 1)
+        self.c.sql("BEGIN; SELECT * FROM a; SELECT * FROM v1; SAVEPOINT attempt")
+        self.error("EXECUTE j", "08000", "no common target")
+        self.c.sql("ROLLBACK TO attempt")
+        self.assertEqual(self.c.scalar("SELECT member FROM v1"), "virtual_remote_a")
+        # Replanning sees the existing binding and chooses a local join.
+        self.c.sql("DEALLOCATE j; PREPARE j AS " + query)
+        self.assertEqual(self.remote_joins("EXECUTE j"), [])
+        self.assertEqual(self.c.sql("EXECUTE j"), [("1",), ("2",)])
+        self.c.sql("ROLLBACK")
+
+    def test_cross_virtual_join_view_owners_and_role_switch(self):
+        query = self.join_tables()
+        self.c.sql("""CREATE USER MAPPING FOR v_alice SERVER s_b
+                         OPTIONS (user 'v_remote_a', password_required 'false');
+                      CREATE USER MAPPING FOR v_bob SERVER s_b
+                         OPTIONS (user 'v_remote_b', password_required 'false');
+                      GRANT SELECT ON v1_data, v2_data TO v_alice, v_bob;
+                      CREATE VIEW owned1 AS SELECT * FROM v1_data;
+                      CREATE VIEW owned2 AS SELECT * FROM v2_data;
+                      ALTER VIEW owned1 OWNER TO v_alice;
+                      ALTER VIEW owned2 OWNER TO v_bob;
+                      GRANT SELECT ON owned1, owned2 TO v_alice, v_bob;
+                      SET plan_cache_mode = force_generic_plan;
+                      PREPARE j AS SELECT x.remote_user, y.remote_user
+                         FROM v1 x JOIN v2 y ON x.pid = y.pid;
+                      SET ROLE v_alice""")
+        self.assertEqual(self.c.sql("EXECUTE j"), [("v_remote_a", "v_remote_a")])
+        self.assertEqual(len(self.remote_joins(query)), 1)
+        different_owners = "SELECT x.id FROM owned1 x JOIN owned2 y USING (id)"
+        self.assertEqual(self.remote_joins(different_owners), [])
+        self.assertEqual(self.c.sql(different_owners), [("1",), ("2",)])
+        self.c.sql("SET ROLE v_bob")
+        self.assertEqual(self.c.sql("EXECUTE j"), [("v_remote_b", "v_remote_b")])
+
+    def test_cross_virtual_join_with_actual_server(self):
+        self.join_tables()
+        self.c.sql("CREATE FOREIGN TABLE actual_data(id int, value text) SERVER s_b "
+                   "OPTIONS (table_name 'data', use_remote_estimate 'true')")
+        query = "SELECT x.id FROM actual_data x JOIN v1_data y USING (id) ORDER BY x.id"
+        self.assertEqual(len(self.remote_joins(query)), 1)
+        self.assertEqual(self.c.sql(query), [("1",), ("2",)])
+
+    def test_cross_virtual_join_async_append(self):
+        query = self.join_tables()
+        self.virtual("v3", "s_b,s_c", options=", use_remote_estimate 'true', async_capable 'true'")
+        self.virtual("v4", "s_b,s_d", options=", use_remote_estimate 'true', async_capable 'true'")
+        for name in ("v1", "v2"):
+            self.c.sql(f"ALTER SERVER {name} OPTIONS (ADD async_capable 'true', ADD fetch_size '1')")
+        for name in ("v3", "v4"):
+            self.c.sql(f"CREATE FOREIGN TABLE {name}_data(id int, value text) "
+                       f"SERVER {name} OPTIONS (table_name 'data', fetch_size '1')")
+        query = ("SELECT x.id FROM v1_data x JOIN v2_data y USING (id) UNION ALL "
+                 "SELECT x.id FROM v3_data x JOIN v4_data y USING (id)")
+        self.c.sql("BEGIN")
+        self.assertEqual(len(self.remote_joins(query)), 2)
+        plan = self.c.scalar("EXPLAIN (VERBOSE, FORMAT JSON) " + query)
+        self.assertIn('"Async Capable": true', plan)
+        for _ in range(2):
+            self.assertEqual(sorted(self.c.sql(query)), [("1",), ("1",), ("2",), ("2",)])
+        pids = [self.c.scalar("SELECT pid FROM " + name) for name in ("v1", "v2", "v3", "v4")]
+        self.assertEqual(len(set(pids)), 1)
+        self.c.sql("COMMIT")
+
+    def test_cross_virtual_partitionwise_join_and_pruning(self):
+        self.c.sql("CREATE TABLE px(id int, value text) PARTITION BY RANGE (id); "
+                   "CREATE TABLE py(id int, value text) PARTITION BY RANGE (id); "
+                   "SET enable_partitionwise_join = on; "
+                   "SET plan_cache_mode = force_generic_plan")
+        for index, members in ((1, "s_a"), (2, "s_b")):
+            for side in ("x", "y"):
+                route = f"route_{side}{index}"
+                self.virtual(route, members, options=", use_remote_estimate 'true'")
+                self.c.sql(f"CREATE FOREIGN TABLE p{side}{index} PARTITION OF p{side} "
+                           f"FOR VALUES FROM ({index}) TO ({index + 1}) SERVER {route} "
+                           "OPTIONS (table_name 'data')")
+        # The remote tables must obey their local partition bounds.
+        for member, index in (("a", 1), ("b", 2)):
+            with self.cluster.connect("virtual_remote_" + member) as c:
+                c.sql(f"CREATE VIEW partition_{index} AS SELECT * FROM data WHERE id = {index}")
+            for side in ("x", "y"):
+                self.c.sql(f"ALTER FOREIGN TABLE p{side}{index} OPTIONS (SET table_name 'partition_{index}')")
+        query = "SELECT x.id FROM px x JOIN py y USING (id) ORDER BY x.id"
+        self.assertEqual(len(self.remote_joins(query)), 2)
+        self.assertEqual(self.c.sql(query), [("1",), ("2",)])
+        self.c.sql("PREPARE pj(int) AS SELECT x.id FROM px x JOIN py y USING (id) WHERE x.id = $1")
+        self.assertEqual(self.c.sql("EXECUTE pj(1)"), [("1",)])
+        self.assertEqual(self.c.sql("EXECUTE pj(2)"), [("2",)])
+
     def test_modification_call_sites_and_savepoints(self):
         self.virtual()
         self.c.sql("""CREATE FOREIGN TABLE writes(id int, value text) SERVER v

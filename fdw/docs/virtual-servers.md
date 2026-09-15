@@ -117,9 +117,26 @@ go through the same resolver without changing their call sites. Remote estimates
 but do not bind virtual servers: join planning must first find a common target.
 Estimation can therefore open sessions that execution does not ultimately use.
 Prepared plans acquire
-the current transaction's connection when executed. Joins within one virtual
-server retain normal pushdown behavior; sharing an actual connection does not
-enable joins between different virtual servers to be pushed down.
+the current transaction's connection when executed. Joins within one virtual server retain normal pushdown behavior. SELECT joins
+across different virtual servers (or a virtual server and one of its actual
+members) can also be pushed down when all inputs share an accessible target.
+The planner intersects all inputs, including existing transaction bindings;
+pairwise overlap alone is insufficient. It retains the normal join-safety and
+cost checks. Execution chooses one common member and binds every virtual input
+before opening the shared connection. Cached plans store the input server OIDs,
+not a selected replica; PostgreSQL invalidates plans on ALTER SERVER.
+
+The additional paths cover the existing INNER, LEFT, RIGHT, FULL and SEMI join
+support, as well as eligible upper operations and partitionwise joins. Inputs
+must have the same effective local user and matching shippable-extension lists.
+Cross-server write queries and row-locking queries keep local joins; their EPQ
+and direct-modification routing is not extended.
+
+Eligibility is checked again at execution. A prepared remote join can become
+incompatible with a binding established after it was planned, even without any
+catalog change. Execution reports `no common target` rather than moving an
+established snapshot. Replanning the query in that transaction permits a local
+join. A membership change invalidates the cached plan automatically.
 
 Existing connection inspection and disconnect functions operate on **actual
 servers**. They do not show alias rows or expand virtual-server names. In
@@ -153,3 +170,10 @@ existing transaction bindings and target mapping privileges. Execution reserves
 every virtual input on the chosen member before acquiring their shared physical
 connection. A caught acquisition failure poisons every participating binding.
 Estimation uses the same eligibility checks without reserving new bindings.
+
+`join.c` chains PostgreSQL's existing `set_join_pathlist_hook` to offer paths for
+joins skipped by the core's server-OID check. It only handles this FDW's input
+relations and preserves effective-user checks. `pgwrh_fdw.c` carries input server
+OIDs through join/upper planning into the selected ForeignScan and uses the
+coordinated connection helper at scan initialization. Server catalog identities
+and PostgreSQL core are unchanged.
