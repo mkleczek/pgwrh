@@ -177,6 +177,95 @@ class VirtualServerTests(unittest.TestCase):
         self.c.sql("COMMIT")
         self.assertEqual(self.c.scalar("SELECT member FROM v"), "virtual_remote_b")
 
+    def test_identical_members_share_binding_across_order_and_savepoints(self):
+        self.virtual("first", "s_a,s_b,s_c")
+        self.virtual("peer", " s_c, s_a, s_b ")
+        self.c.sql("BEGIN; SELECT * FROM a; SAVEPOINT first_use")
+        identity = self.c.sql("SELECT member, pid FROM first")
+        self.c.sql("ROLLBACK TO first_use; SELECT * FROM b; "
+                   "ALTER SERVER first OPTIONS (SET members 's_d'); "
+                   "ALTER SERVER s_a OPTIONS (ADD application_name 'retire_after_transaction')")
+        # A peer inherits the established group even when new groups cannot use a.
+        self.assertEqual(self.c.sql("SELECT member, pid FROM peer"), identity)
+        self.assertEqual(self.c.sql("SELECT member, pid FROM first"), identity)
+        self.c.sql("COMMIT; BEGIN; SELECT * FROM c")
+        self.assertEqual(self.c.scalar("SELECT member FROM peer"), "virtual_remote_c")
+        self.assertEqual(self.c.scalar("SELECT member FROM first"), "virtual_remote_d")
+        self.c.sql("ROLLBACK")
+
+    def test_failed_group_cannot_be_retried_through_unused_peer(self):
+        self.virtual("first", "s_a,s_b")
+        self.virtual("peer", "s_b,s_a")
+        for member in "ab":
+            self.c.sql(f"ALTER SERVER s_{member} OPTIONS (ADD transaction_parameters 'missing.required')")
+        self.c.sql("BEGIN; SAVEPOINT attempt")
+        self.error("SELECT * FROM first", "42704", "was not available")
+        self.c.sql("ROLLBACK TO attempt; "
+                   "ALTER SERVER s_a OPTIONS (DROP transaction_parameters); "
+                   "ALTER SERVER s_b OPTIONS (DROP transaction_parameters); SAVEPOINT retry")
+        self.error("SELECT * FROM peer", "08000", "previous connection acquisition")
+        self.c.sql("ROLLBACK TO retry; ALTER SERVER peer OPTIONS (SET members 's_c')")
+        self.error("SELECT * FROM peer", "08000", "previous connection acquisition")
+        self.c.sql("ROLLBACK; ALTER SERVER s_a OPTIONS (DROP transaction_parameters); "
+                   "ALTER SERVER s_b OPTIONS (DROP transaction_parameters)")
+        self.assertEqual(self.c.scalar("SELECT count(*) FROM peer"), "1")
+
+    def test_peer_rechecks_virtual_mapping_and_selected_target_mapping(self):
+        self.virtual("first", "s_a,s_b")
+        self.virtual("peer", "s_b,s_a")
+        self.c.sql("BEGIN; SELECT * FROM a; SELECT * FROM first; "
+                   "ALTER USER MAPPING FOR PUBLIC SERVER peer OPTIONS (ADD user 'ignored'); "
+                   "SAVEPOINT invalid_virtual_mapping")
+        self.error("SELECT * FROM peer", "HV00D", "must have no options")
+        self.c.sql("ROLLBACK TO invalid_virtual_mapping; "
+                   "ALTER USER MAPPING FOR PUBLIC SERVER peer OPTIONS (DROP user); "
+                   "DROP USER MAPPING FOR CURRENT_USER SERVER s_a; "
+                   "CREATE USER MAPPING FOR CURRENT_USER SERVER s_a; SAVEPOINT replaced")
+        self.error("SELECT * FROM peer", "08000", "changed during the transaction")
+        self.c.sql("ROLLBACK TO replaced")
+        self.error("SELECT * FROM first", "08000", "previous connection acquisition")
+        self.c.sql("ROLLBACK")
+
+    def test_group_identity_keeps_effective_users_separate(self):
+        self.virtual("first", "s_a,s_b")
+        self.virtual("peer", "s_b,s_a")
+        self.c.sql("""CREATE USER MAPPING FOR v_alice SERVER s_a
+                         OPTIONS (user 'v_remote_a', password_required 'false');
+                      CREATE USER MAPPING FOR v_bob SERVER s_b
+                         OPTIONS (user 'v_remote_b', password_required 'false');
+                      BEGIN; SET LOCAL ROLE v_alice""")
+        alice = self.c.sql("SELECT member, remote_user, pid FROM first")
+        self.c.sql("SET LOCAL ROLE v_bob")
+        bob = self.c.sql("SELECT member, remote_user, pid FROM peer")
+        self.assertEqual(alice[0][:2], ("virtual_remote_a", "v_remote_a"))
+        self.assertEqual(bob[0][:2], ("virtual_remote_b", "v_remote_b"))
+        self.assertNotEqual(alice[0][2], bob[0][2])
+        self.assertEqual(self.c.sql("SELECT member, remote_user, pid FROM first"), bob)
+        self.c.sql("SET LOCAL ROLE v_alice")
+        self.assertEqual(self.c.sql("SELECT member, remote_user, pid FROM peer"), alice)
+        self.c.sql("COMMIT")
+
+    def test_equal_accessible_subsets_do_not_merge_different_groups(self):
+        self.virtual("first", "s_a,s_b")
+        self.virtual("other", "s_a,s_c")
+        self.c.sql("""CREATE USER MAPPING FOR v_alice SERVER s_a
+                         OPTIONS (user 'v_remote_a', password_required 'false');
+                      BEGIN; SET LOCAL ROLE v_alice; SELECT * FROM first;
+                      RESET ROLE;
+                      ALTER SERVER s_a OPTIONS (ADD application_name 'retired');
+                      SET LOCAL ROLE v_alice; SAVEPOINT attempt""")
+        self.error("SELECT * FROM other", "08000", "no usable member connections")
+        self.c.sql("ROLLBACK")
+
+    def test_estimation_does_not_attach_unused_peer_to_old_group(self):
+        self.virtual("first", "s_a,s_b")
+        self.virtual("peer", "s_b,s_a", options=", use_remote_estimate 'true'")
+        self.c.sql("BEGIN; SELECT * FROM a; SELECT * FROM first; EXPLAIN SELECT * FROM peer; "
+                   "ALTER SERVER peer OPTIONS (SET members 's_c')")
+        self.assertEqual(self.c.scalar("SELECT member FROM peer"), "virtual_remote_c")
+        self.assertEqual(self.c.scalar("SELECT member FROM first"), "virtual_remote_a")
+        self.c.sql("ROLLBACK")
+
     def test_initialization_failure_remains_failed(self):
         self.virtual()
         self.c.sql("ALTER SERVER s_a OPTIONS (ADD transaction_parameters 'missing.required')")
@@ -315,6 +404,9 @@ class VirtualServerTests(unittest.TestCase):
         self.assertTrue(all(sql.count("JOIN") == 1 for sql in self.remote_joins(query)))
         self.assertEqual(self.c.sql(query), [("1",), ("2",)])
         self.c.sql("ALTER SERVER v3 OPTIONS (SET members 's_b,s_c')")
+        # Keep all references to the shared v2/v3 group in the inner join.
+        query = ("SELECT x.id FROM (v2_data y JOIN v3_data z USING (id)) "
+                 "JOIN v1_data x USING (id) ORDER BY x.id")
         self.assertTrue(any(sql.count("JOIN") == 2 for sql in self.remote_joins(query)))
         self.assertEqual(self.c.sql(query), [("1",), ("2",)])
 
@@ -427,7 +519,7 @@ class VirtualServerTests(unittest.TestCase):
 
     def test_cross_virtual_join_async_append(self):
         query = self.join_tables()
-        self.virtual("v3", "s_b,s_c", options=", use_remote_estimate 'true', async_capable 'true'")
+        self.virtual("v3", "s_b,s_c,s_d", options=", use_remote_estimate 'true', async_capable 'true'")
         self.virtual("v4", "s_b,s_d", options=", use_remote_estimate 'true', async_capable 'true'")
         for name in ("v1", "v2"):
             self.c.sql(f"ALTER SERVER {name} OPTIONS (ADD async_capable 'true', ADD fetch_size '1')")
@@ -494,6 +586,30 @@ class VirtualServerTests(unittest.TestCase):
         self.c.sql("SET join_collapse_limit = 1")
         self.assertTrue(any(sql.count("JOIN") == 2 for sql in self.remote_joins(query)))
         self.assertEqual(self.c.sql(query), [("1",), ("2",)])
+
+    def test_cross_group_join_checks_references_to_sibling_shards(self):
+        self.join_tables("s_a,s_b", "s_a")
+        self.virtual("v3", "s_b,s_a", options=", use_remote_estimate 'true'")
+        self.virtual("v4", "s_b", options=", use_remote_estimate 'true'")
+        for name in ("v3", "v4"):
+            self.c.sql(f"CREATE FOREIGN TABLE {name}_data(id int, value text) "
+                       f"SERVER {name} OPTIONS (table_name 'data')")
+        # No virtual server is repeated, but the shared v1/v3 group is repeated.
+        query = ("SELECT x.id FROM v1_data x JOIN v2_data y USING (id) UNION ALL "
+                 "SELECT x.id FROM v3_data x JOIN v4_data y USING (id)")
+        self.assertEqual(self.remote_joins(query), [])
+        self.assertEqual(sorted(self.c.sql(query)), [("1",), ("1",), ("2",), ("2",)])
+
+    def test_cross_group_join_binding_is_inherited_by_unused_peer(self):
+        query = self.join_tables()
+        self.virtual("peer", "s_b,s_a")
+        self.c.sql("BEGIN")
+        self.assertEqual(len(self.remote_joins(query)), 1)
+        self.assertEqual(self.c.sql(query), [("1",), ("2",)])
+        pid = self.c.scalar("SELECT pid FROM v1")
+        self.c.sql("ALTER SERVER s_b OPTIONS (ADD application_name 'retired')")
+        self.assertEqual(self.c.sql("SELECT member, pid FROM peer"), [("virtual_remote_b", pid)])
+        self.c.sql("ROLLBACK")
 
     def test_cross_virtual_semijoin_and_local_safety_checks(self):
         self.join_tables()
@@ -631,19 +747,18 @@ class VirtualServerTests(unittest.TestCase):
         self.assertEqual(self.c.sql("SELECT server_name FROM pgwrh_fdw_get_connections()"), [("s_a",)])
         self.c.sql("COMMIT")
 
-    def test_invalidated_active_connection_accepts_only_existing_bindings(self):
+    def test_invalidated_active_connection_accepts_only_existing_groups(self):
         self.virtual("bound", "s_b")
         self.virtual("fresh", "s_b,s_c")
-        self.virtual("blocked", "s_b")
+        self.virtual("peer", "s_b")
         self.c.sql("BEGIN")
         pid = self.c.scalar("SELECT pid FROM bound")
         self.c.sql("ALTER SERVER s_b OPTIONS (ADD application_name 'changed')")
         self.assertEqual(self.c.scalar("SELECT member FROM fresh"), "virtual_remote_c")
         self.assertEqual(self.c.scalar("SELECT pid FROM bound"), pid)
-        self.c.sql("SAVEPOINT attempt")
-        self.error("SELECT * FROM blocked", "08000", "no usable member connections")
-        self.c.sql("ROLLBACK TO attempt; COMMIT")
-        self.assertNotEqual(self.c.scalar("SELECT pid FROM blocked"), pid)
+        self.assertEqual(self.c.scalar("SELECT pid FROM peer"), pid)
+        self.c.sql("COMMIT")
+        self.assertNotEqual(self.c.scalar("SELECT pid FROM peer"), pid)
 
 
 if __name__ == "__main__":
