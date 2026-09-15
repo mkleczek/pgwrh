@@ -172,6 +172,21 @@ pgwrh_fdw_validator(PG_FUNCTION_ARGS)
 			/* check list syntax, warn about uninstalled extensions */
 			(void) ExtractExtensionList(defGetString(def), true);
 		}
+		else if (strcmp(def->defname, "load_balance_weight") == 0)
+		{
+			char	   *value = defGetString(def);
+			char	   *end;
+			long		weight;
+
+			errno = 0;
+			weight = strtol(value, &end, 10);
+			if (errno != 0 || end == value || *end != '\0' ||
+				weight < 1 || weight > INT_MAX)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("\"%s\" must be an integer between 1 and %d",
+								def->defname, INT_MAX)));
+		}
 		else if (strcmp(def->defname, "fetch_size") == 0 ||
 				 strcmp(def->defname, "batch_size") == 0)
 		{
@@ -257,6 +272,7 @@ InitPgFdwOptions(void)
 	/* non-libpq FDW-specific FDW options */
 	static const PgFdwOption non_libpq_options[] = {
 		{"members", ForeignServerRelationId, false},
+		{"load_balance_weight", ForeignServerRelationId, false},
 		{"transaction_parameters", ForeignServerRelationId, false},
 		{"schema_name", ForeignTableRelationId, false},
 		{"table_name", ForeignTableRelationId, false},

@@ -387,6 +387,43 @@ bind_alias(Oid serverid, Oid userid, UserMapping *target)
 	return binding;
 }
 
+/*
+ * Weighted reservoir selection within the best reuse rank. Actual servers own
+ * the preference so overlapping virtual servers agree about each target.
+ * The validator bounds weights by INT_MAX; even an INT_MAX-length candidate
+ * list cannot overflow the uint64 total. Weights never change routing groups
+ * or an existing transaction binding.
+ */
+static Oid
+choose_target(List *candidates)
+{
+	ListCell   *lc;
+	uint64		total = 0;
+	Oid			selected = InvalidOid;
+
+	Assert(candidates != NIL);
+	foreach(lc, candidates)
+	{
+		Oid			serverid = lfirst_oid(lc);
+		ForeignServer *server = GetForeignServer(serverid);
+		ListCell   *option;
+		uint64		weight = 1;
+
+		foreach(option, server->options)
+		{
+			DefElem    *def = lfirst_node(DefElem, option);
+
+			if (strcmp(def->defname, "load_balance_weight") == 0)
+				weight = strtoul(defGetString(def), NULL, 10);
+		}
+		total += weight;
+		if (!OidIsValid(selected) ||
+			pg_prng_uint64_range(&pg_global_prng_state, 1, total) <= weight)
+			selected = serverid;
+	}
+	return selected;
+}
+
 UserMapping *
 pgwrh_fdw_resolve_virtual_mapping(UserMapping *user,
 								  PgwrhFdwRankConnection rank_connection,
@@ -459,7 +496,7 @@ pgwrh_fdw_resolve_virtual_mapping(UserMapping *user,
 			best_rank = rank;
 		}
 		if (rank == best_rank)
-			candidates = lappend(candidates, candidate);
+			candidates = lappend_oid(candidates, memberid);
 	}
 	list_free(memberids);
 	if (candidates == NIL)
@@ -475,9 +512,7 @@ pgwrh_fdw_resolve_virtual_mapping(UserMapping *user,
 				 errhint("The effective local user needs USAGE and a user mapping on at least one member server.")));
 	}
 
-	target = list_nth(candidates,
-					 pg_prng_uint64_range(&pg_global_prng_state, 0,
-										  list_length(candidates) - 1));
+	target = GetUserMapping(user->userid, choose_target(candidates));
 	list_free(candidates);
 
 	*binding = bind_alias(user->serverid, user->userid, target);
@@ -648,8 +683,7 @@ pgwrh_fdw_group_connection(List *serverids, Oid userid,
 				(errcode(ERRCODE_CONNECTION_EXCEPTION),
 				 errmsg("no common target for virtual foreign servers"),
 				 errhint("Replan the query with compatible transaction bindings and server membership.")));
-	target = GetUserMapping(userid, list_nth_oid(best,
-		pg_prng_uint64_range(&pg_global_prng_state, 0, list_length(best) - 1)));
+	target = GetUserMapping(userid, choose_target(best));
 	list_free(best);
 	list_free(targets);
 
