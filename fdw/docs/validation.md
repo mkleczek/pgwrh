@@ -2,6 +2,23 @@
 
 Validated on 2026-09-14, locally on macOS arm64 and in Linux CI.
 
+## Weighted routing and initial connection failover
+
+Validated locally on 2026-09-15 with PostgreSQL 18.3 on macOS arm64:
+
+* All 99 integration tests (23 context, 76 virtual), plus 26 subtests.
+* Both retained upstream SQL suites, `eval_plan_qual` isolation, all seven SCRAM
+  TAP assertions, and the unchanged 16-symbol export audit.
+* Weight validation, unequal selection, pushed joins, reuse priority, shared pins,
+  and weight totals above 32 bits.
+* Failed idle reconnects, coordinated failover of cached join plans, exhausted
+  candidates, and shared failure state across savepoint rollback.
+* Transaction-context errors do not retry, including a receiver hook explicitly
+  raising SQLSTATE 08001 after the remote transaction has started.
+
+The weight change passed all 95 integration tests independently before adding
+initial connection failover. Both changes remain in extension version 0.1.0.
+
 ## Synchronized virtual membership updates
 
 Validated locally on 2026-09-15 with PostgreSQL 18.3 on macOS arm64:

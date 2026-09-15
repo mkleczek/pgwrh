@@ -101,6 +101,68 @@ class VirtualServerTests(unittest.TestCase):
         self.error("ALTER USER MAPPING FOR CURRENT_USER SERVER s_a "
                    "OPTIONS (ADD load_balance_weight '2')", "HV00D")
 
+    def refuse_new_connections(self, member, pid):
+        db = 'virtual_remote_' + member
+        self.admin.sql(f'ALTER DATABASE {db} ALLOW_CONNECTIONS false')
+        self.addCleanup(self.admin.sql, f'ALTER DATABASE {db} ALLOW_CONNECTIONS true')
+        self.admin.sql(f'SELECT pg_terminate_backend({pid}, 5000)')
+
+    def test_initial_connection_failover_preserves_shared_savepoint_binding(self):
+        self.virtual('v', 's_a,s_b')
+        self.virtual('peer', 's_b,s_a')
+        # A dead idle session outranks an unopened target, deterministically
+        # exercising the failed reconnect before falling back to b.
+        pid = self.c.scalar('SELECT pid FROM a')
+        self.refuse_new_connections('a', pid)
+        self.c.sql('BEGIN; SAVEPOINT first_use')
+        identity = self.c.sql('SELECT member, pid FROM v')
+        self.assertEqual(identity[0][0], 'virtual_remote_b')
+        self.c.sql('ROLLBACK TO first_use')
+        self.assertEqual(self.c.sql('SELECT member, pid FROM peer'), identity)
+        self.c.sql('COMMIT')
+
+    def test_prepared_join_failover_moves_all_provisional_groups(self):
+        query = self.join_tables(left='s_a,s_b,s_c', right='s_b,s_a,s_d')
+        pid = self.c.scalar('SELECT pid FROM a')
+        self.c.sql('SET plan_cache_mode = force_generic_plan; PREPARE joined AS ' + query)
+        self.assertEqual(len(self.remote_joins('EXECUTE joined')), 1)
+        self.refuse_new_connections('a', pid)
+        self.c.sql('BEGIN; SAVEPOINT first_use')
+        self.assertEqual(self.c.sql('EXECUTE joined'), [('1',), ('2',)])
+        self.c.sql('ROLLBACK TO first_use')
+        identity = self.c.sql('SELECT member, pid FROM v1')
+        self.assertEqual(identity[0][0], 'virtual_remote_b')
+        self.assertEqual(self.c.sql('SELECT member, pid FROM v2'), identity)
+        self.c.sql('COMMIT')
+
+    def test_failed_initial_connections_poison_all_shared_aliases(self):
+        self.virtual('v', 's_a,s_b')
+        self.virtual('peer', 's_b,s_a')
+        for member in 'ab':
+            self.c.sql(f"ALTER SERVER s_{member} OPTIONS (SET dbname 'missing_{self.db}_{member}')")
+        self.c.sql('BEGIN; SAVEPOINT attempt')
+        self.error('SELECT * FROM v', '08001', 'could not connect')
+        self.c.sql("ROLLBACK TO attempt; ALTER SERVER s_a OPTIONS (SET dbname 'virtual_remote_a')")
+        self.error('SELECT * FROM peer', '08000', 'previous connection acquisition')
+        self.c.sql('ROLLBACK')
+        log = self.cluster.log.read_text()
+        for member in 'ab':
+            self.assertIn(f'FATAL:  database "missing_{self.db}_{member}" does not exist', log)
+
+    def test_initial_context_error_does_not_fail_over(self):
+        self.virtual('v', 's_a,s_b')
+        self.virtual('peer', 's_b,s_a')
+        for parameter, value, state in (('ctxprobe.level', 'invalid', '22023'),
+                                         ('ctxprobe.token', 'raise08001', '08001')):
+            with self.subTest(parameter=parameter):
+                self.c.sql(f"ALTER SERVER s_a OPTIONS (ADD transaction_parameters '{parameter}')")
+                self.c.sql(f"SET {parameter} = '1'; SELECT * FROM a")
+                self.c.sql(f"SET {parameter} = '{value}'; BEGIN; SAVEPOINT attempt")
+                self.error('SELECT * FROM v', state)
+                self.c.sql('ROLLBACK TO attempt')
+                self.error('SELECT * FROM peer', '08000', 'previous connection acquisition')
+                self.c.sql('ROLLBACK; ALTER SERVER s_a OPTIONS (DROP transaction_parameters)')
+
     def test_weights_choose_among_idle_connections_and_can_be_changed(self):
         self.virtual(members="s_a,s_b")
         # Each sample is a new transaction, with both connections equally reusable.

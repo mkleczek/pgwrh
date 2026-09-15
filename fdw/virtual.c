@@ -644,23 +644,14 @@ pgwrh_fdw_common_targets(List *serverids, Oid userid)
 	return common;
 }
 
-/*
- * Acquire one physical connection for a whole remote expression. Estimation
- * uses bind=false: EXPLAIN must not commit individual shards to replicas before
- * join planning has found their intersection. Actual sessions still use the
- * ordinary cache and transaction setup, including transaction_parameters.
- */
-PGconn *
-pgwrh_fdw_group_connection(List *serverids, Oid userid,
-						   PgFdwConnState **state, bool bind)
+/* Choose within the best reuse tier, both initially and after a failed dial. */
+static UserMapping *
+choose_mapping(List *targets, Oid userid)
 {
-	List *targets = pgwrh_fdw_common_targets(serverids, userid);
 	List *best = NIL;
-	List *bindings = NIL;
 	ListCell *lc;
 	PgwrhFdwConnectionRank best_rank = PGWRH_FDW_CONNECTION_UNUSABLE;
 	UserMapping *target;
-	PGconn *conn = NULL;
 
 	foreach(lc, targets)
 	{
@@ -685,47 +676,137 @@ pgwrh_fdw_group_connection(List *serverids, Oid userid,
 				 errhint("Replan the query with compatible transaction bindings and server membership.")));
 	target = GetUserMapping(userid, choose_target(best));
 	list_free(best);
-	list_free(targets);
+	return target;
+}
 
-	if (!bind)
-		return GetConnection(target, false, state);
+/*
+ * Acquire a physical session before publishing successful routing pins. Retry
+ * only a failed initial connection (08001) whose cache entry is still empty.
+ * Context, query, transaction-start and cancellation errors are not retried.
+ * A coordinated expression must move all its provisional bindings together.
+ */
+static PGconn *
+acquire_targets(UserMapping *target, List *targets, List *bindings,
+                bool will_prep_stmt, PgFdwConnState **state)
+{
+	MemoryContext context = CurrentMemoryContext;
+	ListCell *lc;
+	PGconn *conn = NULL;
 
-	/* Reserve every virtual input before any connection or transaction work. */
-	foreach(lc, serverids)
+	for (;;)
 	{
-		Oid serverid = lfirst_oid(lc);
-		PgwrhFdwVirtualBinding *binding = find_binding(serverid, userid);
+		volatile bool retry = false;
+		bool pinned = false;
 
-		if (binding || pgwrh_fdw_is_virtual_server(serverid))
-		{
-			binding = bind_alias(serverid, userid, target);
-			Assert(binding->serverid == target->serverid && binding->umid == target->umid);
-			bindings = list_append_unique_ptr(bindings, binding);
-		}
-	}
-
-	PG_TRY();
-	{
-		/* Reservations are complete; any acquisition error below poisons them all. */
-		foreach(lc, bindings)
-			((PgwrhFdwVirtualBinding *) lfirst(lc))->failed = false;
-		foreach(lc, serverids)
-		{
-			PGconn *next = GetConnection(GetUserMapping(userid, lfirst_oid(lc)),
-										false, state);
-
-			Assert(conn == NULL || conn == next);
-			conn = next;
-		}
-	}
-	PG_CATCH();
-	{
-		/* A caught acquisition error must not let any input change replicas. */
 		foreach(lc, bindings)
 			((PgwrhFdwVirtualBinding *) lfirst(lc))->failed = true;
-		PG_RE_THROW();
+		foreach(lc, bindings)
+		{
+			PgwrhFdwVirtualBinding *binding = lfirst(lc);
+
+			pinned |= binding->conn != NULL;
+			pgwrh_fdw_check_cached_virtual_connection(binding, target->umid);
+			Assert(binding->conn == NULL || binding->serverid == target->serverid);
+			binding->serverid = target->serverid;
+			binding->umid = target->umid;
+		}
+
+		PG_TRY();
+		{
+			conn = GetConnection(target, will_prep_stmt, state);
+		}
+		PG_CATCH();
+		{
+			MemoryContext error_context = MemoryContextSwitchTo(context);
+			ErrorData *error = CopyErrorData();
+
+			/* NEW after 08001 means connect_pg_server left an empty entry. */
+			if (pinned || error->sqlerrcode != ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION ||
+				pgwrh_fdw_rank_cached_connection(target->umid) != PGWRH_FDW_CONNECTION_NEW ||
+				list_length(targets) <= 1)
+			{
+				MemoryContextSwitchTo(error_context);
+				PG_RE_THROW();
+			}
+			FlushErrorState();
+			FreeErrorData(error);
+			retry = true;
+		}
+		PG_END_TRY();
+
+		if (!retry)
+			break;
+		targets = list_delete_oid(targets, target->serverid);
+		target = choose_mapping(targets, target->userid);
 	}
-	PG_END_TRY();
+
+	foreach(lc, bindings)
+		pgwrh_fdw_virtual_connected(lfirst(lc), conn);
+	list_free(targets);
+	return conn;
+}
+
+/* GetConnection keeps its signature and delegates only its virtual case here. */
+PGconn *
+pgwrh_fdw_acquire_virtual_connection(UserMapping *target,
+                                   PgwrhFdwVirtualBinding *binding,
+                                   bool will_prep_stmt, PgFdwConnState **state)
+{
+	List *targets = list_make1_oid(target->serverid);
+	List *bindings = list_make1(binding);
+	ListCell *lc;
+	PGconn *conn;
+
+	if (binding->conn == NULL)
+	{
+		foreach(lc, binding->key.members)
+		{
+			Oid memberid = lfirst_oid(lc);
+
+			if (can_use_member(target->userid, memberid) &&
+				pgwrh_fdw_rank_cached_connection(GetUserMapping(target->userid, memberid)->umid) !=
+				PGWRH_FDW_CONNECTION_UNUSABLE)
+				targets = list_append_unique_oid(targets, memberid);
+		}
+	}
+	conn = acquire_targets(target, targets, bindings, will_prep_stmt, state);
+	list_free(bindings);
+	return conn;
+}
+
+/*
+ * Acquire one physical connection for a whole remote expression. Estimation
+ * uses bind=false: EXPLAIN must not commit individual shards to replicas before
+ * join planning has found their intersection. Actual sessions still use the
+ * ordinary cache and transaction setup, including transaction_parameters.
+ */
+PGconn *
+pgwrh_fdw_group_connection(List *serverids, Oid userid,
+                           PgFdwConnState **state, bool bind)
+{
+	List *targets = pgwrh_fdw_common_targets(serverids, userid);
+	List *bindings = NIL;
+	ListCell *lc;
+	UserMapping *target = choose_mapping(targets, userid);
+	PGconn *conn;
+
+	if (bind)
+	{
+		/* Reserve every virtual input before any connection or transaction work. */
+		foreach(lc, serverids)
+		{
+			Oid serverid = lfirst_oid(lc);
+			PgwrhFdwVirtualBinding *binding = find_binding(serverid, userid);
+
+			if (binding || pgwrh_fdw_is_virtual_server(serverid))
+			{
+				binding = bind_alias(serverid, userid, target);
+				Assert(binding->serverid == target->serverid && binding->umid == target->umid);
+				bindings = list_append_unique_ptr(bindings, binding);
+			}
+		}
+	}
+	conn = acquire_targets(target, targets, bindings, false, state);
 	list_free(bindings);
 	return conn;
 }

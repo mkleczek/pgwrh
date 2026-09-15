@@ -13,6 +13,18 @@ static int level;
 static char *secret;
 static char *token;
 
+static bool
+check_token(char **newval, void **extra, GucSource source)
+{
+	if (strcmp(*newval, "raise08001") == 0)
+	{
+		GUC_check_errcode(ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION);
+		GUC_check_errmsg("context_probe: transaction context raised 08001");
+		return false;
+	}
+	return true;
+}
+
 static void
 probe_utility(PlannedStmt *pstmt, const char *queryString,
 			  bool readOnlyTree, ProcessUtilityContext context,
@@ -45,7 +57,7 @@ _PG_init(void)
 							   GUC_SUPERUSER_ONLY, NULL, NULL, NULL);
 	DefineCustomStringVariable("ctxprobe.token", "Test default", NULL,
 							   &token, "default-token", PGC_USERSET,
-							   0, NULL, NULL, NULL);
+							   0, check_token, NULL, NULL);
 	MarkGUCPrefixReserved("ctxprobe");
 	previous_hook = ProcessUtility_hook;
 	ProcessUtility_hook = probe_utility;
