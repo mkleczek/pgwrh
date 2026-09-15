@@ -193,6 +193,24 @@ static int	pgfdw_conn_check(PGconn *conn);
 static bool pgfdw_conn_checkable(void);
 static bool pgfdw_has_required_scram_options(const char **keywords, const char **values);
 
+/* Inspect only: never connect to, initialize, or drain unselected members. */
+static PgwrhFdwConnectionRank
+rank_cached_connection(Oid umid)
+{
+	ConnCacheEntry *entry = hash_search(ConnectionHash, &umid, HASH_FIND, NULL);
+
+	if (entry == NULL || entry->conn == NULL)
+		return PGWRH_FDW_CONNECTION_NEW;
+	if (entry->changing_xact_state ||
+		(entry->xact_depth > 0 &&
+		 (entry->invalidated || PQstatus(entry->conn) != CONNECTION_OK)))
+		return PGWRH_FDW_CONNECTION_UNUSABLE;
+	if (entry->invalidated || PQstatus(entry->conn) != CONNECTION_OK)
+		return PGWRH_FDW_CONNECTION_NEW;
+	return entry->xact_depth > 0 ?
+		PGWRH_FDW_CONNECTION_ACTIVE : PGWRH_FDW_CONNECTION_IDLE;
+}
+
 /*
  * Get a PGconn which can be used to execute queries on the remote PostgreSQL
  * server with the user's authorization.  A new connection is established
@@ -247,7 +265,7 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 	xact_got_connection = true;
 
 	/* Resolve aliases before entering the unchanged physical connection cache. */
-	user = pgwrh_fdw_resolve_virtual_mapping(user, &binding);
+	user = pgwrh_fdw_resolve_virtual_mapping(user, rank_cached_connection, &binding);
 
 	/* Create hash key for the entry.  Assume no pad bytes in key struct */
 	key = user->umid;

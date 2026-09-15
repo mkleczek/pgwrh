@@ -267,6 +267,113 @@ class VirtualServerTests(unittest.TestCase):
         self.c.sql("ROLLBACK")
         self.assertEqual(self.c.scalar("SELECT count(*) FROM writes"), "2")
 
+    def test_overlapping_sets_share_an_idle_then_active_connection(self):
+        self.virtual("v_abc", "s_a,s_b,s_c")
+        self.virtual("v_bcd", "s_b,s_c,s_d")
+        pid = self.c.scalar("SELECT pid FROM b")
+        self.c.sql("BEGIN")
+        self.assertEqual(self.c.scalar("SELECT pid FROM v_abc"), pid)
+        self.assertEqual(self.c.scalar("SELECT pid FROM v_bcd"), pid)
+        self.assertEqual(self.c.sql("SELECT server_name FROM pgwrh_fdw_get_connections()"), [("s_b",)])
+        # Once bound, opening another eligible connection cannot redirect it.
+        self.c.sql("SELECT * FROM a")
+        self.assertEqual(self.c.scalar("SELECT pid FROM v_abc"), pid)
+        self.c.sql("COMMIT")
+
+    def test_active_connection_precedes_idle_connection(self):
+        self.virtual(members="s_a,s_b,s_c")
+        idle = self.c.scalar("SELECT pid FROM a")
+        self.c.sql("BEGIN")
+        active = self.c.scalar("SELECT pid FROM b")
+        self.assertNotEqual(active, idle)
+        self.assertEqual(self.c.scalar("SELECT pid FROM v"), active)
+        self.assertEqual(self.c.scalar("SELECT count(*) FROM pgwrh_fdw_get_connections()"), "2")
+        self.c.sql("COMMIT")
+
+    def test_cached_connection_for_another_mapping_is_not_borrowed(self):
+        self.virtual(members="s_a,s_b")
+        self.c.sql("""
+            CREATE USER MAPPING FOR v_alice SERVER s_a
+                OPTIONS (user 'v_remote_a', password_required 'false');
+            CREATE USER MAPPING FOR v_alice SERVER s_b
+                OPTIONS (user 'v_remote_b', password_required 'false');
+            BEGIN;
+        """)
+        owner_pid = self.c.scalar("SELECT pid FROM b")
+        self.c.sql("SET LOCAL ROLE v_alice")
+        alice_pid = self.c.scalar("SELECT pid FROM a")
+        self.assertEqual(self.c.sql("SELECT member, remote_user, pid FROM v"),
+                         [("virtual_remote_a", "v_remote_a", alice_pid)])
+        self.assertNotEqual(owner_pid, alice_pid)
+        self.c.sql("COMMIT")
+
+    def test_disjoint_sets_require_separate_connections(self):
+        self.virtual("v_ab", "s_a,s_b")
+        self.virtual("v_cd", "s_c,s_d")
+        self.c.sql("BEGIN")
+        self.assertNotEqual(self.c.scalar("SELECT pid FROM v_ab"),
+                            self.c.scalar("SELECT pid FROM v_cd"))
+        self.assertEqual(self.c.scalar("SELECT count(*) FROM pgwrh_fdw_get_connections()"), "2")
+        self.c.sql("COMMIT")
+
+    def test_async_scans_share_pending_request_state(self):
+        self.virtual("v_abc", "s_a,s_b,s_c", options=", async_capable 'true'")
+        self.virtual("v_bcd", "s_b,s_c,s_d", options=", async_capable 'true'")
+        with self.cluster.connect("virtual_remote_b") as remote:
+            remote.sql("CREATE TABLE async_data AS SELECT generate_series(1, 200) AS id")
+        for name, server in (("async_x", "v_abc"), ("async_y", "v_bcd")):
+            self.c.sql(f"CREATE FOREIGN TABLE {name}(id int) SERVER {server} "
+                       "OPTIONS (table_name 'async_data', fetch_size '1')")
+        self.c.sql("BEGIN")
+        pid = self.c.scalar("SELECT pid FROM b")
+        query = "SELECT id FROM async_x UNION ALL SELECT id FROM async_y"
+        plan = json.loads(self.c.scalar("EXPLAIN (FORMAT JSON) " + query))[0]["Plan"]
+        self.assertEqual(plan["Node Type"], "Append")
+        self.assertTrue(all(p["Async Capable"] for p in plan["Plans"]))
+        expected = sorted([i for i in range(1, 201)] * 2)
+        for _ in range(2):
+            self.assertEqual(sorted(int(row[0]) for row in self.c.sql(query)), expected)
+        self.assertEqual(self.c.scalar("SELECT pid FROM v_abc"), pid)
+        self.assertEqual(self.c.scalar("SELECT pid FROM v_bcd"), pid)
+        self.assertEqual(self.c.scalar("SELECT count(*) FROM pgwrh_fdw_get_connections()"), "1")
+        self.c.sql("COMMIT")
+
+    def test_runtime_partition_pruning_does_not_connect_unused_route(self):
+        self.c.sql("""
+            CREATE SERVER offline FOREIGN DATA WRAPPER pgwrh_fdw
+                OPTIONS (host '/pgwrh-fdw-nonexistent-socket-directory', port '1');
+            CREATE USER MAPPING FOR CURRENT_USER SERVER offline;
+        """)
+        self.virtual("left_route", "s_a")
+        self.virtual("right_route", "offline")
+        self.c.sql("""
+            CREATE TABLE partitioned(id int, value text) PARTITION BY RANGE (id);
+            CREATE FOREIGN TABLE part_left PARTITION OF partitioned
+                FOR VALUES FROM (0) TO (100) SERVER left_route OPTIONS (table_name 'data');
+            CREATE FOREIGN TABLE part_right PARTITION OF partitioned
+                FOR VALUES FROM (100) TO (200) SERVER right_route OPTIONS (table_name 'data');
+            SET plan_cache_mode = force_generic_plan;
+            PREPARE pruned(int) AS SELECT id FROM partitioned WHERE id = $1;
+            BEGIN;
+        """)
+        self.assertEqual(self.c.sql("EXECUTE pruned(1)"), [("1",)])
+        self.assertEqual(self.c.sql("SELECT server_name FROM pgwrh_fdw_get_connections()"), [("s_a",)])
+        self.c.sql("COMMIT")
+
+    def test_invalidated_active_connection_accepts_only_existing_bindings(self):
+        self.virtual("bound", "s_b")
+        self.virtual("fresh", "s_b,s_c")
+        self.virtual("blocked", "s_b")
+        self.c.sql("BEGIN")
+        pid = self.c.scalar("SELECT pid FROM bound")
+        self.c.sql("ALTER SERVER s_b OPTIONS (ADD application_name 'changed')")
+        self.assertEqual(self.c.scalar("SELECT member FROM fresh"), "virtual_remote_c")
+        self.assertEqual(self.c.scalar("SELECT pid FROM bound"), pid)
+        self.c.sql("SAVEPOINT attempt")
+        self.error("SELECT * FROM blocked", "08000", "no usable member connections")
+        self.c.sql("ROLLBACK TO attempt; COMMIT")
+        self.assertNotEqual(self.c.scalar("SELECT pid FROM blocked"), pid)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
