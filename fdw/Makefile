@@ -5,6 +5,7 @@ OBJS = \
 	$(WIN32RES) \
 	connection.o \
 	deparse.o \
+	join.o \
 	option.o \
 	transaction_context.o \
 	virtual.o \
@@ -31,3 +32,5 @@ include $(PGXS)
 PG_CFLAGS += -fvisibility=hidden
 
 connection.o option.o virtual.o pgwrh_fdw.o: virtual.h
+join.o pgwrh_fdw.o: join.h
+$(OBJS): pgwrh_fdw.h
