@@ -1,12 +1,13 @@
 # pgwrh_fdw
 
 An independent PostgreSQL 18 foreign-data wrapper that propagates selected
-custom configuration parameters when it starts remote transactions. It forks
+custom configuration parameters when it starts remote transactions and supports
+virtual servers backed by ordinary foreign servers. It forks
 PostgreSQL's `contrib/postgres_fdw`; pgwrh is not a dependency.
 
 The PostgreSQL 18.3 source is pinned in [UPSTREAM.md](UPSTREAM.md). The extension
 retains upstream query, modification, connection, and transaction behavior
-when `transaction_parameters` is absent. Stock `postgres_fdw` and `pgwrh_fdw`
+when `transaction_parameters` and `members` are absent. Stock `postgres_fdw` and `pgwrh_fdw`
 can run together in the same database and backend.
 
 The fork is licensed under **AGPL-3.0-only**, with PostgreSQL's original notices
@@ -83,6 +84,14 @@ cannot override the FDW's search path, timezone, encoding, or transfer settings.
 
 Omit the option, or `ALTER SERVER ... OPTIONS (DROP transaction_parameters)`,
 to disable propagation. An empty option string is an error.
+
+## Virtual servers
+
+A server with `members 'replica_a,replica_b'` delegates connections to ordinary
+pgwrh_fdw servers. It requires an empty user mapping; credentials and transaction
+settings come from the selected member's mapping and server. Selection remains
+fixed for the local transaction. See [virtual servers](docs/virtual-servers.md)
+for configuration, access checks, option ownership and error behavior.
 
 ## Frozen transaction context
 
