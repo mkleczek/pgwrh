@@ -96,6 +96,8 @@ existing connection to an eligible member, so overlapping virtual servers can
 share one remote transaction. Among equally reusable targets, selection is
 proportional to the actual server's positive integer `load_balance_weight`
 (default 1). Selection remains fixed for the local transaction.
+Initial connection failures can try another eligible target before acquiring
+a remote transaction; established bindings and context/query errors never fail over.
 Virtual servers with identical member sets share one selection for the same
 effective user, regardless of member order, including across statements and
 savepoints. Each shard can therefore have its own stable virtual server name.

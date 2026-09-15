@@ -212,6 +212,17 @@ pgwrh_fdw_rank_cached_connection(Oid umid)
 		PGWRH_FDW_CONNECTION_ACTIVE : PGWRH_FDW_CONNECTION_IDLE;
 }
 
+/* Check a routing pin before an acquisition could reconnect its cache entry. */
+void
+pgwrh_fdw_check_cached_virtual_connection(PgwrhFdwVirtualBinding *binding, Oid umid)
+{
+	ConnCacheEntry *entry = ConnectionHash ?
+		hash_search(ConnectionHash, &umid, HASH_FIND, NULL) : NULL;
+
+	pgwrh_fdw_check_virtual_connection(binding, entry ? entry->conn : NULL,
+									 entry && entry->conn ? entry->xact_depth : 0);
+}
+
 /*
  * Get a PGconn which can be used to execute queries on the remote PostgreSQL
  * server with the user's authorization.  A new connection is established
@@ -234,6 +245,7 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 	ConnCacheKey key;
 	MemoryContext ccxt = CurrentMemoryContext;
 	PgwrhFdwVirtualBinding *binding;
+	Oid			requested_serverid = user->serverid;
 
 	/* First time through, initialize connection cache hashtable */
 	if (ConnectionHash == NULL)
@@ -288,6 +300,11 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 	pgwrh_fdw_check_virtual_connection(binding, entry->conn,
 									 entry->conn ? entry->xact_depth : 0);
 	pgfdw_reject_incomplete_xact_state_change(entry);
+
+	/* Keep initial virtual-target failover outside the physical cache path. */
+	if (binding)
+		return pgwrh_fdw_acquire_virtual_connection(requested_serverid, user, binding,
+												  will_prep_stmt, state);
 
 	/*
 	 * If the connection needs to be remade due to invalidation, disconnect as

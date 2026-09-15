@@ -194,8 +194,20 @@ including aliases of that group which have not yet been used.
 This includes initial connection and context errors caught inside a savepoint.
 An active connection cannot be replaced by routing to another member after its
 snapshot has been established. Dead idle connections retain upstream reconnect
-behavior. There is no automatic retry on another member after an acquisition
-error; retry the local transaction. Successful savepoint rollback preserves the
+behavior. If an initial connection cannot be established (SQLSTATE `08001`)
+and no binding in the remote expression has acquired a transaction, routing
+tries another eligible target. Each candidate is attempted at most once,
+retaining reuse tiers and weighted selection among remaining candidates.
+This also covers an idle connection whose reconnect fails, and remote
+estimation. Pushed joins retry only within their complete intersection and
+move every provisional binding together. Exhausting the candidates reports
+the last connection error and leaves all reserved routing groups failed.
+
+Transaction-start, context, query and cancellation errors do not cause target
+failover. SQLSTATE alone is insufficient: the physical cache entry must still
+be empty, so even a context hook reporting `08001` cannot switch replicas.
+An established binding never fails over. Retry the local transaction after
+these errors. Successful savepoint rollback preserves the
 original selection and permits normal continued use of the surviving connection.
 
 Bound targets must remain accessible. Replacing the selected mapping with a
