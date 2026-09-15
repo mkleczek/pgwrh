@@ -133,7 +133,25 @@ for the exact applicable user mapping:
 2. An idle cached connection.
 3. A member that needs a new connection.
 
-Ties are chosen uniformly. Cache inspection does not open connections, start
+Ties are chosen randomly in proportion to each actual server's
+`load_balance_weight`. This server-only option accepts integers from 1 through
+2147483647 and defaults to 1; equal weights retain uniform selection. For
+example, `ALTER SERVER replica_a OPTIONS (ADD load_balance_weight '4')` gives
+`replica_a` four times the probability of a default-weight target in the same
+reuse tier. The option is rejected on virtual servers, tables and mappings.
+It applies to both individual scans and coordinated pushed joins, including
+remote estimation. A higher weight never overrides connection reuse or an
+existing transaction binding. Weights are preferences, not capacity limits;
+cached connection affinity can outweigh them across transactions.
+
+Changing a weight affects subsequent selections. It does not change routing
+group identity or reselect already-bound groups. Like other actual-server
+option changes, it invalidates the ordinary connection cache: an active session
+finishes its transaction before retirement. Omit or drop the option to restore
+weight 1. Weights live on actual servers, so overlapping virtual servers on this
+database use the same preference for each shared target.
+
+Cache inspection does not open connections, start
 transactions, or drain pending async requests on unselected members. Incomplete
 connections and invalidated/broken active connections cannot accept new routing
 groups. An unused alias of an already-bound group inherits its connection and

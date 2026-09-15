@@ -93,7 +93,9 @@ A server with `members 'replica_a,replica_b'` delegates connections to ordinary
 pgwrh_fdw servers. It requires an empty user mapping; credentials and transaction
 settings come from the selected member's mapping and server. Routing prefers an
 existing connection to an eligible member, so overlapping virtual servers can
-share one remote transaction. Selection remains fixed for the local transaction.
+share one remote transaction. Among equally reusable targets, selection is
+proportional to the actual server's positive integer `load_balance_weight`
+(default 1). Selection remains fixed for the local transaction.
 Virtual servers with identical member sets share one selection for the same
 effective user, regardless of member order, including across statements and
 savepoints. Each shard can therefore have its own stable virtual server name.

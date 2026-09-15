@@ -87,6 +87,67 @@ class VirtualServerTests(unittest.TestCase):
             time.sleep(0.01)
         self.fail(f"backend {pid} did not wait for {mode}")
 
+    def test_weight_validation_and_actual_server_scope(self):
+        for value in ("0", "-1", "1.5", "", "NaN", "2147483648"):
+            with self.subTest(value=value):
+                self.error("ALTER SERVER s_a OPTIONS (ADD load_balance_weight " +
+                           literal(value) + ")", "22023")
+        self.c.sql("ALTER SERVER s_a OPTIONS (ADD load_balance_weight '2147483647')")
+        self.virtual()
+        self.error("ALTER SERVER v OPTIONS (ADD load_balance_weight '2')",
+                   "HV00D", "not allowed on a virtual server")
+        self.error("ALTER FOREIGN TABLE a OPTIONS (ADD load_balance_weight '2')", "HV00D")
+        self.error("ALTER USER MAPPING FOR CURRENT_USER SERVER s_a "
+                   "OPTIONS (ADD load_balance_weight '2')", "HV00D")
+
+    def test_weights_choose_among_idle_connections_and_can_be_changed(self):
+        self.virtual(members="s_a,s_b")
+        # Each sample is a new transaction, with both connections equally reusable.
+        # Wide bounds distinguish 32:1 from uniform selection without requiring
+        # any particular random sequence (failure probability below 1e-8).
+        for favored in "ab":
+            self.c.sql(f"ALTER SERVER s_{favored} OPTIONS (ADD load_balance_weight '32')")
+            self.c.sql("SELECT * FROM a; SELECT * FROM b")
+            selected = [self.c.scalar("SELECT member FROM v") for _ in range(128)]
+            self.assertGreater(selected.count("virtual_remote_" + favored), 96)
+            self.c.sql(f"ALTER SERVER s_{favored} OPTIONS (DROP load_balance_weight)")
+
+    def test_weights_apply_to_pushed_join_selection(self):
+        self.join_tables(left="s_a,s_b", right="s_b,s_a")
+        query = "SELECT x.member FROM v1 x JOIN v2 y ON x.pid = y.pid"
+        self.assertEqual(len(self.remote_joins(query)), 1)
+        self.c.sql("ALTER SERVER s_b OPTIONS (ADD load_balance_weight '32')")
+        selected = []
+        for _ in range(128):
+            # No cached target: exercise weighted selection for new connections.
+            self.c.sql("SELECT pgwrh_fdw_disconnect_all()")
+            selected.append(self.c.scalar(query))
+        self.assertGreater(selected.count("virtual_remote_b"), 96)
+
+    def test_reuse_and_shared_transaction_pin_override_weights(self):
+        self.virtual("v", "s_a,s_b,s_c")
+        self.virtual("peer", "s_c,s_b,s_a")
+        self.c.sql("ALTER SERVER s_a OPTIONS (ADD load_balance_weight '2147483647'); "
+                   "ALTER SERVER s_c OPTIONS (ADD load_balance_weight '2147483647')")
+        idle = self.c.scalar("SELECT pid FROM b")
+        # A weight of one beats even maximum weights when it can reuse a session.
+        self.assertEqual(self.c.scalar("SELECT pid FROM v"), idle)
+        self.c.sql("SELECT * FROM a; SELECT * FROM c")
+        self.c.sql("BEGIN; SELECT * FROM b; SAVEPOINT pin")
+        self.assertEqual(self.c.scalar("SELECT pid FROM v"), idle)
+        self.c.sql("ROLLBACK TO pin; SELECT * FROM a; SELECT * FROM c; "
+                   "ALTER SERVER s_b OPTIONS (ADD load_balance_weight '2')")
+        self.assertEqual(self.c.scalar("SELECT pid FROM peer"), idle)
+        self.c.sql("COMMIT")
+
+    def test_weight_sum_exceeds_32_bits(self):
+        self.virtual(members="s_a,s_b,s_c")
+        for member in "abc":
+            self.c.sql(f"ALTER SERVER s_{member} OPTIONS (ADD load_balance_weight '2147483647')")
+        self.c.sql("SELECT * FROM a; SELECT * FROM b; SELECT * FROM c")
+        selected = {self.c.scalar("SELECT member FROM v") for _ in range(64)}
+        self.assertEqual(selected, {"virtual_remote_" + member for member in "abc"})
+
     def test_managed_members_validation_and_quoted_identifiers(self):
         self.virtual()
         self.virtual("nested")
