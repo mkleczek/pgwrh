@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 
 from .pgwrh_testkit import MasterHandle, PgwrhCluster, ReplicaSpec, wait_until
+from .test_background import assert_background_execution
 
 
 def release_file(path):
@@ -63,6 +64,7 @@ def test_upgrade_preserves_existing_replica_data_and_root_identity(postgres_node
                    timeout=60, message='upgraded replica did not converge')
         assert replica.query_scalar("SELECT 'test.non_partitioned_data'::regclass::oid") == oid
         assert replica.query_scalar("SELECT extversion FROM pg_extension WHERE extname = 'pgwrh'") == '0.2.2'
+    assert_background_execution(cluster.replicas[0].node)
     cluster.assert_query_results_match(query)
     assert sum(replica.query_scalar('SELECT count(*) FROM pgwrh.remote_node_assignment WHERE level = 0')
                for replica in cluster.replicas) == 1

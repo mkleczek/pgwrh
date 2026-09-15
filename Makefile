@@ -57,7 +57,8 @@ UPGRADE_022 = src/updates/pgwrh--0.2.1--0.2.2.sql.in \
 	src/common.sql \
 	src/master/api-management.sql src/master/implementation-views.sql src/master/api-replica.sql \
 	src/master/triggers.sql src/replica/helpers.sql src/replica/aggregation.sql \
-	src/replica/status.sql src/replica/sync.sql
+	src/replica/status.sql src/replica/sync.sql src/replica/daemon.sql \
+	src/replica/api-management.sql
 
 PG_CONFIG ?= pg_config
 
