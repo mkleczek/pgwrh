@@ -11,10 +11,16 @@
 #include "commands/defrem.h"
 #include "common/hashfn.h"
 #include "common/pg_prng.h"
+#include "executor/spi.h"
+#include "miscadmin.h"
 #include "pgwrh_fdw.h"
+#include "storage/lmgr.h"
 #include "utils/acl.h"
+#include "utils/array.h"
+#include "utils/builtins.h"
 #include "utils/hsearch.h"
 #include "utils/memutils.h"
+#include "utils/resowner.h"
 #include "utils/syscache.h"
 #include "utils/varlena.h"
 #include "virtual.h"
@@ -47,14 +53,25 @@ typedef struct VirtualAlias
 	PgwrhFdwVirtualBinding *binding;
 } VirtualAlias;
 
+typedef struct RoutingUse
+{
+	Oid			serverid;		/* hash key, must be first */
+	bool		locked;			/* reader lock owned by the top transaction */
+	bool		changed;		/* managed update attempted in this transaction */
+} RoutingUse;
+
 typedef struct VirtualState
 {
 	HTAB	   *aliases;
 	HTAB	   *groups;
+	HTAB	   *uses;
 	MemoryContextCallback reset;
 } VirtualState;
 
 static VirtualState *virtual_state = NULL;
+
+extern Datum pgwrh_fdw_handler(PG_FUNCTION_ARGS);
+PG_FUNCTION_INFO_V1(pgwrh_fdw_set_members);
 
 static const char *
 members_option(List *options)
@@ -186,10 +203,74 @@ init_virtual_state(void)
 	ctl.match = routing_match;
 	state->groups = hash_create("pgwrh_fdw routing groups", 8, &ctl,
 							   HASH_ELEM | HASH_FUNCTION | HASH_COMPARE | HASH_CONTEXT);
+	ctl.keysize = sizeof(Oid);
+	ctl.entrysize = sizeof(RoutingUse);
+	state->uses = hash_create("pgwrh_fdw routing locks", 8, &ctl,
+							 HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
 	state->reset.func = reset_virtual_state;
 	MemoryContextRegisterResetCallback(TopTransactionContext, &state->reset);
 	MemoryContextSwitchTo(oldcontext);
 	virtual_state = state;
+}
+
+static RoutingUse *
+routing_use(Oid serverid)
+{
+	RoutingUse *use;
+	bool		found;
+
+	if (!virtual_state)
+		init_virtual_state();
+	use = hash_search(virtual_state->uses, &serverid, HASH_ENTER, &found);
+	if (!found)
+	{
+		use->locked = false;
+		use->changed = false;
+	}
+	return use;
+}
+
+/*
+ * Protect membership before inspecting it, including planning and IMPORT.
+ * The object lock covers every effective user and table of this virtual server.
+ * Top-level ownership matches bindings that survive subtransaction abort.
+ */
+static ForeignServer *
+routing_server(Oid serverid)
+{
+	ForeignServer *server = GetForeignServer(serverid);
+	RoutingUse *use;
+	ResourceOwner saved_owner;
+
+	if (members_option(server->options) == NULL)
+		return server;
+	use = routing_use(serverid);
+	if (use->changed)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("cannot use virtual server \"%s\" after updating its members in this transaction",
+						server->servername),
+				 errhint("Commit or roll back the transaction before using the server.")));
+	if (use->locked)
+		return server;
+
+	saved_owner = CurrentResourceOwner;
+	PG_TRY();
+	{
+		CurrentResourceOwner = TopTransactionResourceOwner;
+		LockDatabaseObject(ForeignServerRelationId, serverid, 0, AccessShareLock);
+		CurrentResourceOwner = saved_owner;
+	}
+	PG_CATCH();
+	{
+		CurrentResourceOwner = saved_owner;
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
+	use->locked = true;
+
+	/* LockDatabaseObject accepts invalidations; discard the pre-wait copy. */
+	return GetForeignServer(serverid);
 }
 
 /* A PUBLIC virtual mapping still carries the caller's effective userid. */
@@ -239,7 +320,7 @@ pgwrh_fdw_routing_members(Oid serverid, Oid userid)
 	/* A used alias retains its original group across topology changes. */
 	if (binding)
 		return list_copy(binding->key.members);
-	server = GetForeignServer(serverid);
+	server = routing_server(serverid);
 	members = members_option(server->options);
 	if (!members)
 		return NIL;
@@ -321,7 +402,7 @@ pgwrh_fdw_resolve_virtual_mapping(UserMapping *user,
 	PgwrhFdwConnectionRank best_rank = PGWRH_FDW_CONNECTION_UNUSABLE;
 
 	*binding = find_binding(user->serverid, user->userid);
-	server = GetForeignServer(user->serverid);
+	server = routing_server(user->serverid);
 	members = members_option(server->options);
 	if (*binding == NULL && members == NULL)
 		return user;
@@ -431,14 +512,14 @@ pgwrh_fdw_virtual_connected(PgwrhFdwVirtualBinding *binding, PGconn *conn)
 bool
 pgwrh_fdw_is_virtual_server(Oid serverid)
 {
-	return members_option(GetForeignServer(serverid)->options) != NULL;
+	return members_option(routing_server(serverid)->options) != NULL;
 }
 
 /* Inspect eligibility without selecting a target or opening a connection. */
 static List *
 server_targets(Oid serverid, Oid userid)
 {
-	ForeignServer *server = GetForeignServer(serverid);
+	ForeignServer *server = routing_server(serverid);
 	const char *members = members_option(server->options);
 	PgwrhFdwVirtualBinding *binding = find_binding(serverid, userid);
 	UserMapping *user;
@@ -492,8 +573,15 @@ List *
 pgwrh_fdw_common_targets(List *serverids, Oid userid)
 {
 	List *common = NIL;
+	List *ordered = list_copy(serverids);
 	ListCell *lc;
 	bool first = true;
+
+	/* Lock all inputs before inspecting their intersection. */
+	list_sort(ordered, list_oid_cmp);
+	foreach(lc, ordered)
+		(void) routing_server(lfirst_oid(lc));
+	list_free(ordered);
 
 	foreach(lc, serverids)
 	{
@@ -606,4 +694,108 @@ pgwrh_fdw_group_connection(List *serverids, Oid userid,
 	PG_END_TRY();
 	list_free(bindings);
 	return conn;
+}
+
+/* Validate again after waiting: ownership and the object may have changed. */
+static void
+check_updatable_virtual_server(ForeignServer *server)
+{
+	ForeignDataWrapper *fdw = GetForeignDataWrapper(server->fdwid);
+	FmgrInfo	handler;
+
+	if (!object_ownercheck(ForeignServerRelationId, server->serverid, GetUserId()))
+		aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_FOREIGN_SERVER, server->servername);
+	if (OidIsValid(fdw->fdwhandler))
+		fmgr_info(fdw->fdwhandler, &handler);
+	if (!OidIsValid(fdw->fdwhandler) || handler.fn_addr != pgwrh_fdw_handler ||
+		members_option(server->options) == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("server \"%s\" is not a pgwrh_fdw virtual server",
+						server->servername)));
+}
+
+/*
+ * SQL entry point for synchronized membership updates. Invoke ordinary DDL
+ * through SPI to preserve permission checks, validation and event triggers.
+ * The exclusive lock belongs to the updating (sub)transaction and remains
+ * held after this function returns. Raw ALTER SERVER is deliberately unchanged.
+ */
+Datum
+pgwrh_fdw_set_members(PG_FUNCTION_ARGS)
+{
+	ForeignServer *server;
+	RoutingUse *use;
+	ArrayType  *members;
+	Datum	   *values;
+	bool	   *nulls;
+	int			count;
+	StringInfoData option;
+	char	   *command;
+	int			i;
+
+	PreventCommandIfReadOnly("pgwrh_fdw_set_members()");
+	if (PG_ARGISNULL(0) || PG_ARGISNULL(1))
+		ereport(ERROR,
+				(errcode(ERRCODE_NULL_VALUE_NOT_ALLOWED),
+				 errmsg("server name and members must not be null")));
+	server = GetForeignServerByName(text_to_cstring(PG_GETARG_TEXT_PP(0)), false);
+	check_updatable_virtual_server(server);
+	use = routing_use(server->serverid);
+	if (use->locked)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("cannot update members of virtual server \"%s\" after using it in this transaction",
+						server->servername),
+				 errhint("Update members in a separate transaction from queries using the server.")));
+
+	members = PG_GETARG_ARRAYTYPE_P(1);
+	if (ARR_NDIM(members) != 1 || ArrayGetNItems(ARR_NDIM(members), ARR_DIMS(members)) == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("members must be a nonempty one-dimensional array of server names")));
+	deconstruct_array(members, TEXTOID, -1, false, TYPALIGN_INT,
+					  &values, &nulls, &count);
+	initStringInfo(&option);
+	for (i = 0; i < count; i++)
+	{
+		char *name;
+
+		if (nulls[i])
+			ereport(ERROR,
+					(errcode(ERRCODE_NULL_VALUE_NOT_ALLOWED),
+					 errmsg("member names must not be null")));
+		name = TextDatumGetCString(values[i]);
+		if (name[0] == '\0' || strlen(name) >= NAMEDATALEN)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("invalid member server name \"%s\"", name)));
+		if (i > 0)
+			appendStringInfoChar(&option, ',');
+		appendStringInfoString(&option, quote_identifier(name));
+	}
+	/* Apply the same identifier and duplicate validation as CREATE SERVER. */
+	list_free_deep(parse_members(option.data));
+
+	LockDatabaseObject(ForeignServerRelationId, server->serverid, 0, AccessExclusiveLock);
+	server = GetForeignServer(server->serverid);
+	check_updatable_virtual_server(server);
+	for (i = 0; i < count; i++)
+		check_member(GetForeignServerByName(TextDatumGetCString(values[i]), false),
+					 server->fdwid);
+
+	/*
+	 * Do not let this transaction route through its own uncommitted membership.
+	 * Such a binding would outlive a rollback of this update to a savepoint.
+	 * Keep the guard even if DDL/event-trigger execution fails and is caught.
+	 */
+	use->changed = true;
+	command = psprintf("ALTER SERVER %s OPTIONS (SET members %s)",
+					   quote_identifier(server->servername), quote_literal_cstr(option.data));
+	if (SPI_connect() != SPI_OK_CONNECT)
+		elog(ERROR, "SPI_connect failed");
+	if (SPI_execute(command, false, 0) != SPI_OK_UTILITY)
+		elog(ERROR, "could not update virtual server members");
+	SPI_finish();
+	PG_RETURN_VOID();
 }

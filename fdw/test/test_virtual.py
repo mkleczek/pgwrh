@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Virtual-server routing through the ordinary FDW connection entry point."""
 import json
+from concurrent.futures import ThreadPoolExecutor
+import time
 import unittest
 
 from support import Cluster, PgError, literal
@@ -75,6 +77,214 @@ class VirtualServerTests(unittest.TestCase):
         self.assertEqual(cm.exception.sqlstate, state, str(cm.exception))
         if fragment:
             self.assertIn(fragment, str(cm.exception))
+
+    def wait_for_routing_lock(self, pid, mode):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if self.admin.scalar(f"SELECT EXISTS (SELECT FROM pg_locks WHERE pid = {pid} "
+                                 "AND locktype = 'object' AND classid = 'pg_foreign_server'::regclass "
+                                 f"AND mode = {literal(mode)} AND NOT granted)") == "t":
+                return
+            time.sleep(0.01)
+        self.fail(f"backend {pid} did not wait for {mode}")
+
+    def test_managed_members_validation_and_quoted_identifiers(self):
+        self.virtual()
+        self.virtual("nested")
+        self.c.sql("CREATE EXTENSION postgres_fdw; "
+                   "CREATE SERVER stock FOREIGN DATA WRAPPER postgres_fdw")
+        for members, state, message in (
+            ("ARRAY[]::text[]", "22023", "nonempty one-dimensional"),
+            ("ARRAY[['s_a']]", "22023", "one-dimensional"),
+            ("ARRAY['s_a',NULL]", "22004", "must not be null"),
+            ("NULL", "22004", "must not be null"),
+            ("ARRAY['']", "22023", "invalid member server name"),
+            ("ARRAY[repeat('a',64)]", "22023", "invalid member server name"),
+            ("ARRAY['s_a','s_a']", "22023", "duplicate"),
+            ("ARRAY['missing']", "42704", "does not exist"),
+            ("ARRAY['nested']", "HV00D", "ordinary server"),
+            ("ARRAY['v']", "HV00D", "ordinary server"),
+            ("ARRAY['stock']", "HV00D", "same foreign-data wrapper"),
+        ):
+            with self.subTest(members=members):
+                self.error(f"SELECT pgwrh_fdw_set_members('v', {members})", state, message)
+        self.error("SELECT pgwrh_fdw_set_members(NULL, ARRAY['s_a'])", "22004")
+        self.error("SELECT pgwrh_fdw_set_members('s_a', ARRAY['s_b'])", "42809", "not a pgwrh_fdw virtual")
+        self.error("SELECT pgwrh_fdw_set_members('stock', ARRAY['s_b'])", "42809")
+        self.c.sql('ALTER SERVER s_b RENAME TO "B, \'quoted\'"; '
+                   'ALTER SERVER v RENAME TO "Shard \'quoted\'"')
+        self.c.sql("SELECT pgwrh_fdw_set_members(" + literal("Shard 'quoted'") + ", ARRAY[" +
+                   literal("B, 'quoted'") + "])")
+        self.assertEqual(self.c.scalar("SELECT member FROM v"), "virtual_remote_b")
+
+    def test_managed_members_owner_and_read_only_checks(self):
+        self.virtual()
+        self.c.sql("GRANT USAGE ON FOREIGN SERVER v TO v_alice; SET ROLE v_alice")
+        self.error("SELECT pgwrh_fdw_set_members('v', ARRAY['s_b'])", "42501", "must be owner")
+        self.c.sql("RESET ROLE; ALTER SERVER v OWNER TO v_alice; SET ROLE v_alice")
+        self.c.sql("SELECT pgwrh_fdw_set_members('v', ARRAY['s_b'])")
+        self.c.sql("RESET ROLE")
+        self.c.sql("BEGIN READ ONLY")
+        self.error("SELECT pgwrh_fdw_set_members('v', ARRAY['s_c'])", "25006", "read-only")
+        self.c.sql("ROLLBACK")
+        self.assertEqual(self.c.scalar("SELECT member FROM v"), "virtual_remote_b")
+
+    def test_managed_members_waits_for_reader_and_savepoint_pin(self):
+        self.virtual()
+        self.identity_table("second_table", "v")
+        with self.cluster.connect(self.db) as writer, ThreadPoolExecutor() as pool:
+            writer.sql("SET statement_timeout = '10s'")
+            pid = writer.scalar("SELECT pg_backend_pid()")
+            for finish in ("COMMIT", "ROLLBACK"):
+                with self.subTest(finish=finish):
+                    writer.sql("SELECT pgwrh_fdw_set_members('v', ARRAY['s_a'])")
+                    self.c.sql("BEGIN; SAVEPOINT first_use")
+                    old = self.c.sql("SELECT member, pid FROM second_table")
+                    self.c.sql("ROLLBACK TO first_use")
+                    update = pool.submit(writer.sql, "SELECT pgwrh_fdw_set_members('v', ARRAY['s_b'])")
+                    try:
+                        self.wait_for_routing_lock(pid, "AccessExclusiveLock")
+                        self.assertFalse(update.done())
+                        # A waiting updater must allow the old transaction to finish.
+                        self.assertEqual(self.c.sql("SELECT member, pid FROM v"), old)
+                    finally:
+                        self.c.sql(finish)
+                    update.result(timeout=10)
+                    self.assertEqual(self.c.scalar("SELECT member FROM v"), "virtual_remote_b")
+
+    def test_managed_members_blocks_cached_reader_until_commit_or_rollback(self):
+        self.virtual()
+        self.c.sql("SET statement_timeout = '10s'; SET plan_cache_mode = force_generic_plan; "
+                   "PREPARE routed AS SELECT member FROM v")
+        self.assertEqual(self.c.scalar("EXECUTE routed"), "virtual_remote_a")
+        pid = self.c.scalar("SELECT pg_backend_pid()")
+        with self.cluster.connect(self.db) as writer, ThreadPoolExecutor() as pool:
+            for finish, target in (("COMMIT", "s_b"), ("ROLLBACK", "s_c")):
+                with self.subTest(finish=finish):
+                    writer.sql(f"BEGIN; SELECT pgwrh_fdw_set_members('v', ARRAY['{target}'])")
+                    # The function has returned, but its lock still protects publication.
+                    read = pool.submit(self.c.scalar, "EXECUTE routed")
+                    try:
+                        self.wait_for_routing_lock(pid, "AccessShareLock")
+                        self.assertFalse(read.done())
+                    finally:
+                        writer.sql(finish)
+                    self.assertEqual(read.result(timeout=10), "virtual_remote_b")
+
+    def test_managed_members_locks_every_pushed_join_input(self):
+        query = self.join_tables(left="s_a,s_b", right="s_b,s_a")
+        self.assertEqual(len(self.remote_joins(query)), 1)
+        self.c.sql("BEGIN; SAVEPOINT first_use")
+        self.assertEqual(self.c.sql(query), [("1",), ("2",)])
+        self.c.sql("ROLLBACK TO first_use")
+        with self.cluster.connect(self.db) as writer, ThreadPoolExecutor() as pool:
+            writer.sql("SET statement_timeout = '10s'")
+            pid = writer.scalar("SELECT pg_backend_pid()")
+            update = pool.submit(writer.sql, "SELECT pgwrh_fdw_set_members('v2', ARRAY['s_c'])")
+            try:
+                self.wait_for_routing_lock(pid, "AccessExclusiveLock")
+                self.assertEqual(self.c.sql(query), [("1",), ("2",)])
+            finally:
+                self.c.sql("COMMIT")
+            update.result(timeout=10)
+        self.assertEqual(self.c.scalar("SELECT member FROM v2"), "virtual_remote_c")
+
+    def test_managed_members_scope_is_alias_not_shared_group(self):
+        self.virtual()
+        self.virtual("peer")
+        self.c.sql("BEGIN; SELECT * FROM v")
+        with self.cluster.connect(self.db) as writer:
+            writer.sql("SET lock_timeout = '1s'; SELECT pgwrh_fdw_set_members('peer', ARRAY['s_b'])")
+        self.assertEqual(self.c.scalar("SELECT member FROM peer"), "virtual_remote_b")
+        self.assertEqual(self.c.scalar("SELECT member FROM v"), "virtual_remote_a")
+        self.c.sql("COMMIT")
+
+    def test_managed_members_covers_estimates_analyze_import_and_failed_acquisition(self):
+        self.virtual(options=", use_remote_estimate 'true'")
+        self.c.sql("CREATE SCHEMA imported")
+        for query in ("EXPLAIN SELECT * FROM v", "ANALYZE v",
+                      "IMPORT FOREIGN SCHEMA public LIMIT TO (data) FROM SERVER v INTO imported"):
+            with self.subTest(query=query):
+                self.c.sql("BEGIN; SAVEPOINT first_use")
+                self.c.sql(query)
+                self.c.sql("ROLLBACK TO first_use; SAVEPOINT update_attempt")
+                self.error("SELECT pgwrh_fdw_set_members('v', ARRAY['s_b'])", "55000", "after using")
+                self.c.sql("ROLLBACK")
+        self.c.sql("ALTER SERVER s_a OPTIONS (ADD transaction_parameters 'missing.required'); "
+                   "BEGIN; SAVEPOINT first_use")
+        self.error("SELECT * FROM v", "42704")
+        self.c.sql("ROLLBACK TO first_use")
+        self.error("SELECT pgwrh_fdw_set_members('v', ARRAY['s_b'])", "55000", "after using")
+        self.c.sql("ROLLBACK")
+        self.c.sql("SELECT pgwrh_fdw_set_members('v', ARRAY['s_b'])")
+        self.assertEqual(self.c.scalar("SELECT member FROM v"), "virtual_remote_b")
+
+    def test_managed_members_rejects_reads_after_rolled_back_update(self):
+        self.virtual()
+        self.c.sql("BEGIN; SAVEPOINT update_attempt; "
+                   "SELECT pgwrh_fdw_set_members('v', ARRAY['s_b'])")
+        self.error("SELECT * FROM v", "55000", "after updating")
+        self.c.sql("ROLLBACK TO update_attempt")
+        self.error("SELECT * FROM v", "55000", "after updating")
+        self.c.sql("ROLLBACK")
+        self.assertEqual(self.c.scalar("SELECT member FROM v"), "virtual_remote_a")
+
+    def test_managed_members_updater_timeout_and_retry(self):
+        self.virtual()
+        self.c.sql("BEGIN; SELECT * FROM v")
+        with self.cluster.connect(self.db) as writer:
+            writer.sql("SET lock_timeout = '100ms'; BEGIN; SAVEPOINT attempt")
+            with self.assertRaises(PgError) as cm:
+                writer.sql("SELECT pgwrh_fdw_set_members('v', ARRAY['s_b'])")
+            self.assertEqual(cm.exception.sqlstate, "55P03")
+            writer.sql("ROLLBACK TO attempt")
+            self.assertEqual(self.c.scalar("SELECT member FROM v"), "virtual_remote_a")
+            self.c.sql("COMMIT")
+            writer.sql("SELECT pgwrh_fdw_set_members('v', ARRAY['s_b']); COMMIT")
+        self.assertEqual(self.c.scalar("SELECT member FROM v"), "virtual_remote_b")
+
+    def test_managed_members_reader_timeout_restores_resource_owner(self):
+        self.virtual()
+        with self.cluster.connect(self.db) as writer:
+            writer.sql("BEGIN; SELECT pgwrh_fdw_set_members('v', ARRAY['s_b'])")
+            self.c.sql("SET lock_timeout = '100ms'; BEGIN; SAVEPOINT attempt")
+            self.error("SELECT * FROM v", "55P03")
+            self.c.sql("ROLLBACK TO attempt")
+            writer.sql("COMMIT")
+        self.assertEqual(self.c.scalar("SELECT member FROM v"), "virtual_remote_b")
+        self.c.sql("COMMIT")
+
+    def test_managed_members_runs_ddl_event_triggers_and_rolls_back_errors(self):
+        self.virtual()
+        self.c.sql("""
+            CREATE TABLE ddl_seen(tag text);
+            CREATE FUNCTION record_ddl() RETURNS event_trigger LANGUAGE plpgsql AS $$
+              BEGIN INSERT INTO ddl_seen VALUES (tg_tag); END $$;
+            CREATE EVENT TRIGGER record_alter ON ddl_command_end WHEN TAG IN ('ALTER SERVER')
+              EXECUTE FUNCTION record_ddl();
+            SELECT pgwrh_fdw_set_members('v', ARRAY['s_b']);
+        """)
+        self.assertEqual(self.c.sql("TABLE ddl_seen"), [("ALTER SERVER",)])
+        self.c.sql("""CREATE OR REPLACE FUNCTION record_ddl() RETURNS event_trigger LANGUAGE plpgsql AS $$
+              BEGIN RAISE EXCEPTION 'reject update'; END $$""")
+        self.error("SELECT pgwrh_fdw_set_members('v', ARRAY['s_c'])", "P0001", "reject update")
+        self.assertEqual(self.c.scalar("SELECT member FROM v"), "virtual_remote_b")
+
+    def test_managed_members_in_initial_installation(self):
+        database = self.db + "_installation"
+        self.admin.sql("CREATE DATABASE " + database)
+        with self.cluster.connect(database) as c:
+            c.sql("""CREATE SCHEMA fdw_api;
+                     CREATE EXTENSION pgwrh_fdw WITH SCHEMA fdw_api VERSION '0.1.0';
+                     CREATE SERVER target FOREIGN DATA WRAPPER pgwrh_fdw;
+                     CREATE SERVER route FOREIGN DATA WRAPPER pgwrh_fdw OPTIONS (members 'target');
+                     CREATE USER MAPPING FOR PUBLIC SERVER route;
+                     CREATE FOREIGN TABLE shard(id int) SERVER route;""")
+            before = c.sql("SELECT 'shard'::regclass::oid, ftserver FROM pg_foreign_table")
+            self.assertIsNotNone(c.scalar("SELECT to_regprocedure('fdw_api.pgwrh_fdw_set_members(text,text[])')"))
+            c.sql("SELECT fdw_api.pgwrh_fdw_set_members('route', ARRAY['target'])")
+            self.assertEqual(c.scalar("SELECT extversion FROM pg_extension WHERE extname = 'pgwrh_fdw'"), "0.1.0")
+            self.assertEqual(c.sql("SELECT 'shard'::regclass::oid, ftserver FROM pg_foreign_table"), before)
 
     def test_actual_mapping_and_context(self):
         self.c.sql("ALTER SERVER s_a OPTIONS (ADD transaction_parameters 'app.request_id')")
