@@ -33,6 +33,7 @@
 #include "pgstat.h"
 #include "pgwrh_fdw.h"
 #include "transaction_context.h"
+#include "virtual.h"
 #include "storage/latch.h"
 #include "utils/builtins.h"
 #include "utils/hsearch.h"
@@ -213,6 +214,7 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 	ConnCacheEntry *entry;
 	ConnCacheKey key;
 	MemoryContext ccxt = CurrentMemoryContext;
+	PgwrhFdwVirtualBinding *binding;
 
 	/* First time through, initialize connection cache hashtable */
 	if (ConnectionHash == NULL)
@@ -244,6 +246,9 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 	/* Set flag that we did GetConnection during the current transaction */
 	xact_got_connection = true;
 
+	/* Resolve aliases before entering the unchanged physical connection cache. */
+	user = pgwrh_fdw_resolve_virtual_mapping(user, &binding);
+
 	/* Create hash key for the entry.  Assume no pad bytes in key struct */
 	key = user->umid;
 
@@ -261,6 +266,8 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 	}
 
 	/* Reject further use of connections which failed abort cleanup. */
+	pgwrh_fdw_check_virtual_connection(binding, entry->conn,
+									 entry->conn ? entry->xact_depth : 0);
 	pgfdw_reject_incomplete_xact_state_change(entry);
 
 	/*
@@ -361,6 +368,7 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 	if (state)
 		*state = &entry->state;
 
+	pgwrh_fdw_virtual_connected(binding, entry->conn);
 	return entry->conn;
 }
 

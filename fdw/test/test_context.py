@@ -304,4 +304,7 @@ class ContextTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    # Keep the existing test entry point used by the parent repository and CI.
+    from test_virtual import VirtualServerTests
+
     unittest.main(verbosity=2)
