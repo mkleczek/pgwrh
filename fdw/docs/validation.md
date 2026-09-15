@@ -12,6 +12,21 @@ connections, savepoint affinity and topology changes. Planner checks include
 conflicts introduced by references to another shard in the same routing group.
 Remote estimation does not attach unused aliases to a transaction binding.
 
+The completed stack, including repeated-reference join pushdown, passed:
+
+* All 78 integration tests (23 context and 55 virtual-server tests).
+* Both upstream SQL suites and `eval_plan_qual` isolation.
+* All seven retained SCRAM TAP assertions.
+* The unchanged 14-symbol dynamic export audit and whitespace check.
+
+The added planning tests inspect remote SQL and execute repeated joins, separate
+scans, async Append, outer joins with aggregation and partitionwise joins with
+generic pruning. They also exercise cached plans across transactions and
+topology changes from another session, and independently bound groups whose
+current member lists become equal. Joins between different groups retain the
+conservative outside-reference check. Cross-server writes and row-locking joins
+remain local. These changes have not been validated in Linux CI.
+
 ## Joins across virtual servers
 
 Validated locally on 2026-09-15 with the pinned PostgreSQL 18.3 runtime on macOS

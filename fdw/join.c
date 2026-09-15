@@ -171,6 +171,8 @@ statement_references(PlannerInfo *root)
  * Independently executed scans of ANY alias in an input's routing group could
  * bind it outside this join's intersection. Count group references, including
  * aliases not named by this join. Actual servers cannot move and are excluded.
+ * A join entirely within one group imposes no new routing constraint: all its
+ * aliases already share a decision, including references elsewhere in the plan.
  */
 bool
 pgwrh_fdw_join_isolated(PlannerInfo *root, RelOptInfo *joinrel, List *servers)
@@ -178,6 +180,7 @@ pgwrh_fdw_join_isolated(PlannerInfo *root, RelOptInfo *joinrel, List *servers)
 	ReferenceCount count = {0};
 	ListCell *lc;
 	int relid = -1;
+	int virtual_inputs = 0;
 	bool outside = false;
 
 	count.userid = OidIsValid(joinrel->userid) ? joinrel->userid : GetUserId();
@@ -186,10 +189,18 @@ pgwrh_fdw_join_isolated(PlannerInfo *root, RelOptInfo *joinrel, List *servers)
 	{
 		List *members = pgwrh_fdw_routing_members(lfirst_oid(lc), count.userid);
 
+		if (members)
+			virtual_inputs++;
 		if (members && !list_member(count.groups, members))
 			count.groups = lappend(count.groups, members);
 		else
 			list_free(members);
+	}
+	if (virtual_inputs == list_length(servers) && list_length(count.groups) == 1)
+	{
+		list_free(linitial(count.groups));
+		list_free(count.groups);
+		return true;
 	}
 	count.remaining = palloc0(sizeof(int) * list_length(count.groups));
 	/* Counting downward from zero first computes the negative allowed counts. */
