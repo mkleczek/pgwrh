@@ -73,7 +73,9 @@ from the mutable physical partition hierarchy. A parent is eligible only when:
 
 - its complete logical subtree has leaf assignments;
 - every descendant is remote, with no remaining original local attachment;
-- all descendants use the same server, host list, ports, database, and user;
+- all descendants have the same canonical actual target set, including endpoint,
+  database and credential identity; virtual server names, ordering and weights
+  do not affect this equality;
 - every destination member advertises the complete parent as locally ready.
 
 Replicas report `serving_subtrees` only for complete native partition trees whose
