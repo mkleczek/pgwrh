@@ -50,6 +50,18 @@ def selection(postgres_node_factory):
 
 @pytest.mark.parametrize(("change", "expected"), [
     ("", [("data", "root", 4)]),
+    ("UPDATE fdw_shard_assignment SET shard_server_name = table_name",
+     [("data", "root", 4)]),
+    ("UPDATE fdw_shard_assignment SET host = 'host2,host1', port = '5432,5432', "
+     "shard_server_members = ARRAY['host2','host1'] WHERE table_name = 'a'",
+     [("data", "root", 4)]),
+    ("UPDATE fdw_shard_assignment SET host = 'host1,host2,host1', port = '5432,5432,5432', "
+     "shard_server_members = ARRAY['host1','host2','host1'] WHERE table_name = 'a'",
+     [("data", "root", 4)]),
+    ("UPDATE fdw_shard_assignment SET port = '5432,5433' WHERE table_name = 'a'",
+     [("data", "right", 2), ("leaves", "a", 1), ("leaves", "b", 1)]),
+    ("UPDATE fdw_shard_assignment SET dbname = 'different' WHERE table_name = 'a'",
+     [("data", "right", 2), ("leaves", "a", 1), ("leaves", "b", 1)]),
     ("UPDATE fdw_shard_assignment SET local = true, connect_remote = false WHERE table_name = 'a'",
      [("data", "right", 2), ("leaves", "b", 1)]),
     ("UPDATE fdw_shard_assignment SET shard_server_name = 'server2', host = 'host1,host3' WHERE table_name = 'd'",
@@ -177,6 +189,17 @@ def test_root_aggregation_preserves_identity_results_and_leaf_coverage(aggregate
     wait_until(lambda: remote_nodes(reader) == expected, timeout=30, message='roots did not aggregate')
     assert_all_rows(cluster)
     assert reader.query_scalar('SELECT count(*) FROM pgwrh.connected_remote_shard') == 13
+    with reader.node.connect() as conn:
+        # Different logical nodes have different virtual servers, but share the
+        # actual targets needed for a remote join and one physical connection.
+        assert conn.execute("""SELECT count(DISTINCT ftserver) FROM pg_foreign_table
+            WHERE ftrelid IN ('data_remote.range_root'::regclass, 'data_remote.list_root'::regclass)""") == [(2,)]
+        joined = 'SELECT x.id FROM data_remote.range_root x JOIN data_remote.list_root y USING (id) ORDER BY x.id'
+        remote_plan = conn.execute('EXPLAIN (VERBOSE, FORMAT JSON) ' + joined)[0][0][0]['Plan']
+        assert remote_plan['Node Type'] == 'Foreign Scan'
+        assert 'JOIN' in remote_plan['Remote SQL']
+        assert conn.execute(joined) == [(n,) for n in range(16)]
+        assert conn.execute('SELECT count(*) FROM pgwrh_fdw_get_connections()') == [(1,)]
     # Detached stable foreign tables are retained for later topology changes.
     assert reader.query_scalar('SELECT count(*) FROM pgwrh.remote_shard r JOIN pgwrh.reachable_shard s USING (reg_class)') == 4
     for root in ROOTS:

@@ -83,7 +83,6 @@ WITH structure AS MATERIALIZED (
 ), eligible AS (
     SELECT
         d.ancestor_rel_id AS rel_id,
-        min(a.shard_server_name) AS shard_server_name,
         min(a.host) AS host,
         min(a.port) AS port,
         min(a.dbname) AS dbname,
@@ -114,10 +113,8 @@ WITH structure AS MATERIALIZED (
         )
     )), FALSE))
        AND bool_and(coalesce(s.is_leaf AND (NOT a.local OR a.connect_remote)
-                             AND a.shard_server_name IS NOT NULL
                              AND a.host <> '' AND a.port <> '' AND a.target_servers IS NOT NULL, FALSE))
-       AND count(DISTINCT (a.shard_server_name, a.host, a.port,
-                           a.dbname, a.shard_server_user)) = 1
+       AND count(DISTINCT a.target_servers) = 1
 )
 SELECT
     s.*,
