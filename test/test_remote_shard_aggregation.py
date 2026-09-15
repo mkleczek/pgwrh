@@ -70,7 +70,7 @@ def selection(postgres_node_factory):
     ("DELETE FROM fdw_serving_subtree WHERE member_role = 'host2'",
      [("leaves", name, 1) for name in ('a', 'b', 'c', 'd')]),
     ("UPDATE fdw_shard_assignment SET shard_server_members = NULL WHERE table_name = 'a'",
-     [("data", "right", 2), ("leaves", "a", 1), ("leaves", "b", 1)]),
+     [("data", "right", 2), ("leaves", "b", 1)]),
 ])
 def test_selects_maximal_complete_remote_subtrees(selection, change, expected):
     if change:
@@ -177,8 +177,8 @@ def test_root_aggregation_preserves_identity_results_and_leaf_coverage(aggregate
     wait_until(lambda: remote_nodes(reader) == expected, timeout=30, message='roots did not aggregate')
     assert_all_rows(cluster)
     assert reader.query_scalar('SELECT count(*) FROM pgwrh.connected_remote_shard') == 13
-    wait_until(lambda: reader.query_scalar('SELECT count(*) FROM pgwrh.remote_shard') == 4,
-               message='redundant foreign tables were not removed')
+    # Detached stable foreign tables are retained for later topology changes.
+    assert reader.query_scalar('SELECT count(*) FROM pgwrh.remote_shard r JOIN pgwrh.reachable_shard s USING (reg_class)') == 4
     for root in ROOTS:
         tree = reader.execute(f"SELECT level, isleaf FROM pg_partition_tree('data.{root}') ORDER BY level")
         assert tree == [(0, False), (1, True)]
@@ -187,6 +187,7 @@ def test_root_aggregation_preserves_identity_results_and_leaf_coverage(aggregate
     assert plan['Node Type'] == 'Foreign Scan'
     assert 'WHERE' in plan['Remote SQL'] and '7' in plan['Remote SQL']
     assert reader.query_scalar('''SELECT count(*) FROM pgwrh.remote_shard r
+        JOIN pgwrh.reachable_shard s USING (reg_class)
         JOIN pgwrh.analyzed_remote_pg_class a ON a.oid = r.reg_class''') == 4
     owner = next(replica for replica in cluster.replicas if replica.query_scalar(
         "SELECT EXISTS (SELECT 1 FROM pgwrh.ready_serving_subtree WHERE rel_id = ('data', 'range_root')::pgwrh.rel_id)"))
@@ -244,6 +245,13 @@ def test_aggregates_fail_over_and_survive_daemon_restart(aggregated_cluster):
     reader = cluster.replicas[-1]
     wait_until(lambda: remote_nodes(reader) == [('data', root) for root in sorted(ROOTS)],
                timeout=60, message='replicated roots did not aggregate after commit')
+    # Readiness permits a safe subset while the routing list converges. Wait
+    # for both replicas before deliberately removing one of them.
+    wait_until(lambda: reader.query_scalar("""SELECT count(*) FROM pgwrh.remote_node_assignment a
+        JOIN pgwrh.remote_server_route r ON r.srvname = a.shard_server_name
+        WHERE cardinality(r.shard_server_targets) = 2
+          AND r.shard_server_targets = a.target_servers""") == len(ROOTS),
+        timeout=60, message='reader did not install both failover targets')
     offline = cluster.replicas[0]
     offline.node.stop()
     try:
@@ -272,7 +280,7 @@ def test_selection_quotes_relation_identifiers(selection):
     selection.execute("""UPDATE fdw_serving_subtree SET schema_name = 'Odd schema',
         table_name = CASE WHEN table_name = 'root' THEN 'Root "quoted"' ELSE table_name END""")
     assert selection.execute('SELECT pgwrh.fqn(remote_rel_id) FROM remote_node_assignment') == [
-        ('"Odd schema_server1"."Root ""quoted"""',)
+        ('"Odd schema_remote"."Root ""quoted"""',)
     ]
 
 
@@ -375,14 +383,20 @@ def test_active_aggregate_query_delays_handoff_without_changing_its_source(aggre
     source = next(r for r in cluster.replicas if r.query_scalar('SELECT count(*) FROM pgwrh.connected_local_shard') == 13)
     original = local_tree(source, 'range_root')
     with reader.node.connect() as query:
+        reader_pid = query.execute('SELECT pg_backend_pid()')[0][0]
         assert query.execute('SELECT count(*) FROM data.range_root') == [(16,)]
         set_split_placement(cluster)
         cluster.master.start_rollout()
-        wait_until(lambda: reader.query_scalar("""SELECT EXISTS (SELECT 1 FROM pg_stat_activity
-            WHERE wait_event_type = 'Lock' AND query LIKE 'LOCK TABLE ONLY %')"""),
+        wait_until(lambda: reader.query_scalar(f"""SELECT EXISTS (SELECT 1 FROM pg_stat_activity a
+            WHERE {reader_pid} = ANY(pg_blocking_pids(a.pid)))"""),
                    timeout=60, message='reader did not wait for its active query')
         assert local_tree(source, 'range_root') == original
         assert query.execute('SELECT count(*) FROM data.range_root') == [(16,)]
+        # Membership/credential publication can block before new local copies
+        # finish, unlike the old attachment-only barrier.
+        wait_until(lambda: cluster.master.query_scalar("""SELECT count(*) FROM pgwrh.missing_connected_local_shard
+            WHERE version = (SELECT target_version FROM pgwrh.replication_group WHERE replication_group_id = 'g1')""") == 0,
+                   timeout=60, message='new local copies did not connect')
         with pytest.raises(Exception, match='required remote shards'):
             cluster.master.commit_rollout()
     cluster.master.wait_for_rollout_ready(expected_replicas=3, timeout=60)

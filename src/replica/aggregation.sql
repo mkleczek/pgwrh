@@ -74,7 +74,8 @@ CREATE VIEW remote_node_assignment AS
 WITH structure AS MATERIALIZED (
     SELECT DISTINCT * FROM shard_structure_r
 ), assignment AS MATERIALIZED (
-    SELECT * FROM fdw_shard_assignment
+    SELECT a.*, pgwrh_target_servers(shard_server_members, host, port, dbname, shard_server_user) AS target_servers
+    FROM fdw_shard_assignment a
 ), descendants AS MATERIALIZED (
     SELECT * FROM shard_descendant
 ), serving AS MATERIALIZED (
@@ -87,7 +88,8 @@ WITH structure AS MATERIALIZED (
         min(a.port) AS port,
         min(a.dbname) AS dbname,
         min(a.shard_server_user) AS shard_server_user,
-        count(*) AS leaf_count
+        count(*) AS leaf_count,
+        min(a.target_servers::text)::text[] AS target_servers
     FROM descendants d
         JOIN structure s ON s.rel_id = d.rel_id
         LEFT JOIN assignment a USING (schema_name, table_name)
@@ -113,20 +115,22 @@ WITH structure AS MATERIALIZED (
     )), FALSE))
        AND bool_and(coalesce(s.is_leaf AND (NOT a.local OR a.connect_remote)
                              AND a.shard_server_name IS NOT NULL
-                             AND a.host <> '' AND a.port <> '', FALSE))
+                             AND a.host <> '' AND a.port <> '' AND a.target_servers IS NOT NULL, FALSE))
        AND count(DISTINCT (a.shard_server_name, a.host, a.port,
                            a.dbname, a.shard_server_user)) = 1
 )
 SELECT
     s.*,
-    e.shard_server_name, e.host, e.port, e.dbname, e.shard_server_user,
+    pgwrh_shard_server(s.schema_name, s.table_name) AS shard_server_name,
+    e.host, e.port, e.dbname, e.shard_server_user,
     e.leaf_count,
-    format('%s_%s', s.schema_name, e.shard_server_name) AS shard_server_schema_name,
-    (format('%s_%s', s.schema_name, e.shard_server_name), s.table_name)::rel_id AS remote_rel_id,
+    format('%s_remote', s.schema_name) AS shard_server_schema_name,
+    (format('%s_remote', s.schema_name), s.table_name)::rel_id AS remote_rel_id,
     CASE WHEN s.level > 0 THEN s.bound
          WHEN s.node_partkeydef LIKE 'HASH %' THEN 'FOR VALUES WITH (MODULUS 1, REMAINDER 0)'
          ELSE 'DEFAULT'
-    END AS remote_bound
+    END AS remote_bound,
+    e.target_servers
 FROM eligible e JOIN structure s USING (rel_id)
 WHERE NOT EXISTS (
     SELECT 1 FROM descendants d JOIN eligible parent ON parent.rel_id = d.ancestor_rel_id

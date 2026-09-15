@@ -16,7 +16,7 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-CREATE SERVER IF NOT EXISTS replica_controller FOREIGN DATA WRAPPER postgres_fdw OPTIONS (load_balance_hosts 'random');
+CREATE SERVER IF NOT EXISTS replica_controller FOREIGN DATA WRAPPER pgwrh_fdw OPTIONS (load_balance_hosts 'random');
 CREATE USER MAPPING FOR PUBLIC SERVER replica_controller;
 
 CREATE FOREIGN TABLE IF NOT EXISTS fdw_shard_assignment (

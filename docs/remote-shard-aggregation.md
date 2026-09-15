@@ -11,7 +11,7 @@ partition pruning. There is no additional drain phase.
 A replica keeps a usable local leaf attached while either rollout configuration
 requires that copy. It prepares and analyzes the target foreign leaf independently
 of attachment. `prepared_remote_shards` reports its logical leaf identity, actual
-foreign server, and actual mapped user. `connected_remote_shards` reports the same
+virtual server, actual target set, and mapped user. `connected_remote_shards` reports the same
 identity and destination for routes that are actually reachable from query roots.
 A prepared foreign table does not claim to be an active route.
 
@@ -26,8 +26,36 @@ Before commit, the master requires:
 `missing_ready_remote_shard` expresses the commit requirement.
 `missing_connected_remote_shard` remains a diagnostic of active remote routes.
 Prepared replacements cannot exempt a reader still querying the old remote source.
-The server and credential checks reject reports describing a different destination
-or configuration's credentials.
+The target and credential checks reject routes containing a destination outside
+the retained configuration or using another configuration's credentials. A
+nonempty subset is sufficient, allowing offline targets to be excluded.
+
+Each logical remote node keeps a stable `pgwrh_shard_...` virtual server and a
+foreign table in `<schema>_remote`. Actual `pgwrh_target_...` servers identify a
+replica endpoint, database and credential user and are shared across shards.
+Credential or endpoint changes create new actual targets. Virtual mappings are
+empty; actual target mappings hold credentials. Actual targets grant PUBLIC
+USAGE to match their PUBLIC mappings; applications still need relation access.
+As with any server USAGE grant, a role with permission to create foreign tables
+can use these read-only credentials for relations accessible to the remote reader.
+The controller connection also uses `pgwrh_fdw`, as an ordinary server without
+virtual members. The stock `postgres_fdw` extension is not required.
+
+Remote-to-remote changes call `pgwrh_fdw_set_members` in the existing synchronous
+worker transaction. It waits for transactions using the old route, including
+bindings retained across savepoint rollback. The worker commits before the
+existing reporting step can acknowledge the new targets. No attachment change,
+rollout revision or additional reconciliation phase is needed for this switch.
+Existing statistics describe the same logical data and survive membership changes.
+A retained foreign table must have its desired targets before analysis or reattachment.
+Local-to-remote and remote-to-local attachment changes retain their existing locks.
+
+Repeated entries in the existing aligned member/host/port lists become actual
+server `load_balance_weight` values, preserving `same_zone_multiplier`. Reuse of
+an active or idle connection still takes priority over weights. Target sets with
+identical members share the FDW's transaction routing decision and join pushdown.
+Detached stable foreign tables remain while their logical nodes exist; target
+cleanup preserves every target referenced by an owned virtual server.
 
 After commit releases an outgoing copy, the replica replaces the local leaf with
 its prepared foreign leaf in one transaction. Query-root locking prevents readers
@@ -98,7 +126,13 @@ LIST and HASH layouts, empty leaves, endpoint failover, restart, credential rota
 and generic prepared-query partition pruning through native shields.
 
 Version 0.2.2 includes an upgrade from 0.2.1. Install the new extension scripts on all
-nodes, then update the master and replicas with `ALTER EXTENSION pgwrh UPDATE`.
+nodes, create the new dependency with `CREATE EXTENSION IF NOT EXISTS pgwrh_fdw`,
+then update the master and replicas with `ALTER EXTENSION pgwrh UPDATE`.
+The bundled pgwrh_fdw dependency remains version 0.1.0. Upgrade the controller
+first so assignments contain aligned member and endpoint lists. Legacy route
+reports remain accepted while replicas replace their old host-set foreign tables
+through the existing attachment reconciliation. Reconnect sessions that loaded
+an older pgwrh_fdw library before relying on its membership locking.
 The upgrade regression builds 0.2.1 from its release tag and checks existing rows and
 root OIDs after upgrade. The existing background-worker API is unchanged; the
 integration suite uses PostgreSQL 18.3 and pg_background 1.9.2.

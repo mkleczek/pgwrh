@@ -1,6 +1,6 @@
 # pgwrh
 
-An extension implementing sharding for PostgreSQL based on logical replication and postgres_fdw.
+An extension implementing sharding for PostgreSQL based on logical replication and the bundled pgwrh_fdw.
 The goal is to scale **_read queries_** overcoming main limitation of traditional setups based on streaming replication and hot standbys:
 lack of sharding and large storage requirements.
 
@@ -66,7 +66,8 @@ outside current transaction (_CREATE/ALTER SUBSCRIPTION_ must not be executed in
 
 ## Based on built-in PostgreSQL facilities - no need for custom query parser/planner
 Contrary to other PostgreSQL sharding solutions that implement a query parser and interpreter to direct queries to
-the right replicas, _pgwrh_ reuses built-in PostgreSQL features: partitioning and postgres_fdw.
+the right replicas, _pgwrh_ uses PostgreSQL partitioning and the bundled pgwrh_fdw,
+which is derived from PostgreSQL's postgres_fdw.
 
 PostgreSQL query planner and executor - while still somewhat limited - have capabilities to distribute computing among
 multiple machines by:

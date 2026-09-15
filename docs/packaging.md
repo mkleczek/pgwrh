@@ -54,7 +54,8 @@ package. Debug packages are handled by the distribution's normal RPM tooling.
 
 Shipping multiple extension control files does not activate all extensions in
 every database. `pgwrh_wait` and `pgwrh_fdw` can each be created independently.
-pgwrh depends on `pgwrh_fdw` as well as `postgres_fdw` and `pg_background`.
+pgwrh depends on `pgwrh_fdw` and `pg_background`. Both controller and shard
+connections use `pgwrh_fdw`; the stock `postgres_fdw` extension is not required.
 When building with `WITH_FDW=0`, provide `pgwrh_fdw` separately in the target
 PostgreSQL installation. The test staging target includes the bundled FDW's
 SQL and library so integration tests use the implementation being developed.

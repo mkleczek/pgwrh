@@ -1,12 +1,13 @@
 # pgwrh_fdw
 
 An independent PostgreSQL 18 foreign-data wrapper that propagates selected
-custom configuration parameters when it starts remote transactions. It forks
+custom configuration parameters when it starts remote transactions and supports
+virtual servers backed by ordinary foreign servers. It forks
 PostgreSQL's `contrib/postgres_fdw`; pgwrh is not a dependency.
 
 The PostgreSQL 18.3 source is pinned in [UPSTREAM.md](UPSTREAM.md). The extension
 retains upstream query, modification, connection, and transaction behavior
-when `transaction_parameters` is absent. Stock `postgres_fdw` and `pgwrh_fdw`
+when `transaction_parameters` and `members` are absent. Stock `postgres_fdw` and `pgwrh_fdw`
 can run together in the same database and backend.
 
 The fork is licensed under **AGPL-3.0-only**, with PostgreSQL's original notices
@@ -35,8 +36,10 @@ The install command needs write access to that PostgreSQL installation.
 Builds for other major versions are rejected. Both the SQL extension version
 and the library's module version are `0.1.0`. A fresh `CREATE EXTENSION pgwrh_fdw`
 uses the single `pgwrh_fdw--0.1.0.sql` installation script, including all
-connection-management functions. There are no upgrade scripts for this first
-release; future releases will add them when their SQL definitions need changes.
+connection-management functions and `pgwrh_fdw_set_members(text, text[])`.
+There are no upgrade scripts for this first release. Reconnect existing sessions
+to load the new library before relying on the membership-update barrier: an
+already-loaded older library does not acquire its reader locks.
 
 The former `1.0`/`1.1`/`1.2` install chain was inherited during development and
 was never a pgwrh_fdw release. There is no migration path from those development
@@ -83,6 +86,32 @@ cannot override the FDW's search path, timezone, encoding, or transfer settings.
 
 Omit the option, or `ALTER SERVER ... OPTIONS (DROP transaction_parameters)`,
 to disable propagation. An empty option string is an error.
+
+## Virtual servers
+
+A server with `members 'replica_a,replica_b'` delegates connections to ordinary
+pgwrh_fdw servers. It requires an empty user mapping; credentials and transaction
+settings come from the selected member's mapping and server. Routing prefers an
+existing connection to an eligible member, so overlapping virtual servers can
+share one remote transaction. Among equally reusable targets, selection is
+proportional to the actual server's positive integer `load_balance_weight`
+(default 1). Selection remains fixed for the local transaction.
+Initial connection failures can try another eligible target before acquiring
+a remote transaction; established bindings and context/query errors never fail over.
+Virtual servers with identical member sets share one selection for the same
+effective user, regardless of member order, including across statements and
+savepoints. Each shard can therefore have its own stable virtual server name.
+`pgwrh_fdw_set_members('shard_server', ARRAY['replica_a', 'replica_b'])` waits
+for users of the old routing configuration before changing membership. The
+update becomes ready to report after its transaction commits.
+See [virtual servers](docs/virtual-servers.md)
+for configuration, access checks, option ownership and error behavior.
+
+Virtual servers with a common member can push eligible SELECT joins to that
+member, including joins between different shard servers. Identical member sets
+also allow repeated shard references across pushed joins, separate scans and
+partitionwise joins because all aliases share a transaction binding. See
+[virtual-server routing](docs/virtual-servers.md) for transaction and plan rules.
 
 ## Frozen transaction context
 
