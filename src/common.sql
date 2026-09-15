@@ -31,6 +31,37 @@ BEGIN
 END;
 $$;
 
+-- Endpoint and credential changes create a new target identity. Readers using
+-- the old target can finish before the virtual server publishes its replacement.
+CREATE FUNCTION pgwrh_target_server(member_role text, host text, port text,
+                                    dbname text, username text)
+RETURNS text IMMUTABLE STRICT LANGUAGE sql AS
+$$
+    SELECT 'pgwrh_target_' || md5(json_build_array(member_role, host, port, dbname, username)::text);
+$$;
+
+-- The controller sends positionally aligned member/host/port lists. Repeated
+-- entries express routing weights; order and repetition do not change the set.
+-- An incomplete list must never become a smaller, apparently ready route.
+CREATE FUNCTION pgwrh_target_servers(member_roles text[], hosts text, ports text,
+                                     dbname text, username text)
+RETURNS text[] IMMUTABLE STRICT LANGUAGE sql AS
+$$
+    WITH endpoints AS (
+        SELECT * FROM unnest(member_roles, string_to_array(hosts, ','), string_to_array(ports, ','))
+            AS e(member_role, host, port)
+    )
+    SELECT CASE WHEN array_ndims(member_roles) = 1
+                    AND cardinality(member_roles) > 0
+                    AND bool_and(member_role IS NOT NULL AND member_role <> ''
+                                 AND host IS NOT NULL AND host <> ''
+                                 AND port IS NOT NULL AND port <> '')
+                THEN array_agg(DISTINCT "@extschema@".pgwrh_target_server(member_role, host, port, dbname, username)
+                               ORDER BY "@extschema@".pgwrh_target_server(member_role, host, port, dbname, username))
+           END
+    FROM endpoints;
+$$;
+
 DO
 $$
 DECLARE
