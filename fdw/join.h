@@ -5,5 +5,7 @@
 #include "foreign/fdwapi.h"
 
 extern void pgwrh_fdw_join_init(GetForeignJoinPaths_function callback);
+extern bool pgwrh_fdw_join_isolated(PlannerInfo *root, RelOptInfo *joinrel,
+								   List *servers);
 
 #endif

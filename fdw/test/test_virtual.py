@@ -471,6 +471,57 @@ class VirtualServerTests(unittest.TestCase):
         self.assertEqual(self.c.sql("EXECUTE pj(1)"), [("1",)])
         self.assertEqual(self.c.sql("EXECUTE pj(2)"), [("2",)])
 
+    def test_cross_virtual_join_repeated_reference_stays_local(self):
+        self.join_tables("s_a,s_b,s_c", "s_b")
+        self.virtual("v3", "s_c", options=", use_remote_estimate 'true'")
+        self.c.sql("CREATE FOREIGN TABLE v3_data(id int, value text) SERVER v3 "
+                   "OPTIONS (table_name 'data')")
+        query = ("SELECT x.id FROM v1_data x JOIN v2_data y USING (id) UNION ALL "
+                 "SELECT x.id FROM v1_data x JOIN v3_data y USING (id)")
+        self.assertEqual(self.remote_joins(query), [])
+        self.assertEqual(sorted(self.c.sql(query)), [("1",), ("1",), ("2",), ("2",)])
+        # The same protection applies to separate scans in one query level.
+        query = ("SELECT x.id FROM v1_data x JOIN v2_data y USING (id) "
+                 "JOIN v1_data z ON x.id = z.id ORDER BY x.id")
+        self.c.sql("SET join_collapse_limit = 1")
+        self.assertEqual(self.remote_joins(query), [])
+        self.assertEqual(self.c.sql(query), [("1",), ("2",)])
+
+    def test_cross_virtual_join_repeated_reference_inside_whole_join(self):
+        self.join_tables()
+        query = ("SELECT x.id FROM (v1_data x JOIN v1_data z USING (id)) "
+                 "JOIN v2_data y USING (id) ORDER BY x.id")
+        self.c.sql("SET join_collapse_limit = 1")
+        self.assertTrue(any(sql.count("JOIN") == 2 for sql in self.remote_joins(query)))
+        self.assertEqual(self.c.sql(query), [("1",), ("2",)])
+
+    def test_cross_virtual_semijoin_and_local_safety_checks(self):
+        self.join_tables()
+        query = ("SELECT x.id FROM v1_data x WHERE EXISTS "
+                 "(SELECT 1 FROM v2_data y WHERE y.id = x.id AND y.id = 1)")
+        plan = self.c.scalar("EXPLAIN (VERBOSE, FORMAT JSON) " + query)
+        self.assertIn("EXISTS", plan)
+        self.assertEqual(self.c.sql(query), [("1",)])
+        self.c.sql("ALTER SERVER v2 OPTIONS (ADD extensions 'pgwrh_fdw')")
+        query = "SELECT x.id FROM v1_data x JOIN v2_data y USING (id)"
+        self.assertEqual(self.remote_joins(query), [])
+        self.c.sql("ALTER SERVER v2 OPTIONS (DROP extensions)")
+        self.assertEqual(self.remote_joins(query + " FOR UPDATE OF x"), [])
+        self.assertEqual(self.remote_joins(
+            "UPDATE v1_data x SET value = y.value FROM v2_data y WHERE x.id = y.id"), [])
+
+    def test_cross_virtual_join_catalog_change_from_another_session(self):
+        query = self.join_tables()
+        self.c.sql("SET plan_cache_mode = force_generic_plan; PREPARE j AS " + query)
+        self.assertEqual(len(self.remote_joins("EXECUTE j")), 1)
+        with self.cluster.connect(self.db) as other:
+            other.sql("ALTER SERVER v1 OPTIONS (SET members 's_d'); "
+                      "ALTER SERVER v2 OPTIONS (SET members 's_d')")
+        self.c.sql("BEGIN")
+        self.assertEqual(self.c.sql("EXECUTE j"), [("1",), ("2",)])
+        self.assertEqual(self.c.scalar("SELECT member FROM v1"), "virtual_remote_d")
+        self.c.sql("COMMIT")
+
     def test_modification_call_sites_and_savepoints(self):
         self.virtual()
         self.c.sql("""CREATE FOREIGN TABLE writes(id int, value text) SERVER v

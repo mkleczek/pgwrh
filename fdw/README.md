@@ -95,6 +95,10 @@ share one remote transaction. Selection remains fixed for the local transaction.
 See [virtual servers](docs/virtual-servers.md)
 for configuration, access checks, option ownership and error behavior.
 
+Virtual servers with a common member can push eligible SELECT joins to that
+member, including joins between different shard servers. See
+[virtual-server routing](docs/virtual-servers.md) for transaction and plan rules.
+
 ## Frozen transaction context
 
 The first attempt to start a remote transaction on a server with this option
@@ -208,7 +212,3 @@ The fork and our modifications use [AGPL-3.0-only](LICENSE); inherited PostgreSQ
 material retains its [original license](COPYRIGHT). See [LICENSING.md](LICENSING.md)
 for attribution and source-offer details, and
 [docs/design.md](docs/design.md) for the implementation and maintenance audit.
-
-Virtual servers with a common member can push eligible SELECT joins to that
-member, including joins between different shard servers. See
-[virtual-server routing](docs/virtual-servers.md) for transaction and plan rules.
