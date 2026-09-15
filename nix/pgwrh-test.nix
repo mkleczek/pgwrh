@@ -49,7 +49,7 @@ checkedShellScript "pgwrh-test" ''
   cd "$repo_root"
 
   export PG_BIN="${postgresql}/bin"
-  export PG_CONFIG="${postgresql}/bin/pg_config"
+  export PG_CONFIG="${postgresql.pg_config}/bin/pg_config"
   export PGWRH_TEST_BIN_DIR="${postgresql}/bin"
   export PGWRH_TEST_EXT_PATHS="$repo_root/.build/testgres-ext"
 
