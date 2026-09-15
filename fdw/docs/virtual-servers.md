@@ -117,12 +117,14 @@ different mapping OID errors instead of changing authentication mid-transaction.
 Ordinary target option invalidation retains upstream behavior: existing remote
 transactions finish on their original connection, which is then retired.
 
-Scans, remote-estimate planning, ANALYZE, IMPORT and modification operations all
-go through the same resolver without changing their call sites. Remote estimates open ordinary target sessions and freeze transaction context,
-but do not bind virtual servers: join planning must first find a common target.
+Ordinary scans, ANALYZE, IMPORT and modification operations retain their existing
+connection call sites. Remote estimation uses the coordinated helper. Estimates
+open ordinary target sessions and freeze transaction context, but do not bind
+virtual servers: join planning must first find a common target.
 Estimation can therefore open sessions that execution does not ultimately use.
-Prepared plans acquire
-the current transaction's connection when executed. Joins within one virtual server retain normal pushdown behavior. SELECT joins
+Prepared plans acquire the current transaction's connection when executed.
+
+Joins within one virtual server retain normal pushdown behavior. SELECT joins
 across different virtual servers (or a virtual server and one of its actual
 members) can also be pushed down when all inputs share an accessible target.
 The planner intersects all inputs, including existing transaction bindings;
@@ -182,3 +184,16 @@ relations and preserves effective-user checks. `pgwrh_fdw.c` carries input serve
 OIDs through join/upper planning into the selected ForeignScan and uses the
 coordinated connection helper at scan initialization. Server catalog identities
 and PostgreSQL core are unchanged.
+
+A cross-server join path must contain every reference to each participating
+virtual server in the statement. Otherwise a separate scan or pushed join could
+pin that same virtual server to an incompatible replica. Such partial joins
+stay local; a larger join containing all those references can still be pushed.
+The check also covers sibling subqueries and partitioned inputs. It is
+conservative: it can decline a partial pushdown even when a statement-wide
+routing optimizer could coordinate the independent scans. This avoids changing
+scan initialization or opening connections to pruned branches.
+
+Statement references are collected once in planner memory, avoiding repeated
+partition-tree walks for each candidate join. The cache is released with the
+planner context on success or error.

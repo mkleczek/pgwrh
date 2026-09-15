@@ -2,6 +2,30 @@
 
 Validated on 2026-09-14, locally on macOS arm64 and in Linux CI.
 
+## Joins across virtual servers
+
+Validated locally on 2026-09-15 with the pinned PostgreSQL 18.3 runtime on macOS
+arm64. The coordinated-routing foundation passed 46 integration tests before
+join planning was added. The completed join stack passed:
+
+* All 63 integration tests (23 context tests and 40 virtual-server tests).
+* Both upstream SQL suites and `eval_plan_qual` isolation.
+* All seven retained SCRAM TAP assertions.
+* The dynamic export audit with the same 14 prescribed symbols.
+
+Tests check actual remote SQL and results for two- and three-way joins, outer
+and semi joins, aggregation, async Append, and partitionwise joins with generic
+parameter pruning. They also cover target mapping privileges, view owners,
+role changes, cached plans across topology changes in another session, caught
+group-acquisition errors, transaction pins after savepoint rollback, and
+repeated references inside and outside a proposed remote join.
+
+Known limits are documented in [virtual servers](virtual-servers.md):
+cross-server writes and row-locking joins remain local; partial joins with
+outside references to their virtual inputs are declined; an already-prepared
+remote join may need explicit replanning after a later incompatible transaction
+binding. These changes have not been validated in Linux CI.
+
 ## Virtual servers and connection reuse
 
 Validated locally on 2026-09-15 using the pinned PostgreSQL 18.3 runtime on
