@@ -2,6 +2,16 @@
 
 Validated on 2026-09-14, locally on macOS arm64 and in Linux CI.
 
+## Shared routing for identical member sets
+
+The routing foundation passed all 71 integration tests (23 context and 48
+virtual-server tests) locally on PostgreSQL 18.3/macOS arm64 on 2026-09-15.
+The build completed without warnings. Tests cover unordered member sets,
+shared failures, effective-user separation, mapping replacement, invalidated
+connections, savepoint affinity and topology changes. Planner checks include
+conflicts introduced by references to another shard in the same routing group.
+Remote estimation does not attach unused aliases to a transaction binding.
+
 ## Joins across virtual servers
 
 Validated locally on 2026-09-15 with the pinned PostgreSQL 18.3 runtime on macOS

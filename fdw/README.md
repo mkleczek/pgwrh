@@ -92,6 +92,9 @@ pgwrh_fdw servers. It requires an empty user mapping; credentials and transactio
 settings come from the selected member's mapping and server. Routing prefers an
 existing connection to an eligible member, so overlapping virtual servers can
 share one remote transaction. Selection remains fixed for the local transaction.
+Virtual servers with identical member sets share one selection for the same
+effective user, regardless of member order, including across statements and
+savepoints. Each shard can therefore have its own stable virtual server name.
 See [virtual servers](docs/virtual-servers.md)
 for configuration, access checks, option ownership and error behavior.
 

@@ -1,8 +1,9 @@
 # Virtual foreign servers
 
 A virtual pgwrh_fdw server selects an ordinary pgwrh_fdw server when first used
-in a local transaction. All subsequent accesses through that virtual server by
-the same effective local user use the selected target and its user mapping.
+in a local transaction. Virtual servers with identical sets of actual member
+servers share that selection for the same effective local user. All accesses
+through those servers use the selected target and its user mapping.
 
 ```sql
 CREATE SERVER replica_a FOREIGN DATA WRAPPER pgwrh_fdw
@@ -34,8 +35,9 @@ Member names are resolved on first access in each transaction. These are name
 references, not new catalog dependencies: rename/drop does not rewrite or cascade
 through a `members` list. Update that list when renaming a member. A selected
 target is retained by OID, so reusing a dropped target's name cannot redirect an
-existing transaction. Membership changes take effect for new bindings in later
-transactions, even if the current transaction changes or removes `members`.
+existing transaction. Once an alias has acquired a binding, membership changes
+take effect for it in later transactions, even if the current transaction changes
+or removes `members`. An alias not yet acquired uses its current membership.
 
 ## User mappings and options
 
@@ -80,14 +82,25 @@ for the exact applicable user mapping:
 
 Ties are chosen uniformly. Cache inspection does not open connections, start
 transactions, or drain pending async requests on unselected members. Incomplete
-connections and invalidated/broken active connections cannot accept new virtual
-bindings. Dead idle connections are handled by the existing reconnect path when
+connections and invalidated/broken active connections cannot accept new routing
+groups. An unused alias of an already-bound group inherits its connection and
+the same validity checks. Dead idle connections are handled by the reconnect path when
 selected; inspecting local libpq status is not a network health probe.
 
 Selection is pinned for the local top-level transaction, separately for each
-virtual server and effective local user. It is not repeated for another scan,
-statement or savepoint. A direct reference to the selected actual server uses
-the same physical connection when it resolves to the same actual mapping.
+set of actual member server OIDs and effective local user. Member order and
+whitespace do not matter. The complete configured set identifies the group;
+equal accessible subsets of different sets do not merge groups. Selection is
+not repeated for another shard in the group, scan, statement or savepoint.
+A direct reference to the selected actual server uses the same physical
+connection when it resolves to the same actual mapping.
+
+Each acquired alias remembers its original group until transaction end. For
+example, after `shard_1` with members `a,b` selects `a`, another shard with members
+`b,a` inherits `a`, even if another connection becomes available. Altering the
+already-used `shard_1` to members `c` does not move it; an unused shard with members
+`c` can still select `c`. Previously bound groups are never merged by a topology
+change. All group bindings are cleared at top-level commit or rollback.
 
 For `members 'a,b,c'` and `members 'b,c,d'`, an existing applicable connection to
 `b` can serve both virtual servers. If the first route has already selected `a`,
@@ -104,7 +117,8 @@ policy and existing frozen local values. It runs before the first remote snapsho
 and mirrored savepoints. Independent actual servers still have independent
 snapshots; this does not add distributed snapshot or commit guarantees.
 
-A failed acquisition poisons that virtual binding until top-level rollback.
+A failed acquisition poisons the shared routing group until top-level rollback,
+including aliases of that group which have not yet been used.
 This includes initial connection and context errors caught inside a savepoint.
 An active connection cannot be replaced by routing to another member after its
 snapshot has been established. Dead idle connections retain upstream reconnect
@@ -156,7 +170,7 @@ protected by the existing transaction checks.
 Ordinary execution still enters through `GetConnection()` in
 `connection.c`. It resolves the incoming mapping before looking up the physical
 cache, checks a previously bound connection, and marks successful acquisition.
-`virtual.c` owns routing and validation. Its binding hash and reset callback live
+`virtual.c` owns routing and validation. Its alias/group hashes and reset callback live
 in `TopTransactionContext`; no existing transaction callback is modified, and
 bindings never own or free libpq connections. A read-only ranking callback in
 `connection.c` lets routing inspect the existing private cache without exposing
@@ -186,8 +200,9 @@ coordinated connection helper at scan initialization. Server catalog identities
 and PostgreSQL core are unchanged.
 
 A cross-server join path must contain every reference to each participating
-virtual server in the statement. Otherwise a separate scan or pushed join could
-pin that same virtual server to an incompatible replica. Such partial joins
+routing group in the statement, including references through sibling shard
+servers with the same members. Otherwise a separate scan or pushed join could
+pin that group to an incompatible replica. Such partial joins
 stay local; a larger join containing all those references can still be pushed.
 The check also covers sibling subqueries and partitioned inputs. It is
 conservative: it can decline a partial pushdown even when a statement-wide
