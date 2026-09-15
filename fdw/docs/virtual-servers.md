@@ -113,8 +113,10 @@ Ordinary target option invalidation retains upstream behavior: existing remote
 transactions finish on their original connection, which is then retired.
 
 Scans, remote-estimate planning, ANALYZE, IMPORT and modification operations all
-go through the same resolver without changing their call sites. Planning can
-therefore select a target and freeze transaction context. Prepared plans acquire
+go through the same resolver without changing their call sites. Remote estimates open ordinary target sessions and freeze transaction context,
+but do not bind virtual servers: join planning must first find a common target.
+Estimation can therefore open sessions that execution does not ultimately use.
+Prepared plans acquire
 the current transaction's connection when executed. Joins within one virtual
 server retain normal pushdown behavior; sharing an actual connection does not
 enable joins between different virtual servers to be pushed down.
@@ -127,7 +129,7 @@ protected by the existing transaction checks.
 
 ## Implementation and tests
 
-The only existing execution function changed is `GetConnection()` in
+Ordinary execution still enters through `GetConnection()` in
 `connection.c`. It resolves the incoming mapping before looking up the physical
 cache, checks a previously bound connection, and marks successful acquisition.
 `virtual.c` owns routing and validation. Its binding hash and reset callback live
@@ -145,3 +147,9 @@ savepoint affinity, failed acquisition, connection loss, catalog changes,
 planning, generic plans, ANALYZE, IMPORT, joins and modifications. Reuse tests
 cover overlapping/disjoint memberships, mapping isolation, active versus idle
 preference, invalidated connections, shared async state and runtime pruning.
+
+The coordinated connection helper intersects all requested servers, respecting
+existing transaction bindings and target mapping privileges. Execution reserves
+every virtual input on the chosen member before acquiring their shared physical
+connection. A caught acquisition failure poisons every participating binding.
+Estimation uses the same eligibility checks without reserving new bindings.

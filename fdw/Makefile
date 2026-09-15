@@ -30,4 +30,4 @@ include $(PGXS)
 # Export only PostgreSQL loader/SQL entry points; helpers also have unique names.
 PG_CFLAGS += -fvisibility=hidden
 
-connection.o option.o virtual.o: virtual.h
+connection.o option.o virtual.o pgwrh_fdw.o: virtual.h
