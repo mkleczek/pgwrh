@@ -2,6 +2,27 @@
 
 Validated on 2026-09-14, locally on macOS arm64 and in Linux CI.
 
+## Synchronized virtual membership updates
+
+Validated locally on 2026-09-15 with PostgreSQL 18.3 on macOS arm64:
+
+* Warning-free build and all 90 integration tests (23 context, 67 virtual).
+* Both retained upstream SQL suites and `eval_plan_qual` isolation.
+* All seven SCRAM TAP assertions.
+* The 16-symbol export audit, including the new function and its fmgr entry.
+* Fresh `0.1.0` installation with the member-update function included, also in
+  a custom extension schema, and no other versions or upgrade paths.
+
+The 12 added tests exercise the blocking update API, actual lock waits observed
+through `pg_locks`, reader and updater commit/rollback, transaction pins after
+savepoint rollback, pushed-join inputs sharing a routing group, cached plans
+waiting for catalog changes, and independence of unused sibling aliases.
+They also cover planning, ANALYZE, IMPORT, failed acquisition, both directions
+of the same-transaction guard, timeout recovery, owner/read-only checks,
+identifier quoting, invalid members and normal DDL event-trigger execution.
+No pgwrh controller/replica logic or PostgreSQL core files changed. These
+changes have not been validated in Linux CI.
+
 ## Shared routing for identical member sets
 
 The routing foundation passed all 71 integration tests (23 context and 48

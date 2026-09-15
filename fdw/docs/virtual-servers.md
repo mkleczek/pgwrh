@@ -39,6 +39,59 @@ existing transaction. Once an alias has acquired a binding, membership changes
 take effect for it in later transactions, even if the current transaction changes
 or removes `members`. An alias not yet acquired uses its current membership.
 
+## Synchronized membership updates
+
+The server owner or a superuser can change a virtual server's members with:
+
+```sql
+BEGIN;
+SELECT pgwrh_fdw_set_members('replicas_ab', ARRAY['replica_b']);
+COMMIT;
+```
+
+The function blocks until existing users of this virtual server finish, then
+updates `members` through ordinary `ALTER SERVER` execution. It preserves the
+server's other options, ownership checks and DDL event triggers. The array
+must be nonempty and one-dimensional, with distinct, non-null actual server
+names. Array elements are literal names; do not add SQL identifier quoting
+inside them. Every member must exist and be an ordinary server of the same FDW.
+Read-only transactions cannot call the function.
+
+The FDW acquires an `AccessShareLock` on the virtual server's database object
+before inspecting its membership for routing or join planning. This lock is
+owned by the top-level transaction, matching routing bindings even when a
+savepoint or PL/pgSQL exception block is rolled back. It covers all tables and
+effective users of the server. Pushed joins lock every virtual input; remote
+estimation, ANALYZE and IMPORT also participate. Merely planning a virtual join
+can therefore delay an update, even if that plan is never executed. An unused
+alias is not locked just because another alias shares its routing group.
+
+The update function acquires the conflicting `AccessExclusiveLock`. The lock
+remains held after the function returns and is released by transaction commit
+or rollback; rolling back an updating subtransaction releases its lock and
+undoes its catalog change together. Waiting readers refresh membership after
+acquiring their lock. Reconciliation can report the updated configuration
+**after commit**, when old bindings have drained and new readers can proceed.
+Normal PostgreSQL cancellation, `lock_timeout` and deadlock handling apply.
+
+Run updates in a separate transaction from queries using the affected server.
+An update after reading or planning through that server is rejected: a
+transaction's own shared lock would not prevent it acquiring the exclusive
+lock. Routing through a server after a managed update is also rejected until
+top-level transaction end, even if the update was rolled back to a savepoint.
+This prevents a routing binding retaining uncommitted membership after that
+catalog change has been undone. Other virtual servers can still be used or
+updated in the same transaction.
+
+Plain `ALTER SERVER ... OPTIONS (SET members ...)` retains its previous
+behavior and bypasses this barrier. Use the function for every managed
+membership change before treating catalog state as readiness. The barrier
+does not drain direct queries through actual servers or synchronize changes
+to actual servers' endpoints, credentials or names. It requires every reader
+backend to have loaded the new FDW library; reconnect older sessions when
+deploying this build. No pgwrh controller or replica reconciliation logic is
+changed by this extension API.
+
 ## User mappings and options
 
 The virtual server requires an **empty user mapping** because the existing FDW
@@ -97,8 +150,9 @@ connection when it resolves to the same actual mapping.
 
 Each acquired alias remembers its original group until transaction end. For
 example, after `shard_1` with members `a,b` selects `a`, another shard with members
-`b,a` inherits `a`, even if another connection becomes available. Altering the
-already-used `shard_1` to members `c` does not move it; an unused shard with members
+`b,a` inherits `a`, even if another connection becomes available. Using raw
+`ALTER SERVER` to change the already-used `shard_1` to members `c` does not move
+it; an unused shard with members
 `c` can still select `c`. Previously bound groups are never merged by a topology
 change. All group bindings are cleared at top-level commit or rollback.
 

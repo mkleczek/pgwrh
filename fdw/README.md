@@ -36,8 +36,10 @@ The install command needs write access to that PostgreSQL installation.
 Builds for other major versions are rejected. Both the SQL extension version
 and the library's module version are `0.1.0`. A fresh `CREATE EXTENSION pgwrh_fdw`
 uses the single `pgwrh_fdw--0.1.0.sql` installation script, including all
-connection-management functions. There are no upgrade scripts for this first
-release; future releases will add them when their SQL definitions need changes.
+connection-management functions and `pgwrh_fdw_set_members(text, text[])`.
+There are no upgrade scripts for this first release. Reconnect existing sessions
+to load the new library before relying on the membership-update barrier: an
+already-loaded older library does not acquire its reader locks.
 
 The former `1.0`/`1.1`/`1.2` install chain was inherited during development and
 was never a pgwrh_fdw release. There is no migration path from those development
@@ -95,6 +97,9 @@ share one remote transaction. Selection remains fixed for the local transaction.
 Virtual servers with identical member sets share one selection for the same
 effective user, regardless of member order, including across statements and
 savepoints. Each shard can therefore have its own stable virtual server name.
+`pgwrh_fdw_set_members('shard_server', ARRAY['replica_a', 'replica_b'])` waits
+for users of the old routing configuration before changing membership. The
+update becomes ready to report after its transaction commits.
 See [virtual servers](docs/virtual-servers.md)
 for configuration, access checks, option ownership and error behavior.
 
