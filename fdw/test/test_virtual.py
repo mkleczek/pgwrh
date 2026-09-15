@@ -611,6 +611,115 @@ class VirtualServerTests(unittest.TestCase):
         self.assertEqual(self.c.sql("SELECT member, pid FROM peer"), [("virtual_remote_b", pid)])
         self.c.sql("ROLLBACK")
 
+    def test_same_group_repeated_joins_and_scan_share_one_replica(self):
+        self.join_tables("s_a,s_b,s_c", "s_c,s_b,s_a")
+        self.virtual("v3", "s_b,s_a,s_c", options=", use_remote_estimate 'true'")
+        self.c.sql("CREATE FOREIGN TABLE v3_data(id int, value text) SERVER v3 "
+                   "OPTIONS (table_name 'data'); BEGIN; SELECT * FROM a; SELECT * FROM b")
+        query = ("SELECT x.id FROM v1_data x JOIN v2_data y USING (id) UNION ALL "
+                 "SELECT x.id FROM v1_data x JOIN v3_data y USING (id) UNION ALL "
+                 "SELECT id FROM v2_data")
+        self.assertEqual(len(self.remote_joins(query)), 2)
+        self.assertEqual(sorted(self.c.sql(query)), [("1",)] * 3 + [("2",)] * 3)
+        pids = [self.c.scalar("SELECT pid FROM " + name) for name in ("v1", "v2", "v3")]
+        self.assertEqual(len(set(pids)), 1)
+        self.c.sql("ROLLBACK")
+
+    def test_same_group_repeated_reference_in_larger_join(self):
+        self.join_tables("s_a,s_b", "s_b,s_a")
+        self.c.sql("SET join_collapse_limit = 1")
+        query = ("SELECT x.id FROM (v1_data x JOIN v2_data y USING (id)) "
+                 "JOIN v1_data z USING (id) ORDER BY x.id")
+        self.assertTrue(any(sql.count("JOIN") == 2 for sql in self.remote_joins(query)))
+        self.assertEqual(self.c.sql(query), [("1",), ("2",)])
+
+    def test_same_group_async_append_with_repeated_shards(self):
+        self.join_tables("s_a,s_b", "s_b,s_a")
+        for name in ("v1", "v2"):
+            self.c.sql(f"ALTER SERVER {name} OPTIONS (ADD async_capable 'true', ADD fetch_size '1')")
+        query = ("SELECT x.id FROM v1_data x JOIN v2_data y USING (id) UNION ALL "
+                 "SELECT x.id FROM v2_data x JOIN v1_data y USING (id)")
+        self.c.sql("BEGIN")
+        self.assertEqual(len(self.remote_joins(query)), 2)
+        self.assertIn('"Async Capable": true',
+                      self.c.scalar("EXPLAIN (VERBOSE, FORMAT JSON) " + query))
+        for _ in range(2):
+            self.assertEqual(sorted(self.c.sql(query)), [("1",), ("1",), ("2",), ("2",)])
+        self.assertEqual(self.c.sql("SELECT pid FROM v1"), self.c.sql("SELECT pid FROM v2"))
+        self.c.sql("COMMIT")
+
+    def test_same_group_repeated_outer_joins_and_aggregation(self):
+        self.join_tables("s_a,s_b", "s_b,s_a")
+        branch = "SELECT count(*) FROM v1_data x LEFT JOIN v2_data y ON x.id = y.id AND y.id = 1"
+        query = branch + " UNION ALL " + branch
+        joins = self.remote_joins(query)
+        self.assertEqual(len(joins), 2)
+        self.assertTrue(all("count(*)" in sql for sql in joins))
+        self.assertEqual(self.c.sql(query), [("2",), ("2",)])
+
+    def test_same_group_cached_plan_tracks_bindings_and_topology(self):
+        self.join_tables("s_a,s_b", "s_b,s_a")
+        query = ("SELECT x.id FROM v1_data x JOIN v2_data y USING (id) UNION ALL "
+                 "SELECT id FROM v1_data")
+        self.c.sql("SET plan_cache_mode = force_generic_plan; PREPARE j AS " + query)
+        self.assertEqual(len(self.remote_joins("EXECUTE j")), 1)
+        self.c.sql("BEGIN; SELECT * FROM b; SELECT * FROM v1")
+        self.assertEqual(sorted(self.c.sql("EXECUTE j")), [("1",), ("1",), ("2",), ("2",)])
+        self.assertEqual(self.c.scalar("SELECT member FROM v2"), "virtual_remote_b")
+        self.c.sql("COMMIT")
+        with self.cluster.connect(self.db) as other:
+            other.sql("ALTER SERVER v1 OPTIONS (SET members 's_c'); "
+                      "ALTER SERVER v2 OPTIONS (SET members 's_c')")
+        self.c.sql("BEGIN")
+        self.assertEqual(len(self.remote_joins("EXECUTE j")), 1)
+        self.assertEqual(sorted(self.c.sql("EXECUTE j")), [("1",), ("1",), ("2",), ("2",)])
+        self.assertEqual(self.c.scalar("SELECT member FROM v1"), "virtual_remote_c")
+        self.c.sql("COMMIT; ALTER SERVER v2 OPTIONS (SET members 's_d')")
+        self.assertEqual(self.remote_joins("EXECUTE j"), [])
+        self.assertEqual(sorted(self.c.sql("EXECUTE j")), [("1",), ("1",), ("2",), ("2",)])
+
+    def test_topology_change_does_not_merge_previously_bound_groups(self):
+        self.join_tables("s_a,s_b", "s_b,s_c")
+        self.c.sql("BEGIN; SELECT * FROM a; SELECT * FROM v1; "
+                   "SELECT * FROM c; SELECT * FROM v2; "
+                   "ALTER SERVER v2 OPTIONS (SET members 's_b,s_a')")
+        query = ("SELECT x.id FROM v1_data x JOIN v2_data y USING (id) UNION ALL "
+                 "SELECT id FROM v1_data")
+        self.assertEqual(self.remote_joins(query), [])
+        self.assertEqual(sorted(self.c.sql(query)), [("1",), ("1",), ("2",), ("2",)])
+        self.assertEqual(self.c.scalar("SELECT member FROM v1"), "virtual_remote_a")
+        self.assertEqual(self.c.scalar("SELECT member FROM v2"), "virtual_remote_c")
+        self.c.sql("COMMIT")
+        self.assertEqual(len(self.remote_joins(query)), 1)
+        self.assertEqual(sorted(self.c.sql(query)), [("1",), ("1",), ("2",), ("2",)])
+
+    def test_same_group_partitionwise_joins_and_generic_pruning(self):
+        self.c.sql("CREATE TABLE px(id int, value text) PARTITION BY RANGE (id); "
+                   "CREATE TABLE py(id int, value text) PARTITION BY RANGE (id); "
+                   "SET enable_partitionwise_join = on; SET plan_cache_mode = force_generic_plan")
+        for member in "ab":
+            with self.cluster.connect("virtual_remote_" + member) as remote:
+                for index in (1, 2):
+                    remote.sql(f"CREATE VIEW group_partition_{index} AS "
+                               f"SELECT * FROM data WHERE id = {index}")
+        for index in (1, 2):
+            for side, members in (("x", "s_a,s_b"), ("y", "s_b,s_a")):
+                route = f"route_{side}{index}"
+                self.virtual(route, members, options=", use_remote_estimate 'true'")
+                self.c.sql(f"CREATE FOREIGN TABLE p{side}{index} PARTITION OF p{side} "
+                           f"FOR VALUES FROM ({index}) TO ({index + 1}) SERVER {route} "
+                           f"OPTIONS (table_name 'group_partition_{index}')")
+        query = "SELECT x.id FROM px x JOIN py y USING (id) ORDER BY x.id"
+        self.assertEqual(len(self.remote_joins(query)), 2)
+        self.assertEqual(self.c.sql(query), [("1",), ("2",)])
+        self.c.sql("PREPARE pj(int) AS SELECT x.id FROM px x JOIN py y USING (id) "
+                   "WHERE x.id = $1; BEGIN")
+        self.assertEqual(self.c.sql("EXECUTE pj(1)"), [("1",)])
+        self.assertEqual(self.c.sql("EXECUTE pj(2)"), [("2",)])
+        pids = [self.c.scalar("SELECT pid FROM route_" + suffix) for suffix in ("x1", "y1", "x2", "y2")]
+        self.assertEqual(len(set(pids)), 1)
+        self.c.sql("COMMIT")
+
     def test_cross_virtual_semijoin_and_local_safety_checks(self):
         self.join_tables()
         query = ("SELECT x.id FROM v1_data x WHERE EXISTS "

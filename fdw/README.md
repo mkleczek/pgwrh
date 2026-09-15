@@ -99,7 +99,9 @@ See [virtual servers](docs/virtual-servers.md)
 for configuration, access checks, option ownership and error behavior.
 
 Virtual servers with a common member can push eligible SELECT joins to that
-member, including joins between different shard servers. See
+member, including joins between different shard servers. Identical member sets
+also allow repeated shard references across pushed joins, separate scans and
+partitionwise joins because all aliases share a transaction binding. See
 [virtual-server routing](docs/virtual-servers.md) for transaction and plan rules.
 
 ## Frozen transaction context

@@ -136,6 +136,11 @@ Prepared plans acquire the current transaction's connection when executed.
 Joins within one virtual server retain normal pushdown behavior. SELECT joins
 across different virtual servers (or a virtual server and one of its actual
 members) can also be pushed down when all inputs share an accessible target.
+When all virtual inputs belong to the same routing group, repeated references
+are supported: a shard can appear in several pushed joins, a separate scan,
+UNION branches or partitionwise joins. The shared binding guarantees the same
+replica throughout execution, without fixing that replica during planning or
+introducing a new PostgreSQL path property.
 The planner intersects all inputs, including existing transaction bindings;
 pairwise overlap alone is insufficient. It retains the normal join-safety and
 cost checks. Execution chooses one common member and binds every virtual input
@@ -194,15 +199,22 @@ OIDs through join/upper planning into the selected ForeignScan and uses the
 coordinated connection helper at scan initialization. Server catalog identities
 and PostgreSQL core are unchanged.
 
-A cross-server join path must contain every reference to each participating
-routing group in the statement, including references through sibling shard
-servers with the same members. Otherwise a separate scan or pushed join could
-pin that group to an incompatible replica. Such partial joins
+A join involving different routing groups must contain every reference to each
+participating virtual group in the statement, including references through
+sibling shard servers with the same members. Otherwise a separate scan or pushed
+join could pin that group to an incompatible replica. Such partial joins
 stay local; a larger join containing all those references can still be pushed.
 The check also covers sibling subqueries and partitioned inputs. It is
 conservative: it can decline a partial pushdown even when a statement-wide
 routing optimizer could coordinate the independent scans. This avoids changing
 scan initialization or opening connections to pruned branches.
+
+Joins entirely within one virtual routing group skip that restriction and the
+statement-wide reference walk. Group comparisons use the original membership
+of already-acquired aliases. A topology edit cannot make independently pinned
+groups appear interchangeable merely by giving their servers the same current
+`members` option. The existing cross-server write, row-lock and shippability
+restrictions still apply.
 
 Statement references are collected once in planner memory, avoiding repeated
 partition-tree walks for each candidate join. The cache is released with the
