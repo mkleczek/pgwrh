@@ -54,10 +54,11 @@ package. Debug packages are handled by the distribution's normal RPM tooling.
 
 Shipping multiple extension control files does not activate all extensions in
 every database. `pgwrh_wait` and `pgwrh_fdw` can each be created independently.
-This packaging change preserves pgwrh's existing `postgres_fdw` and
-`pg_background` control dependencies and existing server definitions. Selecting
-`pgwrh_fdw` for routing and configuring its propagated parameters are separate
-database integration steps. Preloading `pgwrh_wait` remains an explicit server
+pgwrh depends on `pgwrh_fdw` as well as `postgres_fdw` and `pg_background`.
+When building with `WITH_FDW=0`, provide `pgwrh_fdw` separately in the target
+PostgreSQL installation. The test staging target includes the bundled FDW's
+SQL and library so integration tests use the implementation being developed.
+Preloading `pgwrh_wait` remains an explicit server
 configuration step; it must happen before relying on the wait API.
 
 Release archives must contain `fdw/` as well as the core SQL and native sources.

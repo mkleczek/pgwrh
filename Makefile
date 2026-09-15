@@ -124,6 +124,11 @@ testgres-ext: all
 	mkdir -p $(TESTGRES_EXT_DIR)
 	cp ./pgwrh.control $(TESTGRES_EXT_DIR)
 	cp $(wildcard $(BUILD)/pgwrh/*.sql) $(TESTGRES_EXT_DIR)
+ifeq ($(WITH_FDW),1)
+	cp fdw/pgwrh_fdw--*.sql $(TESTGRES_EXT_DIR)
+	sed 's|\$$libdir/pgwrh_fdw|pgwrh_fdw|' fdw/pgwrh_fdw.control > $(TESTGRES_EXT_DIR)/pgwrh_fdw.control
+	cp fdw/pgwrh_fdw$(DLSUFFIX) $(TESTGRES_EXT_ROOT)
+endif
 
 prepare:
 	mkdir -p ${BUILD}/pgwrh
@@ -139,6 +144,11 @@ test-stage: all
 	cp pgwrh.control pgwrh_wait.control $(BUILD)/test-stage/extension/
 	cp $(DATA_built) $(DATA) $(BUILD)/test-stage/extension/
 	cp $(shlib) $(BUILD)/test-stage/
+ifeq ($(WITH_FDW),1)
+	cp fdw/pgwrh_fdw--*.sql $(BUILD)/test-stage/extension/
+	sed 's|\$$libdir/pgwrh_fdw|pgwrh_fdw|' fdw/pgwrh_fdw.control > $(BUILD)/test-stage/extension/pgwrh_fdw.control
+	cp fdw/pgwrh_fdw$(DLSUFFIX) $(BUILD)/test-stage/
+endif
 
 test-wait: test-stage
 	$(PYTHON) -m pytest test/native -v

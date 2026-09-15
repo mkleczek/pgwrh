@@ -91,11 +91,11 @@ def postgres_node_factory():
             if extension_paths:
                 node.append_conf(
                     "dynamic_library_path = "
-                    + _quote_conf_value(f"$libdir:{extension_paths}")
+                    + _quote_conf_value(f"{extension_paths}:$libdir")
                 )
                 node.append_conf(
                     "extension_control_path = "
-                    + _quote_conf_value(f"$system:{extension_paths}")
+                    + _quote_conf_value(f"{extension_paths}:$system")
                 )
             node.start()
             if os.environ.get(DEBUG_ENV):
