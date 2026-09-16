@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from contextlib import ExitStack
+
 import pytest
 
-from .pgwrh_testkit import MasterHandle, PgwrhCluster, ReplicaSpec, wait_until
+from .pgwrh_testkit import MasterHandle, PgwrhCluster, ReplicaSpec, quote_literal, wait_until
 
 
 @pytest.fixture
@@ -127,3 +129,96 @@ def test_reparenting_and_ancestor_bounds_switch_atomically(
     assert [row[0] for row in replica.execute(tree_query)] == [row[0] for row in original_tree]
     assert replica.query_scalar("""SELECT count(*) FROM pgwrh.sync
         WHERE description LIKE 'Switching query routes%'""") == 0
+
+
+def test_moved_year_inherits_archival_placement_and_rebuilds_remote_aggregates(
+    partitioned_master, postgres_node_factory,
+):
+    master = partitioned_master
+    keys = {}
+    for owner, other in [('replica1', 'replica2'), ('replica2', 'replica1')]:
+        keys[owner] = master.query_scalar(f"""SELECT n::text FROM generate_series(1, 100) n
+            WHERE pgwrh.score(100, n::text, '{owner}') > pgwrh.score(100, n::text, '{other}')
+            LIMIT 1""")
+    # Archival years deliberately go to different hosts; fresh years go to both.
+    archival_key = (f"SELECT CASE WHEN $2 = 'y2024' THEN '{keys['replica1']}' "
+                    f"ELSE '{keys['replica2']}' END")
+    master.execute(f"""INSERT INTO pgwrh.sharded_table
+        (replication_group_id, sharded_table_schema, sharded_table_name,
+         replication_factor, sharding_key_expression)
+        VALUES ('g1', 'data', 'archival', 0, {quote_literal(archival_key)}),
+               ('g1', 'data', 'fresh', 100, 'SELECT ''fresh''')""")
+    cluster = PgwrhCluster(master, postgres_node_factory)
+    cluster.add_replicas([ReplicaSpec('replica1'), ReplicaSpec('replica2'), ReplicaSpec('reader')])
+    master.execute('''DELETE FROM pgwrh.shard_host_weight
+        WHERE host_id = 'reader' AND version <>
+            (SELECT current_version FROM pgwrh.replication_group WHERE replication_group_id = 'g1')''')
+    cluster.deploy(timeout=60)
+    reader = cluster.replicas[-1]
+    remote_query = '''SELECT (n.node_rel_id).table_name
+        FROM pgwrh.remote_node n JOIN pgwrh.reachable_shard r USING (reg_class) ORDER BY 1'''
+    wait_until(lambda: reader.execute(remote_query) == [('archival',), ('fresh',)],
+               timeout=60, message='initial tiers did not aggregate')
+    identity_query = "SELECT ftrelid, ftserver FROM pg_foreign_table WHERE ftrelid = 'data_remote.fresh'::regclass"
+    fresh_identity = reader.execute(identity_query)
+    placement_query = '''SELECT table_name, array_agg(host_id ORDER BY host_id)
+        FROM pgwrh.shard_assigned_host JOIN pgwrh.replication_group USING (replication_group_id)
+        WHERE version = target_version GROUP BY table_name ORDER BY table_name'''
+    assert master.execute(placement_query) == [
+        ('y2024', ['replica1']), ('y2025', ['replica1', 'replica2']), ('y2026', ['replica1', 'replica2']),
+    ]
+
+    with ExitStack() as stack:
+        # Keep metadata reads out of the controller DDL, and resume all daemons
+        # together with the changed tree and placement available to reconcile.
+        paused = [stack.enter_context(replica.node.connect()) for replica in cluster.replicas]
+        for conn in paused:
+            conn.execute('SELECT pg_advisory_lock(2895359559)')
+        move_year_to_archival(master)
+        # Structural DDL is observed directly. Placement is resnapshotted through
+        # the existing configuration clone/start/commit lifecycle.
+        master.execute('''INSERT INTO pgwrh.replication_group_config_clone
+            SELECT replication_group_id, current_version, pgwrh.next_version(current_version)
+            FROM pgwrh.replication_group WHERE replication_group_id = 'g1' ''')
+        master.start_rollout()
+        assert master.execute(placement_query) == [
+            ('y2024', ['replica1']), ('y2025', ['replica2']), ('y2026', ['replica1', 'replica2']),
+        ]
+        assert master.execute('''SELECT sharded_table_name FROM pgwrh.shard
+            JOIN pgwrh.replication_group USING (replication_group_id)
+            WHERE version = target_version AND table_name = 'y2025' ''') == [('archival',)]
+        for conn in paused:
+            conn.execute('SELECT pg_advisory_unlock(2895359559)')
+    master.wait_for_rollout_ready(expected_replicas=3, timeout=60)
+    # The previous fresh copy remains available until the normal rollout commit.
+    for replica in cluster.replicas[:2]:
+        assert replica.query_scalar("SELECT count(*) FROM pgwrh.connected_local_shard WHERE (rel_id).table_name = 'y2025'") == 1
+    master.commit_rollout()
+
+    for replica in cluster.replicas:
+        wait_until(lambda: replica.query_scalar('SELECT count(*) FROM pgwrh.sync') == 0,
+                   timeout=60, message=f'{replica.name} did not finish the partition move')
+    assert reader.execute(remote_query) == [('fresh',), ('y2024',), ('y2025',)]
+    assert reader.execute(identity_query) == fresh_identity
+    for replica, expected in zip(cluster.replicas, [('y2024', 'y2026'), ('y2025', 'y2026'), ()]):
+        assert replica.execute('SELECT (rel_id).table_name FROM pgwrh.connected_local_shard ORDER BY 1') == [
+            (name,) for name in expected
+        ]
+    assert reader.execute('''SELECT bound FROM pgwrh.local_rel
+        WHERE rel_id IN (('data_remote', 'fresh')::pgwrh.rel_id,
+                         ('data_slot', 'fresh')::pgwrh.rel_id)''') == [
+        ('FOR VALUES FROM (2026) TO (MAXVALUE)',), ('FOR VALUES FROM (2026) TO (MAXVALUE)',),
+    ]
+    cluster.assert_query_results_match('SELECT * FROM data.root ORDER BY id')
+    # Aggregated readers query through the root: their original intermediate
+    # tables are detached while the foreign aggregate occupies the slot.
+    for table in ('fresh', 'archival'):
+        query = f'SELECT * FROM data.{table} ORDER BY id'
+        for replica in cluster.replicas[:2]:
+            assert replica.execute(query) == master.execute(query)
+    for year in (2024, 2025, 2026):
+        cluster.assert_query_results_match(f'SELECT * FROM data.root WHERE year = {year} ORDER BY id')
+    master.execute('INSERT INTO data.root VALUES (4, 2025)')
+    wait_until(lambda: all(replica.query_scalar('SELECT count(*) FROM data.root WHERE year = 2025') == 2
+                           for replica in cluster.replicas),
+               timeout=30, message='moved year did not continue replicating and routing writes')
