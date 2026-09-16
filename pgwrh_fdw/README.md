@@ -14,9 +14,9 @@ The fork is licensed under **AGPL-3.0-only**, with PostgreSQL's original notices
 and permissions preserved. See [LICENSING.md](LICENSING.md).
 
 This component was imported as a Git subtree into pgwrh. Builds, integration,
-and future releases are coordinated in the pgwrh repository. The initial import
-preserves the standalone **0.1.0** release and its PostgreSQL ancestry; `v0.1.0`
-was a tag in that former repository, not a pgwrh release tag. See
+and releases are coordinated in the pgwrh repository, with version **0.3.0**
+shared by all three extensions. The initial import and its PostgreSQL ancestry
+remain recorded in history. See
 [upstream maintenance](UPSTREAM.md) and [combined packaging](../docs/packaging.md).
 
 ## Build and install
@@ -34,17 +34,12 @@ make PG_CONFIG=/path/to/postgresql-18/bin/pg_config install
 
 The install command needs write access to that PostgreSQL installation.
 Builds for other major versions are rejected. Both the SQL extension version
-and the library's module version are `0.1.0`. A fresh `CREATE EXTENSION pgwrh_fdw`
-uses the single `pgwrh_fdw--0.1.0.sql` installation script, including all
+and the library's module version are `0.3.0`. A fresh `CREATE EXTENSION pgwrh_fdw`
+uses the single `pgwrh_fdw--0.3.0.sql` installation script, including all
 connection-management functions and `pgwrh_fdw_set_members(text, text[])`.
-There are no upgrade scripts for this first release. Reconnect existing sessions
-to load the new library before relying on the membership-update barrier: an
-already-loaded older library does not acquire its reader locks.
-
-The former `1.0`/`1.1`/`1.2` install chain was inherited during development and
-was never a pgwrh_fdw release. There is no migration path from those development
-snapshots. Existing experimental installations need a planned recreation of
-the extension and its dependent foreign objects; installing the new files
+There are no migration or upgrade scripts. Existing experimental installations
+need a planned recreation of the extension and its dependent foreign objects;
+installing the new files
 alone does not change their catalog version. No existing objects are removed
 automatically.
 

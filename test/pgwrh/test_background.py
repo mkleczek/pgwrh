@@ -4,7 +4,7 @@ from .pgwrh_testkit import wait_until
 
 
 def assert_background_execution(node):
-    """Exercise the same worker API after fresh installation and upgrade."""
+    """Exercise the worker API after fresh installation."""
     role = node.execute('SELECT quote_ident(pgwrh.pgwrh_replica_role_name())')[0][0]
     node.execute(f'CREATE SCHEMA worker_test AUTHORIZATION {role}')
     with node.connect() as conn:

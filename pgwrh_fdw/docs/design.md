@@ -54,7 +54,7 @@ per-connection propagation flag can become stale after rollback.
 ## Coexistence audit
 
 * SQL extension, wrapper, handler, validator, connection inspection/disconnect
-  functions, installation/upgrade scripts, library and module magic name use
+  functions, installation script, library and module magic name use
   `pgwrh_fdw`.
 * The application-name GUC and reserved GUC prefix use `pgwrh_fdw`; the upstream
   `postgres_fdw.application_name` remains independent.
@@ -71,13 +71,13 @@ per-connection propagation flag can become stale after rollback.
 
 ## Upstream strategy
 
-pgwrh_fdw retains its own SQL extension version, starting at `0.1.0`, while
-source releases are now coordinated with pgwrh.
+pgwrh_fdw shares SQL extension and module version `0.3.0` with the pgwrh release.
+This is the only installable version, with no upgrade scripts.
 The initial SQL install script directly defines the final upstream function
 signatures rather than replaying postgres_fdw's historical upgrades. The C
 entry point `pgwrh_fdw_get_connections_1_2` retains its upstream API suffix;
 that suffix is not a pgwrh_fdw release version. Future upstream SQL changes
-must be adapted to pgwrh_fdw's own install and upgrade paths.
+must be adapted to pgwrh_fdw's installation script.
 
 This is a **Git subtree in pgwrh**, imported with the existing fork's full history.
 `upstream/postgres_fdw` retains history filtered to `contrib/postgres_fdw`, with

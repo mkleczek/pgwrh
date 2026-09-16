@@ -143,7 +143,7 @@ Cross-replica transactional consistency is outside this handoff protocol. Native
 partitioned unique constraints that prohibit foreign partitions remain unsupported;
 primary keys on individual local leaves are supported.
 
-## Tests and upgrade
+## Tests and installation
 
 `pgwrh-test` runs isolated PostgreSQL integration tests. Coverage includes prepared
 but detached replacements, stale destinations, delayed readers, failed attachment
@@ -151,16 +151,8 @@ transactions, concurrent reads, rollback, maximal subtree selection, nested RANG
 LIST and HASH layouts, empty leaves, endpoint failover, restart, credential rotation,
 and generic prepared-query partition pruning through native shields.
 
-Version 0.2.2 includes an upgrade from 0.2.1. Install the new extension scripts on all
-nodes, create the new dependency with `CREATE EXTENSION IF NOT EXISTS pgwrh_fdw`,
-then update the master and replicas with `ALTER EXTENSION pgwrh UPDATE`.
-The bundled pgwrh_fdw dependency remains version 0.1.0. Upgrade the controller
-first so assignments contain aligned member and endpoint lists. Legacy route
-reports remain accepted while replicas replace their old host-set foreign tables
-through the existing attachment reconciliation. Reconnect sessions that loaded
-an older pgwrh_fdw library before relying on its membership locking.
-The upgrade regression builds 0.2.1 from its release tag and checks existing rows and
-root OIDs after upgrade. The upgrade also moves worker execution to pg_background's
-cookie-protected v2 API. Use pg_background 1.6–1.x during the pgwrh upgrade, then
-move to pg_background 2.x after every node has upgraded. The integration shell pins
-pg_background 1.9.2 so it can still start the released pgwrh 0.2.1 for this test.
+Version 0.3.0 is the only installable version of all three bundled extensions.
+Install the release files on every node and initialize a fresh database with
+`CREATE EXTENSION pgwrh CASCADE`. No migration or upgrade scripts are provided.
+Worker execution uses pg_background's cookie-protected v2 API; the integration
+shell uses the pg_background package supplied by Nixpkgs.

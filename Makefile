@@ -70,7 +70,7 @@ $(CLEAN_TARGETS):
 $(UNINSTALL_TARGETS):
 	$(MAKE) -C $(@:-uninstall=) uninstall PG_CONFIG="$(PG_CONFIG)" DESTDIR="$(DESTDIR)"
 
-prepare updates:
+prepare:
 	$(MAKE) -C pgwrh $@ PG_CONFIG="$(PG_CONFIG)"
 
 # PostgreSQL 18 can load extension files from a writable staging directory.
@@ -114,6 +114,6 @@ endif
 test-packaging:
 	PG_CONFIG="$(PG_CONFIG)" $(PYTHON) test/check-install.py
 
-.PHONY: all install uninstall clean prepare updates testgres-ext test-stage \
+.PHONY: all install uninstall clean prepare testgres-ext test-stage \
 	test-pgwrh test-wait test-fdw test-fdw-tap test-packaging \
 	$(ALL_TARGETS) $(INSTALL_TARGETS) $(CLEAN_TARGETS) $(UNINSTALL_TARGETS)

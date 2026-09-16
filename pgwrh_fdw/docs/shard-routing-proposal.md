@@ -354,7 +354,7 @@ new routing module responsible for candidate resolution, transaction bindings
 and policy. Extend `PgFdwRelationInfo` and scan private data only where route
 requests cross planning/execution. Update `transaction_context.c` to resolve a
 profile policy and revalidate requesting roles independently of whether a new
-physical transaction starts. Extend `option.c`, SQL installation/upgrade files,
+physical transaction starts. Extend `option.c`, the SQL installation file,
 namespace/symbol checks, and tests with each introduced API.
 
 Add a physical connection diagnostic returning connection ID, domain, member,

@@ -41,12 +41,10 @@ def check_install(stage, log, extensions, options):
     assert actual == set(extensions), (actual, extensions)
 
     sql = set()
-    if "pgwrh" in extensions:
-        sql.update(p.name for p in (ROOT / "pgwrh/src/updates").glob("*.sql"))
-        sql.update(p.stem for p in (ROOT / "pgwrh/src/updates").glob("*.sql.in"))
     for extension in extensions:
         control = (sharedir / (extension + ".control")).read_text()
         version = re.search(r"^default_version\s*=\s*'([^']+)'", control, re.M)[1]
+        assert version == "0.3.0", (extension, version)
         sql.add(f"{extension}--{version}.sql")
     assert {p.name for p in sharedir.glob("*.sql")} == sql
 

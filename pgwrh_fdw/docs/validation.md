@@ -2,6 +2,9 @@
 
 Validated on 2026-09-14, locally on macOS arm64 and in Linux CI.
 
+The records below describe development before the unified 0.3.0 release.
+The current tree ships only `pgwrh_fdw--0.3.0.sql` and no upgrade scripts.
+
 ## Weighted routing and initial connection failover
 
 Validated locally on 2026-09-15 with PostgreSQL 18.3 on macOS arm64:
@@ -17,7 +20,7 @@ Validated locally on 2026-09-15 with PostgreSQL 18.3 on macOS arm64:
   raising SQLSTATE 08001 after the remote transaction has started.
 
 The weight change passed all 95 integration tests independently before adding
-initial connection failover. Both changes remain in extension version 0.1.0.
+initial connection failover. Both changes are included in the installation script.
 
 ## Synchronized virtual membership updates
 
@@ -27,7 +30,7 @@ Validated locally on 2026-09-15 with PostgreSQL 18.3 on macOS arm64:
 * Both retained upstream SQL suites and `eval_plan_qual` isolation.
 * All seven SCRAM TAP assertions.
 * The 16-symbol export audit, including the new function and its fmgr entry.
-* Fresh `0.1.0` installation with the member-update function included, also in
+* Fresh installation with the member-update function included, also in
   a custom extension schema, and no other versions or upgrade paths.
 
 The 12 added tests exercise the blocking update API, actual lock waits observed
@@ -109,19 +112,19 @@ and idle candidates, prevent borrowing a different user mapping's connection,
 and execute a generic partition-pruned query with an unreachable unused member.
 These new changes have not yet been validated in Linux CI.
 
-## Initial 0.1.0 release
+## Initial standalone release
 
 The release version and consolidated installation script were validated locally
 on PostgreSQL 18.3 (macOS arm64):
 
-* All 23 integration tests passed, including a fresh installation with SQL and
-  module version `0.1.0`, no inherited extension versions or upgrade paths,
+* All 23 integration tests passed, including a fresh installation with matching SQL
+  and module versions, no inherited extension versions or upgrade paths,
   and working connection-management functions.
 * Both upstream SQL suites, the isolation suite, and all seven SCRAM TAP
   assertions passed.
 * The dynamic export audit passed with the same 14 prescribed symbols.
 * PGXS installation into a fresh staging directory produced the library,
-  control file, and exactly one SQL script: `pgwrh_fdw--0.1.0.sql`.
+  control file, and exactly one installation SQL script.
 
 ## Implementation validation before release versioning
 

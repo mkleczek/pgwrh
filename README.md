@@ -83,9 +83,9 @@ multiple machines by:
 | PostgreSQL | 16+ |
 | pg_background | 1.6+ with the cookie-protected v2 API |
 
-When upgrading from pgwrh 0.2.1, use pg_background 1.6–1.x during the
-transition. Upgrade pgwrh on the controller and every replica before moving to
-pg_background 2.x, which removed the older worker API used by pgwrh 0.2.1.
+The only version shipped is **0.3.0**, shared by `pgwrh`, `pgwrh_wait`, and
+`pgwrh_fdw`. This release supports fresh installation only; it contains no
+migration or upgrade scripts for existing installations.
 
 ## Extension installation
 

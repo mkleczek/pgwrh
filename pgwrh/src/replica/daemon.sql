@@ -155,7 +155,7 @@ EXCEPTION
 END
 $$;
 
--- Keep the existing entry point usable after upgrades as well as fresh installs.
+-- Expose the public entry point through the cookie-protected worker API.
 CREATE OR REPLACE FUNCTION launch_in_background(commands text) RETURNS void LANGUAGE sql AS
 $$
 SELECT "@extschema@".bg_submit_detached(commands);

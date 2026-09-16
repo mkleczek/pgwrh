@@ -36,7 +36,7 @@ The spec builds the following architecture-specific packages:
 
 | Package | Contents |
 | --- | --- |
-| `pgwrh_18` | All three extensions, two shared libraries, installation/upgrade SQL, licenses, and documentation |
+| `pgwrh_18` | All three extensions, two shared libraries, installation SQL, licenses, and documentation |
 | `pgwrh_18-llvmjit` | LLVM bitcode and indexes for both shared libraries; requires exactly the same version/release of `pgwrh_18` |
 
 Standard RPM tooling also generates debug packages where enabled. The release
@@ -65,21 +65,23 @@ sudo dnf builddep --define 'pgmajorversion 18' packaging/rpm/pgwrh.spec
 ```
 
 The source archive must include the reorganized extension directories and
-`test/check-install.py`. `Source0` names the eventual `v0.2.2` release archive;
+`test/check-install.py`. `Source0` names the eventual `v0.3.0` release archive;
 that tag has not been published as part of this change. To build a development
 snapshot, export the desired commit with the release-compatible archive prefix:
 
 ```sh
 mkdir -p "$HOME/rpmbuild/SOURCES"
-git archive --format=tar.gz --prefix=pgwrh-0.2.2/ \
-  --output="$HOME/rpmbuild/SOURCES/pgwrh-0.2.2.tar.gz" HEAD
+git archive --format=tar.gz --prefix=pgwrh-0.3.0/ \
+  --output="$HOME/rpmbuild/SOURCES/pgwrh-0.3.0.tar.gz" HEAD
 rpmbuild -ba --define 'pgmajorversion 18' packaging/rpm/pgwrh.spec
 ```
 
 With Jujutsu, replace `HEAD` with the commit ID of the intended change, obtained
 using `jj log -r @ --no-graph -T commit_id`; Git's `HEAD` may point at its parent.
 Use a distinct snapshot release number when distributing unreleased builds.
-The spec checks that its version matches `pgwrh/pgwrh.control` before building.
+The spec checks that its version matches all three extension control files before
+building. Each extension ships only its `0.3.0` installation script; no upgrade
+scripts or earlier installable versions are included.
 
 To build without LLVM, pass the same setting to dependency resolution and RPM:
 
@@ -94,13 +96,15 @@ It neither starts PostgreSQL nor writes into the system installation. The RPM
 has no service-management or database-modifying scriptlets: installation does
 not restart PostgreSQL, enable preloading, or issue `CREATE EXTENSION`.
 
-Validated on AlmaLinux 9 (aarch64) with PGDG PostgreSQL 18.6: both the default
-LLVM build and the `llvm=0` build produced binary and source RPMs, with all nine
+Release 0.3.0 was validated on AlmaLinux 9 (aarch64) with PGDG PostgreSQL 18.6:
+both the default LLVM build and the `llvm=0` build produced binary and source RPMs, with all nine
 packaging checks passing in each build. Installing the default RPMs resolved
 `pg_background_18` 2.0.3. A private PostgreSQL cluster with `pgwrh_wait` preloaded
 loaded all three bundled extensions and executed the FDW's native
 connection-inspection function. Activate the bundle explicitly with
 `CREATE EXTENSION pgwrh CASCADE; CREATE EXTENSION pgwrh_wait;`.
+PostgreSQL exposed exactly version 0.3.0 for each extension, no upgrade paths,
+and FDW module version 0.3.0.
 
 Shipping multiple extension control files does not activate all extensions in
 every database. `pgwrh_wait` and `pgwrh_fdw` can each be created independently.

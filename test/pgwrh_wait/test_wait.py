@@ -7,6 +7,21 @@ from conftest import eventually
 from helpers import apply_blocked, barrier, block_apply, reader, token, waiting
 
 
+def test_release_has_only_fresh_installation_version(nodes):
+    node = nodes("release")
+    node.execute("CREATE EXTENSION pgwrh CASCADE")
+    expected = [("pgwrh", "0.3.0"), ("pgwrh_fdw", "0.3.0"), ("pgwrh_wait", "0.3.0")]
+    assert node.execute("""SELECT extname, extversion FROM pg_extension
+        WHERE extname IN ('pgwrh', 'pgwrh_fdw', 'pgwrh_wait')
+        ORDER BY extname""") == expected
+    assert node.execute("""SELECT name, version FROM pg_available_extension_versions
+        WHERE name IN ('pgwrh', 'pgwrh_fdw', 'pgwrh_wait')
+        ORDER BY name, version""") == expected
+    assert node.execute("""SELECT e.extname, p.source, p.target
+        FROM pg_extension e CROSS JOIN LATERAL pg_extension_update_paths(e.extname) p
+        WHERE e.extname IN ('pgwrh', 'pgwrh_fdw', 'pgwrh_wait')""") == []
+
+
 @pytest.mark.parametrize("isolation", ["READ COMMITTED", "REPEATABLE READ", "SERIALIZABLE"])
 def test_wait_before_snapshot(pair, isolation):
     publisher, subscriber = pair
