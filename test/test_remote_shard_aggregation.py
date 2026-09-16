@@ -119,7 +119,7 @@ def test_root_bounds_and_separate_roots(selection):
     assert selection.execute("""
         SELECT schema_name, table_name, remote_bound FROM remote_node_assignment ORDER BY 1
     """) == [("data", "root", "DEFAULT"),
-             ("second", "root", "FOR VALUES WITH (MODULUS 1, REMAINDER 0)")]
+             ("second", "root", "FOR VALUES WITH (modulus 1, remainder 0)")]
 
 from .pgwrh_testkit import MasterHandle, PgwrhCluster, ReplicaSpec, quote_literal, wait_until
 
@@ -187,6 +187,9 @@ def test_root_aggregation_preserves_identity_results_and_leaf_coverage(aggregate
     reader = cluster.replicas[-1]
     expected = [('data', name) for name in sorted(ROOTS)]
     wait_until(lambda: remote_nodes(reader) == expected, timeout=30, message='roots did not aggregate')
+    wait_until(lambda: reader.query_scalar("""SELECT count(*) FROM pgwrh.sync
+        WHERE description LIKE 'Switching query routes%'""") == 0,
+        timeout=30, message='unchanged aggregate bounds caused repeated reattachment')
     assert_all_rows(cluster)
     assert reader.query_scalar('SELECT count(*) FROM pgwrh.connected_remote_shard') == 13
     with reader.node.connect() as conn:

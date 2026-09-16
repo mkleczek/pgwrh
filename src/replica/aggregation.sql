@@ -53,7 +53,7 @@ WITH structure AS MATERIALIZED (
     SELECT root_rel_id, rel_id FROM remote_node
 )
 SELECT m.root_rel_id, p.rel_id AS parent_rel_id, c.rel_id, c.reg_class,
-       p.reg_class AS parent_reg_class
+       p.reg_class AS parent_reg_class, c.bound
 FROM managed m JOIN local_rel c USING (rel_id)
     JOIN rel p ON p.reg_class = (c.parent).reg_class;
 
@@ -123,8 +123,9 @@ SELECT
     e.leaf_count,
     format('%s_remote', s.schema_name) AS shard_server_schema_name,
     (format('%s_remote', s.schema_name), s.table_name)::rel_id AS remote_rel_id,
+    -- Use pg_get_expr's spelling so unchanged bounds compare equal.
     CASE WHEN s.level > 0 THEN s.bound
-         WHEN s.node_partkeydef LIKE 'HASH %' THEN 'FOR VALUES WITH (MODULUS 1, REMAINDER 0)'
+         WHEN s.node_partkeydef LIKE 'HASH %' THEN 'FOR VALUES WITH (modulus 1, remainder 0)'
          ELSE 'DEFAULT'
     END AS remote_bound,
     e.target_servers
