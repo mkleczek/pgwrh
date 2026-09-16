@@ -39,17 +39,17 @@ jobs:
       - name: FDW context, upstream regression, and export checks
         run: make test-fdw
       - name: Upstream SCRAM authentication TAP
-        run: python3 fdw/tools/run-tap.py
+        run: make test-fdw-tap
       - name: Preserve test diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: postgres-18-test-logs
           path: |
-            fdw/regression.diffs
-            fdw/regression.out
-            fdw/results/
-            fdw/output_iso/
-            fdw/tmp_check/
-            fdw/log/
+            test/pgwrh_fdw/regression.diffs
+            test/pgwrh_fdw/regression.out
+            test/pgwrh_fdw/results/
+            test/pgwrh_fdw/output_iso/
+            test/pgwrh_fdw/tmp_check/
+            test/pgwrh_fdw/log/
             /tmp/pgwrh-fdw-*/postgres.log

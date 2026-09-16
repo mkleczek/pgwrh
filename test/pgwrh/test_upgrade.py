@@ -19,7 +19,7 @@ def test_upgrade_preserves_existing_replica_data_and_root_identity(postgres_node
     for side in ('master', 'replica'):
         order = subprocess.check_output(['tsort'], input=release_file(f'src/{side}/deps.txt'), text=True)
         sources.extend(f'src/{side}/{name}.sql' for name in order.split())
-    extension_dir = Path(__file__).resolve().parents[1] / '.build/testgres-ext/extension'
+    extension_dir = Path(__file__).resolve().parents[2] / '.build/testgres-ext/extension'
     (extension_dir / 'pgwrh--0.2.1.sql').write_text('\n'.join(release_file(path) for path in sources))
 
     def legacy_node(name):

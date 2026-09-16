@@ -1,4 +1,4 @@
-# contrib/pgwrh_fdw/Makefile
+# pgwrh_fdw extension build; regression tests live in ../test/pgwrh_fdw.
 
 MODULE_big = pgwrh_fdw
 OBJS = \
@@ -19,11 +19,6 @@ SHLIB_LINK_INTERNAL = $(libpq)
 EXTENSION = pgwrh_fdw
 DATA = pgwrh_fdw--0.1.0.sql
 
-REGRESS = pgwrh_fdw query_cancel
-ISOLATION = eval_plan_qual
-ISOLATION_OPTS = --load-extension=pgwrh_fdw
-TAP_TESTS = 1
-
 PG_CONFIG ?= pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
@@ -34,3 +29,12 @@ PG_CFLAGS += -fvisibility=hidden
 connection.o join.o option.o virtual.o pgwrh_fdw.o: virtual.h
 join.o pgwrh_fdw.o: join.h
 $(OBJS): pgwrh_fdw.h
+
+STAGE_DIR ?= $(abspath ../.build/testgres-ext)
+stage: all
+	mkdir -p "$(STAGE_DIR)/extension"
+	cp $(DATA) "$(STAGE_DIR)/extension/"
+	sed 's|\$$libdir/pgwrh_fdw|pgwrh_fdw|' pgwrh_fdw.control > "$(STAGE_DIR)/extension/pgwrh_fdw.control"
+	cp $(shlib) "$(STAGE_DIR)/"
+
+.PHONY: stage

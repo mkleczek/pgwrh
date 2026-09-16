@@ -57,7 +57,7 @@ def test_remote_reroute_keeps_objects_and_waits_before_readiness(handoff_cluster
 
 def test_assignment_repetitions_become_target_weights(postgres_node_factory):
     node = postgres_node_factory('target_weights')
-    helpers = (Path(__file__).resolve().parents[1] / 'src/replica/helpers.sql').read_text()
+    helpers = (Path(__file__).resolve().parents[2] / 'pgwrh/src/replica/helpers.sql').read_text()
     definition = helpers.split('CREATE VIEW assignment_target AS', 1)[1].split('CREATE VIEW subscribed_local_shard AS', 1)[0]
     with node.connect() as conn:
         conn.execute("""
@@ -78,7 +78,7 @@ def test_assignment_repetitions_become_target_weights(postgres_node_factory):
 
 def test_route_reports_each_actual_member(postgres_node_factory):
     node = postgres_node_factory('route_members')
-    status = (Path(__file__).resolve().parents[1] / 'src/replica/status.sql').read_text()
+    status = (Path(__file__).resolve().parents[2] / 'pgwrh/src/replica/status.sql').read_text()
     definition = status.split('CREATE VIEW remote_server_route AS', 1)[1].split('-- Report leaf coverage', 1)[0]
     with node.connect() as conn:
         conn.execute("""

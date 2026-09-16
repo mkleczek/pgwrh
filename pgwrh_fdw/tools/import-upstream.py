@@ -16,7 +16,7 @@ def git(*args):
 
 
 if len(sys.argv) != 3 or not re.fullmatch(r"REL_18_\d+", sys.argv[2]):
-    sys.exit("usage: python3 fdw/tools/import-upstream.py /local/postgres/repo REL_18_N")
+    sys.exit("usage: python3 pgwrh_fdw/tools/import-upstream.py /local/postgres/repo REL_18_N")
 source = str(Path(sys.argv[1]).resolve(strict=True))
 tag = sys.argv[2]
 if git("status", "--porcelain"):
@@ -40,5 +40,5 @@ git("tag", "-a", "upstream/" + tag, snapshot, "-m",
     f"PostgreSQL {tag}\nUpstream commit: {commit}\n"
     "Filtered path: contrib/postgres_fdw")
 print(f"Imported {tag} ({commit}); filtered tip {snapshot}")
-print("From the pgwrh root: git subtree merge --prefix=fdw upstream/postgres_fdw")
-print("Update fdw/UPSTREAM.md and fdw/COPYRIGHT, review lifecycle changes, and test.")
+print("From the pgwrh root: git subtree merge --prefix=pgwrh_fdw upstream/postgres_fdw")
+print("Update pgwrh_fdw/UPSTREAM.md and pgwrh_fdw/COPYRIGHT, review lifecycle changes, and test.")

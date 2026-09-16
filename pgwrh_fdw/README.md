@@ -13,7 +13,7 @@ can run together in the same database and backend.
 The fork is licensed under **AGPL-3.0-only**, with PostgreSQL's original notices
 and permissions preserved. See [LICENSING.md](LICENSING.md).
 
-This directory is maintained as a Git subtree inside pgwrh. Builds, integration,
+This component was imported as a Git subtree into pgwrh. Builds, integration,
 and future releases are coordinated in the pgwrh repository. The initial import
 preserves the standalone **0.1.0** release and its PostgreSQL ancestry; `v0.1.0`
 was a tag in that former repository, not a pgwrh release tag. See
@@ -21,8 +21,8 @@ was a tag in that former repository, not a pgwrh release tag. See
 
 ## Build and install
 
-The commands in this README run from the `fdw/` directory. The parent Makefile
-also builds and installs this extension by default.
+Run the commands below from the repository root. The root Makefile builds
+and installs this extension by default; `make -C pgwrh_fdw` builds it alone.
 
 You need PostgreSQL 18 server development headers, PGXS, libpq, a C compiler,
 and Make. Select the installation explicitly if you have several versions:
@@ -182,16 +182,14 @@ selected installation's libpq. Run as an ordinary OS user, not root:
 
 ```sh
 export PG_CONFIG=/path/to/postgresql-18/bin/pg_config
-python3 test/test_context.py
-python3 tools/run-upstream.py
-python3 tools/check-symbols.py
+make test-fdw
 ```
 
-These commands build and stage the extension in `.build/stage`, start private
-temporary PostgreSQL clusters, and stop them on completion. They need permission
+These commands build and stage the extension in `.build/pgwrh_fdw/stage`, start
+private temporary PostgreSQL clusters, and stop them on completion. They need permission
 to open local sockets. No installation into system PostgreSQL is required.
 The tests print the temporary cluster/log location and retain it for inspection.
-Use `make clean` (and `make -C test clean`) before switching PostgreSQL builds.
+Use `make clean` before switching PostgreSQL builds.
 
 The integration suite covers independent participants, context freezing,
 connection reuse, reconnects, planning, prepared reads/writes, async scans,
@@ -200,12 +198,12 @@ failure recovery, and coexistence in both load orders. A test-only receiving
 utility hook raises an error if the propagated request ID arrives after the
 remote transaction acquires a snapshot.
 
-`tools/run-upstream.py` runs the retained main FDW and query-cancellation SQL
+`test/pgwrh_fdw/run-upstream.py` runs the retained main FDW and query-cancellation SQL
 tests plus the `eval_plan_qual` isolation tests. For the retained SCRAM TAP test,
 also provide matching PostgreSQL source test modules and Perl's `IPC::Run`:
 
 ```sh
-PG_SOURCE=/path/to/postgresql-18.3 python3 tools/run-tap.py
+PG_SOURCE=/path/to/postgresql-18.3 make test-fdw-tap
 ```
 
 See [docs/validation.md](docs/validation.md) for versions and actual results;

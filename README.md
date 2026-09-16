@@ -57,7 +57,7 @@ An optional PostgreSQL 18 C component, `pgwrh_wait`, monitors committed logical
 apply progress and provides waits for read-your-writes barriers. See
 [LSN waiting](docs/lsn-wait.md) for installation, snapshot requirements, and
 the limits of the guarantee. The bundled `pgwrh_fdw` extension propagates selected
-transaction settings to foreign servers; see [the FDW documentation](fdw/README.md).
+transaction settings to foreign servers; see [the FDW documentation](pgwrh_fdw/README.md).
 Use `WITH_LSN_WAIT=0 WITH_FDW=0` when building SQL-only pgwrh.
 
 ***
@@ -111,6 +111,42 @@ Create extension in PostgreSQL database.
 ```sh
 psql -c "CREATE EXTENSION pgwrh CASCADE"
 ```
+
+# Repository layout
+
+```text
+pgwrh/          SQL extension: control file, SQL sources, and Makefile
+pgwrh_wait/     Replication wait extension: control file, SQL, C sources, and Makefile
+pgwrh_fdw/      Foreign data wrapper: sources, control file, SQL, docs, and Makefile
+test/
+  pgwrh/        Controller and replica integration tests
+  pgwrh_wait/   Replication wait tests
+  pgwrh_fdw/    FDW integration, SQL, isolation, and TAP tests
+  check-install.py
+Makefile        Combined build, install, clean, and test entry points
+flake.nix       SQL-only Nix package and development shell
+flake.lock
+shell.nix       PostgreSQL 18 integration-test environment
+nix/            Supporting Nix expressions
+docs/           Project documentation
+```
+
+Run `make` and `make install` from the repository root to build and install all
+three extensions. Each extension can also be built independently with
+`make -C pgwrh`, `make -C pgwrh_wait`, or `make -C pgwrh_fdw`. Build products and
+staged test extensions live under `.build/`; PGXS object files and libraries
+remain next to their extension sources.
+
+The root test targets are `test-pgwrh`, `test-wait`, `test-fdw`,
+`test-fdw-tap`, and `test-packaging`. For controller/replica tests, use the Nix
+environment, which stages the extensions and provides PostgreSQL and Python:
+
+```sh
+nix-shell --run 'pgwrh-test test/pgwrh -q'
+```
+
+See [packaging](docs/packaging.md), [LSN waiting](docs/lsn-wait.md), and the
+[FDW README](pgwrh_fdw/README.md) for suite-specific dependencies and commands.
 
 # Usage
 

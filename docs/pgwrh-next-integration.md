@@ -46,7 +46,7 @@ in the README and remote aggregation guide.
   suite passed, **51 tests**, including retained-local handoff, both rollback
   variants, canonical target-set aggregation, failover, credential rotation,
   offline scale-out, upgrades, and virtual-server membership synchronization.
-  Command: `nix-shell --run 'pgwrh-test test --ignore=test/native -q --durations=10'`.
+  Command: `nix-shell --run 'pgwrh-test test/pgwrh -q --durations=10'`.
 - PostgreSQL 18.6 / pg_background 2.0.2: all 10 worker, multi-replica,
   index-readiness, metadata-deduplication, and structured-bootstrap tests passed.
 - PostgreSQL 18.3 / pg_background 1.9.2: both worker tests and the real 0.2.1

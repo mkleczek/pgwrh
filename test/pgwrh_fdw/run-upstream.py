@@ -2,11 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Run retained SQL/isolation regressions on a private, staged cluster."""
 import os
-from pathlib import Path
 import subprocess
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "test"))
 from support import Cluster, PG_CONFIG, ROOT
 
 cluster = Cluster()
