@@ -246,8 +246,8 @@ BEGIN
     WHERE
         (replication_group_id, version) = (NEW.replication_group_id, NEW.source_version)
     ON CONFLICT DO NOTHING;
-    INSERT INTO sharded_table (replication_group_id, sharded_table_schema, sharded_table_name, version, replication_factor)
-    SELECT replication_group_id, sharded_table_schema, sharded_table_name, NEW.target_version, replication_factor
+    INSERT INTO sharded_table (replication_group_id, sharded_table_schema, sharded_table_name, version, replication_factor, sharding_key_expression)
+    SELECT replication_group_id, sharded_table_schema, sharded_table_name, NEW.target_version, replication_factor, sharding_key_expression
     FROM
         sharded_table
     WHERE
