@@ -353,12 +353,14 @@ ready_root AS (
     )
 ),
 attachment_command AS (
+    -- A bound change needs the same atomic detach/attach as a parent change.
+    -- Detach every obsolete edge before rebuilding the tree from the leaves.
     SELECT c.root_rel_id, 0 AS phase, 0 AS depth, c.rel_id,
            format('ALTER TABLE %s DETACH PARTITION %s', c.parent_reg_class, c.reg_class) AS command
     FROM current_attachment c
     WHERE NOT EXISTS (
         SELECT 1 FROM desired_attachment d
-        WHERE (d.parent_rel_id, d.rel_id) = (c.parent_rel_id, c.rel_id)
+        WHERE (d.parent_rel_id, d.rel_id, d.bound) = (c.parent_rel_id, c.rel_id, c.bound)
     )
     UNION ALL
     SELECT d.root_rel_id, 1, d.depth, d.rel_id,
@@ -367,7 +369,7 @@ attachment_command AS (
     FROM desired_attachment d
     WHERE NOT EXISTS (
         SELECT 1 FROM current_attachment c
-        WHERE (d.parent_rel_id, d.rel_id) = (c.parent_rel_id, c.rel_id)
+        WHERE (d.parent_rel_id, d.rel_id, d.bound) = (c.parent_rel_id, c.rel_id, c.bound)
     )
 ),
 roles AS (
