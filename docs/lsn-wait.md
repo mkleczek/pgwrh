@@ -35,10 +35,11 @@ the deployment by calling `pgwrh.applied_lsn(subscription_name)` in a separate
 health-check transaction before using the GUC protocol.
 
 For the original SQL-only installation (PostgreSQL 16+), use
-`make WITH_LSN_WAIT=0 WITH_FDW=0 install`, or the existing `NO_PGXS=1` path. No pgwrh version
-upgrade is needed: `pgwrh_wait` is a separate optional extension whose functions
-live in the `pgwrh` schema. Dropping it removes its SQL functions; removing a
-preloaded library requires a server restart.
+`make WITH_LSN_WAIT=0 WITH_FDW=0 install`, or the existing `NO_PGXS=1` path.
+`pgwrh_wait` shares version 0.3.0 with pgwrh and is a separate optional extension
+whose functions live in the `pgwrh` schema. Only fresh installation scripts are
+provided. Dropping it removes its SQL functions; removing a preloaded library
+requires a server restart.
 
 ## Snapshot-safe transaction barrier
 

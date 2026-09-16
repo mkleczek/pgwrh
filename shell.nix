@@ -4,18 +4,7 @@ let
   xpg = callPackage ./nix/xpg.nix { inherit fetchFromGitHub; };
   testgres = callPackage ./nix/testgres.nix {};
 
-  postgresql = postgresql_18.withPackages (ps: [
-    # The 0.2.1 upgrade test needs both the legacy and cookie-protected APIs.
-    (ps.pg_background.overrideAttrs {
-      version = "1.9.2";
-      src = fetchFromGitHub {
-        owner = "vibhorkum";
-        repo = "pg_background";
-        tag = "v1.9.2";
-        hash = "sha256-R78lB/58/dfZPg4XZ5xGuQ/Ftv+SQzU4aeJop6tslK8=";
-      };
-    })
-  ]);
+  postgresql = postgresql_18.withPackages (ps: [ ps.pg_background ]);
 
   pythonEnv = python3.withPackages (ps: [
     ps.pytest

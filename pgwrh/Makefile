@@ -19,21 +19,11 @@ EXTENSION = pgwrh
 EXTVERSION = $(shell grep default_version pgwrh.control | \
                sed -e "s/default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/")
 BUILD = ../.build/pgwrh
-DATA_built = $(BUILD)/pgwrh--$(EXTVERSION).sql \
-	$(BUILD)/pgwrh--0.2.1--0.2.2.sql
-DATA = $(wildcard src/updates/*.sql)
+DATA_built = $(BUILD)/pgwrh--$(EXTVERSION).sql
 EXTRA_CLEAN = $(BUILD)
 
 MASTER = $(shell tsort src/master/deps.txt | sed -e 's/^/src\/master\//' -e 's/$$/\.sql/'  | xargs echo)
 REPLICA = $(shell tsort src/replica/deps.txt | sed -e 's/^/src\/replica\//' -e 's/$$/\.sql/'  | xargs echo)
-
-# Reuse the current definitions instead of maintaining a second copy of the SQL.
-UPGRADE_022 = src/updates/pgwrh--0.2.1--0.2.2.sql.in \
-	src/common.sql \
-	src/master/api-management.sql src/master/implementation-views.sql src/master/api-replica.sql \
-	src/master/triggers.sql src/replica/helpers.sql src/replica/aggregation.sql \
-	src/replica/status.sql src/replica/sync.sql src/replica/daemon.sql \
-	src/replica/api-management.sql
 
 PG_CONFIG ?= pg_config
 
@@ -50,10 +40,10 @@ clean:
 
 install: all
 	install -d "$(DESTDIR)$(EXTDIR)"
-	install -c -m 644 ./pgwrh.control $(DATA_built) $(DATA) "$(DESTDIR)$(EXTDIR)"
+	install -c -m 644 ./pgwrh.control $(DATA_built) "$(DESTDIR)$(EXTDIR)"
 
 uninstall:
-	rm -f $(addprefix "$(DESTDIR)$(EXTDIR)/",$(notdir pgwrh.control $(DATA_built) $(DATA)))
+	rm -f $(addprefix "$(DESTDIR)$(EXTDIR)/",$(notdir pgwrh.control $(DATA_built)))
 
 else # NO_PGXS
 # Standard pgxs makefile
@@ -65,14 +55,7 @@ endif # NO_PGXS
 $(BUILD)/pgwrh--$(EXTVERSION).sql: src/common.sql $(MASTER) $(REPLICA) | prepare
 	cat $^ > $@
 
-updates: $(wildcard src/updates/*.sql) | prepare
-	cp $^ $(BUILD)
-
-$(BUILD)/pgwrh--0.2.1--0.2.2.sql: $(UPGRADE_022) | prepare
-	sed -E -e '/^CREATE TYPE .*rel_id AS/d' -e '/^\\echo /d' \
-		-e 's/^CREATE (FUNCTION|VIEW|TRIGGER) /CREATE OR REPLACE \1 /' $^ > $@
-
-all: pgwrh.control $(DATA_built) updates
+all: pgwrh.control $(DATA_built)
 
 prepare:
 	mkdir -p $(BUILD)
@@ -80,6 +63,6 @@ prepare:
 STAGE_DIR ?= $(abspath ../.build/testgres-ext)
 stage: all
 	mkdir -p "$(STAGE_DIR)/extension"
-	cp pgwrh.control $(DATA_built) $(DATA) "$(STAGE_DIR)/extension/"
+	cp pgwrh.control $(DATA_built) "$(STAGE_DIR)/extension/"
 
-.PHONY: all prepare updates stage
+.PHONY: all prepare stage

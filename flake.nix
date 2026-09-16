@@ -13,7 +13,7 @@
       package = { stdenv, defaultMeta, pkgs }:
         stdenv.mkDerivation {
           pname = "pgwrh";
-          version = "0.2.0";
+          version = "0.3.0";
           src = ./.;
           buildInputs = [ pkgs.coreutils pkgs.postgresql ];
           # The existing lock file predates PostgreSQL 18.
