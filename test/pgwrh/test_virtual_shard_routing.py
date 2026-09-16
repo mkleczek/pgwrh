@@ -9,20 +9,29 @@ from .test_local_first_handoff import handoff_cluster, move_to_destination, wait
 def test_remote_reroute_keeps_objects_and_waits_before_readiness(handoff_cluster):
     cluster = handoff_cluster
     _, _, reader = cluster.replicas
-    route_sql = """SELECT n.reg_class::oid, s.oid, s.srvname, s.srvoptions
-        FROM pgwrh.remote_node n JOIN pg_foreign_server s ON s.srvname = n.srvname
-        JOIN pgwrh.reachable_shard r ON r.reg_class = n.reg_class
-        WHERE n.node_rel_id = ('data','root')::pgwrh.rel_id"""
-    wait_until(lambda: len(reader.execute(route_sql)) == 1, timeout=30,
+    wait_until(lambda: reader.query_scalar("""SELECT EXISTS (
+        SELECT FROM pgwrh.remote_node n JOIN pgwrh.reachable_shard r USING (reg_class)
+        WHERE n.node_rel_id = ('data','root')::pgwrh.rel_id)"""), timeout=30,
                message='reader did not aggregate its initial route')
     cluster.master.execute("UPDATE pgwrh.replication_group_member SET same_zone_multiplier = 3 WHERE host_id = 'reader'")
     wait_until(lambda: reader.query_scalar("""SELECT bool_and(w.value = '3')
         FROM pgwrh.owned_server s, LATERAL pgwrh.opts(s.srvoptions) w
         WHERE w.key = 'load_balance_weight'"""), timeout=30,
                message='same-zone weighting did not reach the actual target servers')
-    before = reader.execute(route_sql)[0]
-    reader.execute('CREATE ROLE application_reader; GRANT USAGE ON SCHEMA data TO application_reader; '
-                   'GRANT SELECT ON data.root TO application_reader')
+    # Object identity is independent of attachment: rollout can temporarily
+    # expand the aggregate into leaf routes while keeping its table and server.
+    root_oid = reader.query_scalar("SELECT 'data_remote.root'::regclass::oid")
+    route_sql = f"""SELECT ft.ftrelid, s.oid, s.srvname, s.srvoptions
+        FROM pg_foreign_table ft JOIN pg_foreign_server s ON s.oid = ft.ftserver
+        WHERE ft.ftrelid = {root_oid}"""
+    before, = reader.execute(route_sql)
+    coverage_sql = """SELECT (rel_id).schema_name, (rel_id).table_name
+        FROM pgwrh.connected_remote_shard WHERE (rel_id).schema_name = 'data'
+        ORDER BY rel_id"""
+    expected_shards = [('data', 'p0'), ('data', 'p1')]
+    reader.execute('CREATE ROLE application_reader; '
+                   'GRANT USAGE ON SCHEMA data, data_remote TO application_reader; '
+                   'GRANT SELECT ON data.root, data_remote.root TO application_reader')
     # These temporary PostgreSQL nodes use trust authentication. Allow that
     # explicitly for this test's non-superuser rather than weakening production mappings.
     for server, in reader.execute("""SELECT srvname FROM pgwrh.owned_server s
@@ -39,15 +48,21 @@ def test_remote_reroute_keeps_objects_and_waits_before_readiness(handoff_cluster
             WHERE classid = 'pg_foreign_server'::regclass AND objid = {before[1]}
                 AND mode = 'AccessExclusiveLock' AND NOT granted)"""), timeout=60,
                    message='membership update did not wait for the old routing transaction')
-        assert reader.execute(route_sql)[0] == before
+        assert reader.execute(route_sql) == [before]
+        assert reader.execute(coverage_sql) == expected_shards
         with pytest.raises(Exception, match='required remote shards'):
             cluster.master.commit_rollout()
-        assert old_reader.execute('SELECT count(*) FROM data.root') == [(32,)]
+        # Read through the route pinned before the savepoint rollback, even if
+        # data.root now uses leaf servers with different transaction bindings.
+        assert old_reader.execute('SELECT count(*) FROM data_remote.root') == [(32,)]
         old_reader.commit()
     cluster.master.wait_for_rollout_ready(expected_replicas=3, timeout=60)
-    after = reader.execute(route_sql)[0]
+    wait_until(lambda: reader.execute(route_sql) != [before], timeout=30,
+               message='aggregate server membership did not change after reader commit')
+    after, = reader.execute(route_sql)
     assert before[:3] == after[:3]
     assert before[3] != after[3]
+    assert reader.execute(coverage_sql) == expected_shards
     assert reader.query_scalar("""SELECT count(*) FROM pgwrh.owned_server s
         JOIN pg_foreign_data_wrapper f ON f.oid = s.srvfdw
         WHERE f.fdwname <> 'pgwrh_fdw'""") == 0
