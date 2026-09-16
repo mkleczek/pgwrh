@@ -92,6 +92,30 @@ Parent foreign-table analysis finishes within the serialized sync pass. State
 reporting shares that synchronization lock, so an acknowledgement cannot overtake
 an unfinished attachment change or parent shield query.
 
+## Partition moves and bounds
+
+Replicas reconcile both parent identity and partition bounds. Moving an existing
+year between `fresh` and `archival`, including advancing their bounds, reattaches
+the existing slots and local or foreign tables in one transaction per query root.
+Local data and subscriptions survive the move; remote aggregates expand or regroup
+according to the resulting leaf destinations.
+Query through the managed root with partition predicates; an original intermediate
+table can be detached while its foreign aggregate occupies the routing slot.
+
+Commit the controller's detach/attach DDL in one transaction. Placement snapshots
+change through the existing rollout: clone the current configuration into the next
+version using `replication_group_config_clone`, then start and commit that rollout
+normally. The snapshot uses each leaf's new nearest configured ancestor, including
+its replication factor and sharding-key expression. Structural DDL alone does not
+resnapshot placement.
+Rolling back a placement rollout does not undo the controller's partition DDL.
+
+This is eventual reconciliation, not a cluster-wide atomic schema switch. Quiesce
+queries that depend on the changing hierarchy until replicas converge: an old
+aggregate route can still reference a parent whose contents have changed remotely.
+The local attachment transaction and membership locks do not coordinate that DDL
+across replicas. Partition keys and column definitions must remain compatible.
+
 ## Rollback
 
 Rollback restores current destinations while retaining the abandoned configuration's
