@@ -128,6 +128,7 @@ flake.nix       SQL-only Nix package and development shell
 flake.lock
 shell.nix       PostgreSQL 18 integration-test environment
 nix/            Supporting Nix expressions
+packaging/rpm/  PGDG-compatible RPM spec
 docs/           Project documentation
 ```
 
