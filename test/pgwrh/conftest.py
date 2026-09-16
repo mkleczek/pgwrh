@@ -23,7 +23,7 @@ POSTGRES_CONF = (
 XPG_EXTENSION_PATHS_ENV = "PGWRH_TEST_EXT_PATHS"
 POSTGRES_BIN_DIR_ENV = "PGWRH_TEST_BIN_DIR"
 DEBUG_ENV = "PGWRH_TEST_DEBUG"
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_EXTENSION_ROOT = REPO_ROOT / ".build" / "testgres-ext"
 NON_PARTITIONED_WORKAROUND_MASTER_SEED_SQL = Path(__file__).with_name(
     "master_non_partitioned_workaround.sql"

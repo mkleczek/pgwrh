@@ -32,6 +32,9 @@ mkShell {
     xpg.xpg
     pythonEnv
     postgresql
+    # pgwrh_fdw includes libpq server headers with TLS and GSSAPI support.
+    openssl
+    libkrb5
     gnumake
   ];
 

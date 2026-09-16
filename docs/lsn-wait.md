@@ -81,7 +81,7 @@ This guards reads on this subscriber only. With foreign tables, every actual
 remote transaction must execute the same barrier before its snapshot, including
 connections opened after reconnects. Stock `postgres_fdw` does not propagate
 these settings. A coordinator-side wait alone is insufficient. The bundled
-[`pgwrh_fdw`](../fdw/README.md) extension provides configurable propagation;
+[`pgwrh_fdw`](../pgwrh_fdw/README.md) extension provides configurable propagation;
 the receiving extension implements waiting. Packaging the FDW does not convert
 existing foreign servers or configure propagation automatically.
 
@@ -190,11 +190,11 @@ been audited for them. Relevant upstream code:
 ## Tests
 
 Install PostgreSQL 18 development files, `pg_background`, and the Python tools
-in `test/native/requirements.txt`. Then:
+in `test/pgwrh_wait/requirements.txt`. Then:
 
 ```sh
 make PG_CONFIG=/path/to/postgresql18/bin/pg_config test-stage
-PGWRH_TEST_BIN_DIR=/path/to/postgresql18/bin python3 -m pytest test/native -v
+PGWRH_TEST_BIN_DIR=/path/to/postgresql18/bin python3 -m pytest test/pgwrh_wait -v
 ```
 
 Tests use temporary real publisher/subscriber clusters and PostgreSQL 18's

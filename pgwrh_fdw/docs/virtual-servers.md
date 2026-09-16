@@ -266,8 +266,9 @@ bindings never own or free libpq connections. A read-only ranking callback in
 its structure or changing its ownership. The validator additionally registers
 the option and checks virtual-server option combinations.
 
-`python3 test/test_virtual.py` runs the routing tests against private PostgreSQL
-clusters. The existing `python3 test/test_context.py` entry point also runs them,
+From the repository root, `python3 test/pgwrh_fdw/test_virtual.py` runs the routing
+tests against private PostgreSQL clusters. The existing
+`python3 test/pgwrh_fdw/test_context.py` entry point also runs them,
 so the parent repository's test command and CI include them unchanged. Tests
 cover mapping and privilege resolution, view owners, context propagation,
 savepoint affinity, failed acquisition, connection loss, catalog changes,

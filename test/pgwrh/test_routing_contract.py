@@ -22,7 +22,7 @@ def test_target_identity_and_canonical_members(postgres_node_factory):
 
 def test_readiness_requires_nonempty_allowed_actual_targets(postgres_node_factory):
     node = postgres_node_factory('target_readiness')
-    definitions = (Path(__file__).resolve().parents[1] / 'src/master/implementation-views.sql').read_text()
+    definitions = (Path(__file__).resolve().parents[2] / 'pgwrh/src/master/implementation-views.sql').read_text()
     definitions = definitions[definitions.index('CREATE VIEW missing_connected_remote_shard AS'):]
     with node.connect() as conn:
         conn.execute("""

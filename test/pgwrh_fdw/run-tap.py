@@ -6,7 +6,6 @@ from pathlib import Path
 import subprocess
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "test"))
 from support import BIN, Cluster, ROOT, config
 
 source = os.environ.get("PG_SOURCE")

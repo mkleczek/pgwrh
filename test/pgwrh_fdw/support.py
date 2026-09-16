@@ -8,7 +8,9 @@ import socket
 import subprocess
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parent
+REPO_ROOT = ROOT.parents[1]
+EXTENSION_ROOT = REPO_ROOT / "pgwrh_fdw"
 PG_CONFIG = os.environ.get("PG_CONFIG", "pg_config")
 
 
@@ -94,7 +96,7 @@ class Cluster:
         self.path = Path(tempfile.mkdtemp(prefix="pgwrh-fdw-"))
         self.data = self.path / "data"
         self.log = self.path / "postgres.log"
-        self.stage = ROOT / ".build" / "stage"
+        self.stage = REPO_ROOT / ".build" / "pgwrh_fdw" / "stage"
         self.started = False
         # TCP is disabled, but a distinct port also names the private socket.
         with socket.socket() as sock:
@@ -103,19 +105,19 @@ class Cluster:
 
     def setup(self):
         subprocess.run(["make", "-s", "-j4", "PG_CONFIG=" + PG_CONFIG],
-                       cwd=ROOT, check=True)
-        subprocess.run(["make", "-s", "-C", "test", "PG_CONFIG=" + PG_CONFIG],
+                       cwd=EXTENSION_ROOT, check=True)
+        subprocess.run(["make", "-s", "PG_CONFIG=" + PG_CONFIG],
                        cwd=ROOT, check=True)
         (self.stage / "extension").mkdir(parents=True, exist_ok=True)
         # A previous build may have staged SQL versions that no longer ship.
         for p in (self.stage / "extension").glob("pgwrh_fdw--*.sql"):
             p.unlink()
-        for p in ROOT.glob("pgwrh_fdw--*.sql"):
+        for p in EXTENSION_ROOT.glob("pgwrh_fdw--*.sql"):
             shutil.copy(p, self.stage / "extension" / p.name)
-        control = (ROOT / "pgwrh_fdw.control").read_text()
+        control = (EXTENSION_ROOT / "pgwrh_fdw.control").read_text()
         control = control.replace("$libdir/pgwrh_fdw", "pgwrh_fdw")
         (self.stage / "extension/pgwrh_fdw.control").write_text(control)
-        for stem, folder in [("pgwrh_fdw", ROOT), ("context_probe", ROOT / "test")]:
+        for stem, folder in [("pgwrh_fdw", EXTENSION_ROOT), ("context_probe", ROOT)]:
             library = next(p for p in folder.glob(stem + ".*")
                            if p.suffix in (".so", ".dylib"))
             shutil.copy(library, self.stage / library.name)

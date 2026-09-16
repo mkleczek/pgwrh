@@ -29,13 +29,13 @@ broader join pushdown and query-wide routing optimization as subsequent work.
 
 | Area | Current behavior | Consequence |
 | --- | --- | --- |
-| `fdw/connection.c`, `ConnCacheKey`, `GetConnection()` | Cache key is `user->umid`; one entry owns PGconn, transaction depth, pending async request, invalidation and cleanup flags. | Different server mappings always create independent participants, even on the same endpoint. |
-| `src/replica/sync.sql`, remote server creation | Creates `postgres_fdw` servers with multi-host lists, `load_balance_hosts 'random'`, async scans enabled, writes disabled. | Installing pgwrh_fdw alone does not change pgwrh routing. Integration must explicitly change generated objects. |
-| `src/replica/helpers.sql`, `shard_assignment_r` | Remote schema name includes `shard_server_name`. | Placement identity becomes relation identity; connection pooling alone does not remove these schemas. |
-| `src/master/implementation-views.sql` | Controller selects effective current/target routes and credentials; repeats same-zone endpoints in host lists. | The FDW must preserve readiness, credential generations, and weighting. |
-| `src/replica/aggregation.sql`, `remote_node_assignment` | Parent aggregation requires identical effective destinations and complete locally serving subtrees on every eligible member. | Mere endpoint overlap is insufficient to replace leaf routes with a parent scan. |
-| `fdw/connection.c`, `begin_remote_xact()` | Starts remote transaction, propagates frozen settings, then creates mirrored savepoints. | Initialization belongs to the physical participant and must precede its first snapshot. |
-| `fdw/pgwrh_fdw.c`, `postgresBeginForeignScan()` | Acquires the connection at scan initialization; planner estimates and ANALYZE also acquire connections. | An executor-only patch would miss several routing and consistency paths. |
+| `pgwrh_fdw/connection.c`, `ConnCacheKey`, `GetConnection()` | Cache key is `user->umid`; one entry owns PGconn, transaction depth, pending async request, invalidation and cleanup flags. | Different server mappings always create independent participants, even on the same endpoint. |
+| `pgwrh/src/replica/sync.sql`, remote server creation | Creates `postgres_fdw` servers with multi-host lists, `load_balance_hosts 'random'`, async scans enabled, writes disabled. | Installing pgwrh_fdw alone does not change pgwrh routing. Integration must explicitly change generated objects. |
+| `pgwrh/src/replica/helpers.sql`, `shard_assignment_r` | Remote schema name includes `shard_server_name`. | Placement identity becomes relation identity; connection pooling alone does not remove these schemas. |
+| `pgwrh/src/master/implementation-views.sql` | Controller selects effective current/target routes and credentials; repeats same-zone endpoints in host lists. | The FDW must preserve readiness, credential generations, and weighting. |
+| `pgwrh/src/replica/aggregation.sql`, `remote_node_assignment` | Parent aggregation requires identical effective destinations and complete locally serving subtrees on every eligible member. | Mere endpoint overlap is insufficient to replace leaf routes with a parent scan. |
+| `pgwrh_fdw/connection.c`, `begin_remote_xact()` | Starts remote transaction, propagates frozen settings, then creates mirrored savepoints. | Initialization belongs to the physical participant and must precede its first snapshot. |
+| `pgwrh_fdw/pgwrh_fdw.c`, `postgresBeginForeignScan()` | Acquires the connection at scan initialization; planner estimates and ANALYZE also acquire connections. | An executor-only patch would miss several routing and consistency paths. |
 
 Libpq randomizes connection attempts and then keeps the selected endpoint for
 that connection. It does not coordinate separate callers or know which shards a

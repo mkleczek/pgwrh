@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-root = Path(__file__).resolve().parents[1]
+root = Path(__file__).resolve().parents[2] / "pgwrh_fdw"
 library = root / ("pgwrh_fdw.dylib" if sys.platform == "darwin" else "pgwrh_fdw.so")
 args = ["nm", "-gU"] if sys.platform == "darwin" else ["nm", "-D", "--defined-only"]
 output = subprocess.check_output([*args, str(library)], text=True)

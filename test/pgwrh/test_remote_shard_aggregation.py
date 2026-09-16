@@ -11,7 +11,7 @@ import pytest
 def selection(postgres_node_factory):
     """Run the production views against a small logical tree, without a controller."""
     node = postgres_node_factory("selection")
-    source = Path(__file__).resolve().parents[1] / "src" / "replica"
+    source = Path(__file__).resolve().parents[2] / "pgwrh" / "src" / "replica"
     helpers = (source / "helpers.sql").read_text()
     structure_view = helpers.split("CREATE OR REPLACE VIEW shard_structure_r AS", 1)[1]
     structure_view = structure_view.split("CREATE OR REPLACE VIEW shard_assignment_r AS", 1)[0]

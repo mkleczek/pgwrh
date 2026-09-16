@@ -1,13 +1,14 @@
 # Building one package
 
 The root Makefile builds three SQL extensions by default: `pgwrh`, `pgwrh_wait`,
-and `pgwrh_fdw`. It builds the wait library through the root PGXS definitions and
-delegates the FDW library to `fdw/Makefile`. The FDW is a normal source directory
-in release archives; building never fetches Git history or other dependencies.
+and `pgwrh_fdw`. It delegates to a separate Makefile in each extension directory:
+`pgwrh/`, `pgwrh_wait/`, and `pgwrh_fdw/`. Each owns its control file, SQL scripts,
+and any native sources. All tests live under `test/`. Building from a release
+archive never fetches Git history or other dependencies.
 
 The combined build currently requires PostgreSQL 18 development files, PGXS,
 libpq, a C compiler, GNU Make, and the standard text utilities used to assemble
-the pgwrh SQL script. Select one PostgreSQL installation for both components:
+the pgwrh SQL script. Select one PostgreSQL installation for all components:
 
 ```sh
 make -j4 PG_CONFIG=/usr/pgsql-18/bin/pg_config
@@ -45,9 +46,10 @@ not a complete RPM specification or a claim of PGDG acceptance:
 
 When the selected PGXS build enables LLVM, also package the generated
 `lib/bitcode/pgwrh_fdw/`, `lib/bitcode/pgwrh_wait/`, and their `.index.bc` files
-under that PostgreSQL prefix. Include the root license, `fdw/LICENSE`,
-`fdw/COPYRIGHT`, and the relevant documentation. See `fdw/LICENSING.md` for the
-FDW's retained PostgreSQL notices and licensing. The RPM specification supplies
+under that PostgreSQL prefix. Include the root license, `pgwrh_fdw/LICENSE`,
+`pgwrh_fdw/COPYRIGHT`, and the relevant documentation. See
+`pgwrh_fdw/LICENSING.md` for the FDW's retained PostgreSQL notices and licensing.
+The RPM specification supplies
 the appropriate PostgreSQL build/runtime dependencies and the `pg_background`
 dependency used by pgwrh; the native code makes this an architecture-specific
 package. Debug packages are handled by the distribution's normal RPM tooling.
@@ -62,7 +64,8 @@ SQL and library so integration tests use the implementation being developed.
 Preloading `pgwrh_wait` remains an explicit server
 configuration step; it must happen before relying on the wait API.
 
-Release archives must contain `fdw/` as well as the core SQL and native sources.
+Release archives must contain `pgwrh/`, `pgwrh_wait/`, and `pgwrh_fdw/`,
+together with the root Makefile. Include `test/` to run the verification suites.
 No submodule initialization or separate pgwrh_fdw release download is required.
 Archive a reviewed release commit, including its subtree, rather than assembling
 sources from independent checkouts at package-build time.
@@ -92,12 +95,13 @@ make test-fdw PG_CONFIG=/path/to/postgresql-18/bin/pg_config
 `test-packaging` requires only Python 3's standard library. It cleans build
 outputs, performs a parallel staged installation, checks all three extensions
 and both libraries, and verifies that uninstall removes the payload while leaving
-unrelated files intact. It also checks each native component independently and
-both SQL-only installation paths, using
-staging directories containing spaces. It never installs into system PostgreSQL.
+unrelated files intact. It also checks each native component independently,
+both SQL-only installation paths, and standalone installation from each extension
+directory, using staging directories containing spaces. It never installs into
+system PostgreSQL.
 
 `test-fdw` runs the context integration suite, retained SQL/isolation regressions,
 and exported-symbol audit against private clusters. SCRAM TAP tests additionally
 need matching PostgreSQL source test modules and Perl dependencies; see
-`fdw/README.md`. Run `make test-wait` with the dependencies and runtime paths
+`pgwrh_fdw/README.md`. Run `make test-wait` with the dependencies and runtime paths
 described in [LSN waiting](lsn-wait.md) to exercise the apply-watermark component.

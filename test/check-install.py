@@ -40,8 +40,10 @@ def check_install(stage, log, extensions, options):
     actual = {p.stem for p in sharedir.glob("*.control")}
     assert actual == set(extensions), (actual, extensions)
 
-    sql = {p.name for p in (ROOT / "src/updates").glob("*.sql")}
-    sql.update(p.stem for p in (ROOT / "src/updates").glob("*.sql.in"))
+    sql = set()
+    if "pgwrh" in extensions:
+        sql.update(p.name for p in (ROOT / "pgwrh/src/updates").glob("*.sql"))
+        sql.update(p.stem for p in (ROOT / "pgwrh/src/updates").glob("*.sql.in"))
     for extension in extensions:
         control = (sharedir / (extension + ".control")).read_text()
         version = re.search(r"^default_version\s*=\s*'([^']+)'", control, re.M)[1]
@@ -77,6 +79,9 @@ def main():
                       ["WITH_LSN_WAIT=0", "WITH_FDW=0"])
         check_install(directory / "sql no-pgxs stage", log, ["pgwrh"],
                       ["NO_PGXS=1"])
+        for extension in ("pgwrh", "pgwrh_wait", "pgwrh_fdw"):
+            check_install(directory / (extension + " standalone stage"), log,
+                          [extension], ["-C", str(ROOT / extension)])
     print("PASS: all packaging modes (no system installation)", flush=True)
 
 
