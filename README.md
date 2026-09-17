@@ -54,6 +54,9 @@ behind native partitioned shield views. See [the protocol and tradeoffs](docs/re
 
 ## Ease of deployment and cluster administration
 
+The optional [pgwrh_ui controller console](pgwrh_ui/README.md) provides cluster
+overview, placement previews, rollout diagnostics and replica management through
+external PostgREST and bundled htmx. Install it only in the controller database.
 
 ## SQL API with PostgreSQL 18 extensions
 
@@ -133,6 +136,7 @@ for artifact publication.
 
 ```text
 pgwrh/          SQL extension: control file, SQL sources, and Makefile
+pgwrh_ui/       Optional SQL controller console served by external PostgREST
 pgwrh_wait/     Replication wait extension: control file, SQL, C sources, and Makefile
 pgwrh_fdw/      Foreign data wrapper: sources, control file, SQL, docs, and Makefile
 test/

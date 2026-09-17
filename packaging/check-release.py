@@ -13,6 +13,7 @@ assert re.fullmatch(r'\d+\.\d+\.\d+', version), 'Invalid VERSION'
 assert not args.tag or args.tag == f'v{version}', 'Release tag differs from VERSION'
 dependencies = {
     'pgwrh': {'pg_background', 'pgwrh_fdw'},
+    'pgwrh_ui': {'pgwrh'},
     'pgwrh_fdw': set(),
     'pgwrh_wait': set(),
 }
@@ -26,7 +27,7 @@ for name, expected_dependencies in dependencies.items():
     )
     assert actual_dependencies == expected_dependencies, f'Unexpected extension dependencies: {name}'
     scripts = sorted(p.name for p in (root / name).glob(f'{name}--*.sql'))
-    expected = [] if name == 'pgwrh' else [f'{name}--{version}.sql']
+    expected = [] if name in ('pgwrh', 'pgwrh_ui') else [f'{name}--{version}.sql']
     assert scripts == expected, f'Unexpected install/upgrade scripts: {scripts}'
 checks = {
     'nix/pgwrh.nix': f'version = "{version}";',
@@ -39,6 +40,6 @@ checks = {
 }
 for path, expected in checks.items():
     assert expected in (root / path).read_text(), f'{path} differs from VERSION'
-for name in ('pgwrh', 'pgwrh_fdw', 'pgwrh_wait'):
+for name in ('pgwrh', 'pgwrh_ui', 'pgwrh_fdw', 'pgwrh_wait'):
     assert f'{name}--{version}.sql' in (root / 'packaging/deb/debian/postgresql-18-pgwrh.install').read_text()
 print(version)
