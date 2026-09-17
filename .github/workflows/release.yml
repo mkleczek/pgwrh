@@ -1,0 +1,249 @@
+name: Release packages
+on:
+  pull_request:
+    paths:
+      - 'pgwrh/**'
+      - 'pgwrh_fdw/**'
+      - 'pgwrh_wait/**'
+      - 'Makefile'
+      - 'packaging/**'
+      - 'examples/compose/**'
+      - 'test/packaging/**'
+      - '*.nix'
+      - 'nix/**'
+      - 'flake.lock'
+      - 'VERSION'
+      - '.dockerignore'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+  release:
+    types: [published]
+permissions:
+  contents: read
+concurrency:
+  group: packaging-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'release' }}
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(python3 packaging/check-release.py --tag "$RELEASE_TAG")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          mkdir dist
+          git archive --format=tar.gz --prefix="pgwrh-$version/" --output="dist/pgwrh-$version.tar.gz" HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source
+          path: dist/*
+          if-no-files-found: error
+
+  native:
+    needs: source
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        target:
+          - {name: noble, image: 'ubuntu:24.04', format: deb}
+          - {name: resolute, image: 'ubuntu:26.04', format: deb}
+          - {name: trixie, image: 'debian:trixie-slim', format: deb}
+          - {name: el9, image: 'almalinux:9', format: rpm}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {name: source, path: source}
+      - name: Unpack the exact release sources
+        run: |
+          mkdir src
+          tar -xzf source/*.tar.gz -C src --strip-components=1
+      - name: Build and install-test native packages
+        working-directory: src
+        env:
+          FORMAT: ${{ matrix.target.format }}
+          BASE_IMAGE: ${{ matrix.target.image }}
+        run: docker build -f "packaging/$FORMAT/Dockerfile" --build-arg "BASE_IMAGE=$BASE_IMAGE" --output type=local,dest=../packages .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.target.name }}-${{ matrix.runner }}
+          path: packages/*
+          if-no-files-found: error
+
+  container:
+    needs: source
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-24.04, arch: amd64}
+          - {runner: ubuntu-24.04-arm, arch: arm64}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    env:
+      PGWRH_IMAGE: pgwrh:release-${{ matrix.arch }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {name: source, path: source}
+      - run: |
+          mkdir src
+          tar -xzf source/*.tar.gz -C src --strip-components=1
+      - name: Build and test the installed image
+        working-directory: src
+        run: docker build -f packaging/container/Dockerfile -t "$PGWRH_IMAGE" .
+      - name: Verify a fresh sharding cluster and repeated setup
+        working-directory: src/examples/compose
+        run: |
+          docker compose up -d
+          setup_id=$(docker compose ps -aq setup)
+          result=$(timeout 240 docker wait "$setup_id")
+          test "$result" = 0
+          docker compose run --rm setup
+      - name: Preserve demo diagnostics
+        if: always()
+        working-directory: src/examples/compose
+        run: docker compose logs --no-color > "$RUNNER_TEMP/compose.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: compose-logs-${{ matrix.arch }}
+          path: ${{ runner.temp }}/compose.log
+      - name: Remove the test cluster
+        if: always()
+        working-directory: src/examples/compose
+        run: docker compose down -v
+      - name: Save the tested image
+        if: github.event_name == 'release'
+        run: docker save "$PGWRH_IMAGE" | gzip > image-${{ matrix.arch }}.tar.gz
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'release'
+        with:
+          name: image-${{ matrix.arch }}
+          path: image-${{ matrix.arch }}.tar.gz
+          compression-level: 0
+
+  nix:
+    needs: source
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {name: source, path: source}
+      - run: |
+          mkdir src
+          tar -xzf source/*.tar.gz -C src --strip-components=1
+      - uses: cachix/install-nix-action@v31
+      - run: nix flake check -L ./src
+
+  repository-test:
+    needs: [source, native]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {path: artifacts}
+      - run: |
+          mkdir src
+          tar -xzf artifacts/source/*.tar.gz -C src --strip-components=1
+          docker build -f src/packaging/repository/Dockerfile -t pgwrh-repository-test src
+          docker run --rm -v "$PWD/artifacts:/artifacts:ro" pgwrh-repository-test
+
+  publish:
+    if: github.event_name == 'release'
+    needs: [source, native, container, nix, repository-test]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+      packages: write
+    env:
+      VERSION: ${{ needs.source.outputs.version }}
+      SIGNING_FINGERPRINT: ${{ vars.PACKAGE_SIGNING_FINGERPRINT }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {path: artifacts}
+      - name: Load release tooling
+        run: |
+          mkdir src
+          tar -xzf artifacts/source/*.tar.gz -C src --strip-components=1
+          sudo apt-get update
+          sudo apt-get install -y apt-utils rpm createrepo-c gnupg
+      - name: Import the release signing key
+        env:
+          SIGNING_KEY: ${{ secrets.PACKAGE_SIGNING_KEY }}
+        run: |
+          test -n "$SIGNING_KEY"
+          test -n "$SIGNING_FINGERPRINT"
+          signing_home=$(mktemp -d)
+          chmod 700 "$signing_home"
+          echo "GNUPGHOME=$signing_home" >> "$GITHUB_ENV"
+          printf '%s' "$SIGNING_KEY" | gpg --homedir "$signing_home" --batch --import
+      - name: Prepare signed repositories and release checksums
+        run: |
+          python3 src/packaging/repository/build.py artifacts repository --key "$SIGNING_FINGERPRINT"
+          mkdir dist
+          cp artifacts/source/*.tar.gz dist/
+          find artifacts/native-* -type f \( -name '*.deb' -o -name '*.ddeb' -o -name '*.buildinfo' -o -name '*.changes' \) -exec cp '{}' dist/ \;
+          find repository/rpm -name '*.rpm' -exec cp '{}' dist/ \;
+          cp repository/pgwrh.asc dist/
+          tar -czf "dist/pgwrh-$VERSION-repositories.tar.gz" -C repository .
+          cd dist
+          sha256sum ./* > SHA256SUMS
+          gpg --batch --yes --local-user "$SIGNING_FINGERPRINT" --armor --detach-sign SHA256SUMS
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the tested images and multi-architecture tag
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          image="ghcr.io/${REPOSITORY,,}:$VERSION-pg18"
+          for arch in amd64 arm64; do
+            gunzip -c "artifacts/image-$arch/image-$arch.tar.gz" | docker load
+            docker tag "pgwrh:release-$arch" "$image-$arch"
+            docker push "$image-$arch"
+          done
+          docker manifest create "$image" "$image-amd64" "$image-arm64"
+          docker manifest push "$image"
+      - name: Attach the release artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "v$VERSION" dist/* --clobber
+      - uses: actions/upload-pages-artifact@v3
+        with: {path: repository}
+      - name: Remove the temporary signing key
+        if: always()
+        run: |
+          if [ -n "${GNUPGHOME:-}" ]; then
+            gpgconf --kill all
+            rm -rf "$GNUPGHOME"
+          fi
+
+  pages:
+    needs: publish
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: deployment

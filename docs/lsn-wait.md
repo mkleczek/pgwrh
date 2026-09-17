@@ -2,8 +2,8 @@
 
 `pgwrh_wait` is an optional C component shipped in the pgwrh repository. It
 supports PostgreSQL **18** and built-in logical replication with `pgoutput`.
-It has no dependency on a patched FDW. Existing SQL-only pgwrh installations
-continue to work without it.
+It has no dependency on a patched FDW. The pgwrh core can be used without the wait API, but version 0.3.0 still
+requires the bundled PostgreSQL 18 FDW.
 
 ## Installation
 
@@ -34,8 +34,7 @@ placeholders, so a `SET` alone cannot detect an entirely absent library. Verify
 the deployment by calling `pgwrh.applied_lsn(subscription_name)` in a separate
 health-check transaction before using the GUC protocol.
 
-For the original SQL-only installation (PostgreSQL 16+), use
-`make WITH_LSN_WAIT=0 WITH_FDW=0 install`, or the existing `NO_PGXS=1` path.
+To omit only the wait component, use `make WITH_LSN_WAIT=0 install`.
 `pgwrh_wait` shares version 0.3.0 with pgwrh and is a separate optional extension
 whose functions live in the `pgwrh` schema. Only fresh installation scripts are
 provided. Dropping it removes its SQL functions; removing a preloaded library

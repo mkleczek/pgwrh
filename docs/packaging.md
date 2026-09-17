@@ -125,7 +125,7 @@ sources from independent checkouts at package-build time.
 ## Build variants
 
 Both `WITH_FDW` and `WITH_LSN_WAIT` default to `1` in the PGXS build. Set either
-to `0` to omit that component. For the existing PostgreSQL 16/17 SQL-only build:
+to `0` to omit that component. To stage only the SQL component (provide the required PostgreSQL 18 FDW separately):
 
 ```sh
 make WITH_FDW=0 WITH_LSN_WAIT=0 install PG_CONFIG=/path/to/pg_config
