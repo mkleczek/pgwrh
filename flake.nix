@@ -17,7 +17,9 @@
         in { inherit (p) pgwrh postgresql; default = p.postgresql; });
       devShells = forAllSystems (system:
         let p = packagesFor system;
-        in { default = p.pkgs.mkShell {
+        in {
+          tests = import ./nix/tests.nix { pkgs = p.pkgs; };
+          default = p.pkgs.mkShell {
           packages = [ p.postgresql p.postgresql.pg_config p.pkgs.python3 ];
           inputsFrom = [ p.pgwrh ];
           PG_CONFIG = "${p.postgresql.pg_config}/bin/pg_config";
