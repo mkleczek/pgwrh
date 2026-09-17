@@ -124,7 +124,7 @@ test/
   pgwrh_fdw/    FDW integration, SQL, isolation, and TAP tests
   check-install.py
 Makefile        Combined build, install, clean, and test entry points
-flake.nix       SQL-only Nix package and development shell
+flake.nix       Complete PostgreSQL 18 bundle, extension package, and NixOS module
 flake.lock
 shell.nix       PostgreSQL 18 integration-test environment
 nix/            Supporting Nix expressions

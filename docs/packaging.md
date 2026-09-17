@@ -133,7 +133,7 @@ make WITH_FDW=0 WITH_LSN_WAIT=0 install PG_CONFIG=/path/to/pg_config
 
 `NO_PGXS=1` defaults both native components to `0` and supports staged SQL-only
 installation and uninstallation. Explicitly requesting a native component with
-`NO_PGXS=1` fails. The older locked Nix package selects both SQL-only flags.
+`NO_PGXS=1` fails. The [Nix package](nix.md) builds the complete PostgreSQL 18 bundle.
 Use the same component options when building, installing, and uninstalling.
 Run `make clean` before changing the PostgreSQL installation used for compilation.
 
