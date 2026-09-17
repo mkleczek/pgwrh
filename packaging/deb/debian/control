@@ -1,0 +1,18 @@
+Source: pgwrh
+Section: database
+Priority: optional
+Maintainer: Michal Kleczek <michal@kleczek.org>
+Build-Depends: debhelper-compat (= 13), postgresql-server-dev-18, libssl-dev, libkrb5-dev, python3
+Standards-Version: 4.7.2
+Homepage: https://github.com/mkleczek/pgwrh
+Rules-Requires-Root: no
+
+Package: postgresql-18-pgwrh
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, postgresql-18, postgresql-18-pg-background (>= 1.6)
+Description: sharding and replica read consistency for PostgreSQL 18
+ Distributes PostgreSQL shards across logical replicas using weighted
+ rendezvous hashing. Includes pgwrh, pgwrh_fdw and pgwrh_wait.
+ .
+ Extensions are activated explicitly with CREATE EXTENSION. Using the wait
+ API also requires preloading pgwrh_wait and restarting PostgreSQL.

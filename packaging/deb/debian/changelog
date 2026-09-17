@@ -1,0 +1,6 @@
+pgwrh (0.3.0-1) unstable; urgency=medium
+
+  * Package all three 0.3.0 extensions for PostgreSQL 18.
+  * Fresh installations only; no historical SQL or upgrade scripts.
+
+ -- Michal Kleczek <michal@kleczek.org>  Thu, 17 Sep 2026 08:00:00 +0200
