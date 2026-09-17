@@ -5,6 +5,7 @@ local servers and do not need a replica or external service.
 """
 from contextlib import contextmanager
 import os
+import re
 from pathlib import Path
 import shutil
 import socket
@@ -36,6 +37,7 @@ def serve(node, tmp_path, role='pgwrh_ui_viewer'):
         'PGRST_SERVER_PORT': str(port),
         'PGRST_DB_POOL': '3',
         'PGRST_LOG_LEVEL': 'warn',
+        'HPC_TIXFILE': str(tmp_path / 'postgrest.tix'),
     }
     url = f'http://127.0.0.1:{port}/rpc/'
     with (tmp_path / 'postgrest.log').open('w+') as log:
@@ -88,9 +90,38 @@ def test_real_postgrest_html_assets_and_readonly_contract(configured, tmp_path):
             status, headers, content = request(url + endpoint, headers={'Accept': media})
             assert status == 200, content
             assert headers['Content-Type'].startswith(media)
+            status, headers, content = request(url + endpoint, headers={'Accept': '*/*'})
+            assert status == 200 and headers['Content-Type'].startswith(media)
+            assert not content.startswith('"')  # no JSON string quoting
         status, _, _ = request(url + 'group_state?group_id=g1')
         assert status in (401, 404)
         status, _, _ = request(url + 'index?page=missing')
         assert status == 400
         status, _, _ = request(url + 'index?group_id=missing')
         assert status == 404
+
+
+def test_operator_form_posts_errors_and_origin_validation(configured, tmp_path):
+    configured.psql(filename=str(ROOT / 'pgwrh_ui/readonly.sql'))
+    configured.psql(filename=str(ROOT / 'pgwrh_ui/operator.sql'))
+    with serve(configured, tmp_path, 'pgwrh_ui_operator') as url:
+        headers = {'Accept':'text/html', 'HX-Request':'true', 'X-Pgwrh-UI':'1', 'Origin':url.split('/rpc/')[0]}
+        _, _, page = request(url + 'index?group_id=g1&page=replicas', headers={'Accept':'text/html'})
+        token = re.search(r'name="expected" value="([^"]+)"', page)[1]
+        fields = {'group_id':'g1','operation':'weight','expected':token,'replica_id':'r1','availability_zone':'a','weight':125}
+        status, _, _ = request(url + 'mutate', fields)
+        assert status == 403
+        status, _, _ = request(url + 'mutate', fields, headers | {'Origin':'https://elsewhere.invalid'})
+        assert status == 403
+        status, response_headers, html = request(url + 'mutate', fields, headers)
+        assert status == 200, html
+        assert 'Pending weight saved' in html
+        assert response_headers['HX-Retarget'] == '#workspace'
+        assert configured.execute("SELECT weight FROM pgwrh.shard_host_weight WHERE host_id='r1'") == [(125,)]
+        status, _, html = request(url + 'mutate', fields, headers)
+        assert status == 409 and 'Configuration changed' in html
+        token = configured.execute("SELECT pgwrh_ui.revision('g1')")[0][0]
+        status, _, html = request(url + 'mutate', fields | {'expected':token,'weight':0}, headers)
+        assert status == 422 and 'Weight must be positive' in html
+        status, _, _ = request(url + 'mutate?' + urllib.parse.urlencode(fields), headers=headers)
+        assert status == 403  # GET never performs management work

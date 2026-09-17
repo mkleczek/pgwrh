@@ -32,3 +32,8 @@ document.addEventListener('htmx:responseError', function (event) {
 document.addEventListener('htmx:afterRequest', function (event) {
   if (event.detail.successful) document.getElementById('connection-error').hidden = true;
 });
+document.addEventListener('htmx:afterSwap', function () {
+  const commit = document.getElementById('commit-rollout');
+  const status = document.getElementById('live-status');
+  if (commit && status) commit.disabled = status.dataset.commitReady !== 'true';
+});
