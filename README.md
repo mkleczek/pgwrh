@@ -6,7 +6,10 @@ lack of sharding and large storage requirements.
 
 See [Architecture](https://github.com/mkleczek/pgwrh/wiki/Architecture) for more information on inner workings.
 
-:warning: **WIP**: readme might be incomplete and contain mistakes in usage instrutions (as the API is still changing)
+Start with the [tested quickstart](docs/containers.md) for a controller, two replicas,
+and a read-only browser console.
+See the [1.0.0 release notes](docs/releases/1.0.0.md) for the validation matrix and
+limitations, and [controller recovery](docs/recovery.md) for backup and restore.
 
 # Features
 
@@ -98,7 +101,8 @@ PostgreSQL's stock `postgres_fdw` extension is not required.
 ## Build from source
 
 Use the 1.0.0 source archive or release tag. A complete build requires PostgreSQL
-18 development files, a C compiler, GNU Make, Python 3, and the TLS/GSSAPI development
+18 development files, a C compiler, GNU Make, a POSIX shell, `sha384sum` (coreutils)
+or `shasum`, and the TLS/GSSAPI development
 libraries used by the selected PostgreSQL installation:
 
 ```sh
@@ -171,151 +175,29 @@ nix-shell --run 'pgwrh-test test/pgwrh -q'
 See [packaging](docs/packaging.md), [LSN waiting](docs/lsn-wait.md), and the
 [FDW README](pgwrh_fdw/README.md) for suite-specific dependencies and commands.
 
-# Usage
+# Quickstart
 
-## On master server
+From the unpacked source archive or repository checkout, with Docker Compose and curl installed:
 
-### Create your sharded table partitioning hierarchy
-
-The below example would create a two-level partition hierarchy for `test.my_table`:
-* First level by dates in `col3` (split by year)
-* Second level by hash on `col2`
-```pgsql
-CREATE SCHEMA IF NOT EXISTS test;
-
-CREATE TABLE test.my_data (col1 text, col2 text, col3 date) PARTITION BY RANGE (col3);
-CREATE TABLE test.my_data_2023 PARTITION OF parent FOR VALUES FROM (make_date(2023, 1, 1)) TO (make_date(2024, 1, 1));
-CREATE TABLE test.my_data_2024 PARTITION OF parent FOR VALUES FROM (make_date(2024, 1, 1)) TO (make_date(2025, 1, 1));
-CREATE TABLE test.my_data_2025 PARTITION OF parent FOR VALUES FROM (make_date(2025, 1, 1)) TO (make_date(2026, 1, 1));
-
-CREATE SCHEMA IF NOT EXISTS test_shards;
-DO$$
-DECLARE
-    r record;
-BEGIN
-    FOR r IN
-        SELECT
-            format('CREATE TABLE test_shards.my_data_%1$s_%2$s PARTITION OF test.my_data_%1$s (PRIMARY KEY (col1)) FOR VALUES WITH (MODULUS 16, REMAINDER %2$s)', year, rem) stmt
-        FROM generate_series(2023, 2025) year, generate_series(0, 15) rem
-    LOOP
-        EXECUTE r.stmt;
-    END LOOP;
-END$$;
+```sh
+bash examples/compose/quickstart.sh
 ```
 
-That gives 48 (16 * 3) shards in total.
+The script starts a controller, two replicas and PostgREST, commits a four-shard
+rollout, verifies that both replicas return the same 100 rows, and checks the
+console and its bundled assets. Open <http://localhost:13000/rpc/index?group_id=demo>.
+The console is read-only; the demo uses fixed local credentials and loopback ports.
 
-**Note** that there are no specific requirements for the partitioning hierarchy and any partitioned table can be sharded - the above is only for illustration purposes.
+Before the 1.0.0 image is published, build it locally first:
 
-### Create a replica cluster
-
-Example:
-```pgsql
-SELECT pgwrh.create_replica_cluster('c01');
+```sh
+docker build -f packaging/container/Dockerfile -t pgwrh:1.0.0-local .
+PGWRH_IMAGE=pgwrh:1.0.0-local bash examples/compose/quickstart.sh
 ```
 
-### Configure roles and user accounts for replicas
-
-(Optional) Create a role for you cluster replicas and grant rights to SELECT from shards.
-```pgsql
-CREATE ROLE c01_replica;
-
-GRANT SELECT ON ALL TABLES IN SCHEMA test_shards TO c01_replica;
-```
-
-Create account for each replica.
-```pgsql
-CREATE USER c01r01 PASSWORD 'c01r01Password' REPLICATION IN ROLE c01_replica;
-```
-
-## On every replica
-
-Make sure `pgwrh` extension is installed.
-
-### Configure connection to master server
-
-Call `configure_controller` function providing username and password of this replica account created on master.
-```pgsql
-SELECT configure_controller(
-    host => 'master.myorg',
-    port => '5432',
-    username => 'cr01r01', -- same as above
-    password => 'c01r01Password' -- same as above
-);
-```
-
-## Create and deploy replica cluster configuration
-
-### Specify what tables to replicate
-
-Example below would configure distribution of every partition of `test.my_data` to half (50%) of replicas,
-except partitions of `test.my_data_2024` which will be copied to all (100%) replicas.
-```pgsql
-WITH st(schema_name, table_name, replication_factory) AS (
-    VALUES
-        ('test', 'my_data', 50),
-        ('test', 'my_data_2024', 100)
-)
-INSERT INTO pgwrh.sharded_table (replication_group_id, sharded_table_schema, sharded_table_name, replication_factor)
-SELECT
-    'c01', schema_name, table_name, replication_factor
-FROM
-    st;
-```
-
-### Configure replicas
-Add replica to configuration:
-```pgsql
-SELECT pgwrh.add_replica('c01', 'c01r01', 'replica01.cluster01.myorg', 5432);
-```
-
-### Start deployment
-```pgsql
-SELECT pgwrh.start_rollout('c01');
-```
-
-New configuration is now visible to connected replicas which will start data replication.
-
-### Commit configuration
-Once all replicas confirmed configuration changes, execute:
-```pgsql
-SELECT pgwrh.commit_rollout('c01');
-```
-(this will fail if some replicas are not reconfigured yet)
-
-### Add more replicas
-```pgsql
-CREATE USER c01r02 PASSWORD 'c01r02Password' REPLICATION IN ROLE c01_replica;
-CREATE USER c01r03 PASSWORD 'c01r03Password' REPLICATION IN ROLE c01_replica;
-CREATE USER c01r04 PASSWORD 'c01r04Password' REPLICATION IN ROLE c01_replica;
-
-select pgwrh.add_replica(
-       _replication_group_id := 'c01',
-       _host_id := 'c01r02',
-       _host_name := 'replica02.cluster01.myorg',
-       _port := 5432);
-select pgwrh.add_replica(
-       _replication_group_id := 'c01',
-       _host_id := 'c01r03',
-       _host_name := 'replica03.cluster01.myorg',
-       _port := 5432,
-       _weight := 70);
-select pgwrh.add_replica(
-       _replication_group_id := 'c01',
-       _host_id := 'c01r04',
-       _host_name := 'replica04.cluster01.myorg',
-       _port := 5432);
-```
-It is possible to adjust the number of shards assigned to replicas by setting replica weight:
-```pgsql
-SELECT pgwrh.set_replica_weight('c01', 'c01r04', 200);
-```
-
-To deploy new configuration:
-```pgsql
-SELECT pgwrh.start_rollout('c01');
-```
-And then:
-```pgsql
-SELECT pgwrh.commit_rollout('c01');
-```
+See [the container guide](docs/containers.md) for querying replicas, restarting
+or removing the demo, and choosing different ports. The executed SQL in
+[seed.sql](examples/compose/seed.sql) and the rollout in
+[bootstrap.sh](examples/compose/bootstrap.sh) are the working API example.
+For deployment beyond the local demo, follow [native installation](docs/packages.md),
+[AZ placement](docs/az-affinity.md), and [controller UI setup](pgwrh_ui/README.md).

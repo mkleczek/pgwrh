@@ -101,18 +101,17 @@ jobs:
       - name: Build and test the installed image
         working-directory: src
         run: docker build -f packaging/container/Dockerfile -t "$PGWRH_IMAGE" .
-      - name: Verify a fresh sharding cluster and repeated setup
+      - name: Verify the documented quickstart, console and repeated setup
         working-directory: src/examples/compose
         run: |
-          docker compose up -d
-          setup_id=$(docker compose ps -aq setup)
-          result=$(timeout 240 docker wait "$setup_id")
-          test "$result" = 0
+          bash quickstart.sh
           docker compose run --rm setup
+          docker compose --profile ui run --rm ui-setup
+          bash quickstart.sh
       - name: Preserve demo diagnostics
         if: always()
         working-directory: src/examples/compose
-        run: docker compose logs --no-color > "$RUNNER_TEMP/compose.log"
+        run: docker compose --profile ui logs --no-color > "$RUNNER_TEMP/compose.log"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -121,7 +120,7 @@ jobs:
       - name: Remove the test cluster
         if: always()
         working-directory: src/examples/compose
-        run: docker compose down -v
+        run: docker compose --profile ui down -v
       - name: Save the tested image
         if: github.event_name == 'release'
         run: docker save "$PGWRH_IMAGE" | gzip > image-${{ matrix.arch }}.tar.gz
