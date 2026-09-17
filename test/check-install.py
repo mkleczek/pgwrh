@@ -95,6 +95,11 @@ def main():
                           [extension], ["-C", str(ROOT / extension)])
         check_install(directory / "combined space stage", log,
                       ["pgwrh", "pgwrh_ui", "pgwrh_fdw", "pgwrh_wait"], ["with_llvm=no"])
+        # Source-built PostgreSQL without PL/Python exports an empty PYTHON
+        # through PGXS. Rebuild the assets so an earlier build cannot hide it.
+        make(log, "-C", str(ROOT / "pgwrh_ui"), "clean")
+        check_install(directory / "ui-no-plpython-stage", log, ["pgwrh_ui"],
+                      ["-C", str(ROOT / "pgwrh_ui"), "PYTHON="])
     print("PASS: all packaging modes (no system installation)", flush=True)
 
 
