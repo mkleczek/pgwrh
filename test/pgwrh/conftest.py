@@ -81,7 +81,7 @@ def postgres_node_factory():
     with ExitStack() as stack:
         stack.enter_context(scoped_config(use_python_logging=True))
 
-        def build(name: str):
+        def build(name: str, *, install_extension: bool = True):
             node = get_new_node(name, bin_dir=os.environ.get(POSTGRES_BIN_DIR_ENV))
             stack.enter_context(node)
             node.init(allow_logical=True)
@@ -105,6 +105,8 @@ def postgres_node_factory():
                     "extension_control_path:",
                     node.execute("SHOW extension_control_path")[0][0],
                 )
+            if not install_extension:
+                return node
             node.execute("CREATE EXTENSION pgwrh CASCADE")
             assert node.execute("SELECT extname FROM pg_extension WHERE extname='postgres_fdw'") == []
             assert node.execute("""SELECT f.fdwname FROM pg_foreign_server s

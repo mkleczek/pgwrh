@@ -5,6 +5,7 @@ SELECT pg_catalog.pg_extension_config_dump('replication_group_config_lock', '');
 SELECT pg_catalog.pg_extension_config_dump('replication_group_config_clone', '');
 SELECT pg_catalog.pg_extension_config_dump('replication_group_config', '');
 SELECT pg_catalog.pg_extension_config_dump('replication_group', '');
+SELECT pg_catalog.pg_extension_config_dump('replication_group_lock', '');
 SELECT pg_catalog.pg_extension_config_dump('replication_group_member', '');
 SELECT pg_catalog.pg_extension_config_dump('shard_host', '');
 SELECT pg_catalog.pg_extension_config_dump('shard_host_weight', '');
