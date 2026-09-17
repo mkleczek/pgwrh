@@ -1,27 +1,51 @@
 {
-  description = "Simple flake to set up env";
-
-  inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
-    flakelight.url = "github:nix-community/flakelight";
-  };
-
-  outputs = { flakelight, nixpkgs, ... }:
-    flakelight ./. ({lib, ...}: {
-      inputs.nixpkgs = nixpkgs;
-      systems = lib.systems.flakeExposed;
-      package = { stdenv, defaultMeta, pkgs }:
-        stdenv.mkDerivation {
-          pname = "pgwrh";
-          version = "0.3.0";
-          src = ./.;
-          buildInputs = [ pkgs.coreutils pkgs.postgresql ];
-          # The existing lock file predates PostgreSQL 18.
-          makeFlags = [ "WITH_LSN_WAIT=0" "WITH_FDW=0" ];
-          installFlags = [ "datadir=$(out)/share/postgresql" ];
-          meta = defaultMeta;
+  description = "pgwrh 0.3.0 and PostgreSQL 18 with all required extensions";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  outputs = { self, nixpkgs }:
+    let
+      systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
+      forAllSystems = nixpkgs.lib.genAttrs systems;
+      packagesFor = system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+          pgwrh = pkgs.postgresql_18.pkgs.callPackage ./nix/pgwrh.nix { };
+          postgresql = pkgs.postgresql_18.withPackages (ps: [ pgwrh ps.pg_background ]);
+        in { inherit pkgs pgwrh postgresql; };
+    in {
+      packages = forAllSystems (system:
+        let p = packagesFor system;
+        in { inherit (p) pgwrh postgresql; default = p.postgresql; });
+      devShells = forAllSystems (system:
+        let p = packagesFor system;
+        in { default = p.pkgs.mkShell {
+          packages = [ p.postgresql p.postgresql.pg_config p.pkgs.python3 ];
+          inputsFrom = [ p.pgwrh ];
+          PG_CONFIG = "${p.postgresql.pg_config}/bin/pg_config";
+        }; });
+      checks = forAllSystems (system:
+        let p = packagesFor system;
+        in { installed = p.pkgs.runCommand "pgwrh-installed-0.3.0" {
+          nativeBuildInputs = [ p.postgresql ];
+        } ''
+          bash ${./test/packaging/installed.sh} ${./test/packaging/installed.sql}
+          touch "$out"
+        ''; });
+      nixosModules.default = { config, lib, ... }: {
+        options.services.pgwrh.enable = lib.mkEnableOption "pgwrh on PostgreSQL 18";
+        config = lib.mkIf config.services.pgwrh.enable {
+          services.postgresql = {
+            enable = true;
+            package = self.packages.${config.nixpkgs.hostPlatform.system}.postgresql;
+            settings = {
+              shared_preload_libraries = "pgwrh_wait";
+              wal_level = "logical";
+              max_worker_processes = lib.mkDefault 32;
+              max_replication_slots = lib.mkDefault 32;
+              max_wal_senders = lib.mkDefault 32;
+              max_logical_replication_workers = lib.mkDefault 16;
+            };
+          };
         };
-
-      devShell.packages = pkgs: with pkgs; [ coreutils postgresql ];
-    });
+      };
+    };
 }
