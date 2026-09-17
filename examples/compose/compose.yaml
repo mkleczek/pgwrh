@@ -38,6 +38,31 @@ services:
       controller: {condition: service_healthy}
       replica1: {condition: service_healthy}
       replica2: {condition: service_healthy}
+  ui-setup:
+    profiles: [ui]
+    image: ${PGWRH_IMAGE:-ghcr.io/mkleczek/pgwrh:1.0.0-pg18}
+    entrypoint: ["bash", "/demo/ui-setup.sh"]
+    environment:
+      PGHOST: controller
+      PGUSER: postgres
+      PGPASSWORD: pgwrh-local-demo
+      PGDATABASE: pgwrh_demo
+    volumes: ["./:/demo:ro"]
+    depends_on:
+      setup: {condition: service_completed_successfully}
+  ui:
+    profiles: [ui]
+    image: postgrest/postgrest:v14.16
+    environment:
+      PGRST_DB_URI: postgres://pgwrh_ui_authenticator:pgwrh-ui-local-demo@controller:5432/pgwrh_demo
+      PGRST_DB_SCHEMAS: pgwrh_ui
+      PGRST_DB_EXTRA_SEARCH_PATH: ""
+      PGRST_DB_ANON_ROLE: pgwrh_ui_viewer
+      PGRST_SERVER_HOST: 0.0.0.0
+      PGRST_SERVER_PORT: "3000"
+    ports: ["127.0.0.1:${PGWRH_UI_PORT:-13000}:3000"]
+    depends_on:
+      ui-setup: {condition: service_completed_successfully}
 
 volumes:
   controller:

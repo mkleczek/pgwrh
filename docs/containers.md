@@ -14,20 +14,18 @@ Existing volumes are not initialized again.
 
 ## Try sharding locally
 
-Download and unpack the 1.0.0 source archive, then:
+Install Docker with Compose and curl. Download and unpack the 1.0.0 source archive, then run from its root:
 
 ```sh
-cd examples/compose
-docker compose up -d
-docker compose logs -f setup
+bash examples/compose/quickstart.sh
 ```
 
-Wait for **pgwrh demo ready**. The setup service creates a controller, two logical
+Wait for **Quickstart verified**. The setup service creates a controller, two logical
 replicas, four hash partitions, and 100 example rows. It waits for rollout
 readiness, commits the configuration, and compares query results on both replicas.
 
 ```sh
-docker compose exec replica1 psql -U postgres -d pgwrh_demo \
+docker compose -f examples/compose/compose.yaml exec replica1 psql -U postgres -d pgwrh_demo \
   -c 'SELECT count(*), sum(id) FROM demo.events;'
 ```
 
@@ -38,9 +36,16 @@ These fixed credentials are for this local demo. Do not expose it as a productio
 service. Override `PGWRH_CONTROLLER_PORT`, `PGWRH_REPLICA1_PORT`, and
 `PGWRH_REPLICA2_PORT` if those host ports are occupied.
 
-`docker compose down` retains database volumes. Running setup again reuses the
+Open <http://localhost:13000/rpc/index?group_id=demo> for the read-only console
+served by PostgREST 14.16. Override `PGWRH_UI_PORT` to change its loopback port.
+The `ui` Compose profile enables `pgwrh_ui` only on the controller and grants the
+viewer role to a dedicated login; it does not enable anonymous operator access.
+For a cluster without the console, use `docker compose up -d` in
+`examples/compose` without the `ui` profile.
+
+From `examples/compose`, `docker compose --profile ui down` retains database volumes. Running setup again reuses the
 demo configuration and restarts replica reconciliation. To delete the demo data
-and start fresh, use `docker compose down -v`.
+and start fresh, use `docker compose --profile ui down -v`.
 
 ## Build and test before publication
 
@@ -48,8 +53,7 @@ From the repository root:
 
 ```sh
 docker build -f packaging/container/Dockerfile -t pgwrh:1.0.0-local .
-PGWRH_IMAGE=pgwrh:1.0.0-local docker compose -f examples/compose/compose.yaml up -d
-PGWRH_IMAGE=pgwrh:1.0.0-local docker compose -f examples/compose/compose.yaml logs -f setup
+PGWRH_IMAGE=pgwrh:1.0.0-local bash examples/compose/quickstart.sh
 ```
 
 The build tests the installed extensions in a temporary database before producing
