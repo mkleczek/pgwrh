@@ -24,8 +24,8 @@ def test_database_names_survive_replication_routing_and_handoff(handoff_cluster)
         timeout=60, message='reader did not aggregate both database destinations')
     assert reader.execute("""SELECT DISTINCT dbname FROM pgwrh.assignment_target ORDER BY dbname""") == [
         (name,) for name in sorted([source.spec.dbname, destination.spec.dbname])]
-    assert reader.query_scalar("""SELECT cardinality(shard_server_targets)
-        FROM pgwrh.remote_server_route WHERE srvname = pgwrh.pgwrh_shard_server('data','root')""") == 2
+    assert len(reader.query_scalar("""SELECT shard_server_targets
+        FROM pgwrh.remote_server_route WHERE srvname = pgwrh.pgwrh_shard_server('data','root')""")) == 2
     # Force each actual destination through the same virtual server. The member
     # API uses the production drain protocol; zero weights are not valid.
     server = reader.query_scalar("SELECT pgwrh.pgwrh_shard_server('data','root')")

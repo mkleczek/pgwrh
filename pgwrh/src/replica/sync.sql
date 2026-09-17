@@ -219,7 +219,6 @@ shard_server AS (
         shard_server_schema_name,
         host,
         port,
-        shard_server_user,
         target_servers
     FROM
         remote_assignment
@@ -227,10 +226,10 @@ shard_server AS (
         shard_server_name IS NOT NULL
 ),
 target_server AS (
-    SELECT a.server_name, a.host, a.port, a.dbname, a.shard_server_user, max(a.weight) AS weight
+    SELECT a.server_name, a.member_role, a.host, a.port, a.dbname, a.shard_server_user, max(a.weight) AS weight
     FROM assignment_target a
     WHERE EXISTS (SELECT 1 FROM shard_server s WHERE a.server_name = ANY(s.target_servers))
-    GROUP BY a.server_name, a.host, a.port, a.dbname, a.shard_server_user
+    GROUP BY a.server_name, a.member_role, a.host, a.port, a.dbname, a.shard_server_user
 ),
 shard_server_schema AS (
     SELECT DISTINCT shard_server_schema_name
@@ -297,8 +296,10 @@ configured_remote_shard AS (
     FROM remote_shard rs
         JOIN remote_assignment a ON a.remote_rel_id = rs.rel_id
         JOIN remote_server_route r ON r.srvname = rs.srvname
-    WHERE r.shard_server_targets = a.target_servers
-        AND r.shard_server_user = a.shard_server_user
+    WHERE r.shard_server_targets = (
+        SELECT jsonb_object_agg(t.server_name, t.shard_server_user)
+        FROM target_server t WHERE t.server_name = ANY(a.target_servers)
+    )
 ),
 ready_remote_shard AS (
     SELECT
@@ -373,7 +374,10 @@ attachment_command AS (
     )
 ),
 roles AS (
-    SELECT * FROM fdw_credentials
+    SELECT * FROM fdw_local_credentials
+),
+remote_credentials AS MATERIALIZED (
+    SELECT * FROM fdw_remote_credentials
 ),
 scripts (async, transactional, description, commands) AS (
     SELECT
@@ -753,7 +757,8 @@ scripts (async, transactional, description, commands) AS (
         -- PUBLIC mapping; relation privileges still control access to shard data.
         || array_agg(format('GRANT USAGE ON FOREIGN SERVER %I TO PUBLIC', server_name))
         || array_agg(select_add_ext_dependency('pg_foreign_server'::regclass, 'srvname', server_name))
-    FROM target_server JOIN roles ON shard_server_user = username
+    FROM target_server t JOIN remote_credentials c
+        ON t.member_role = c.member_role AND t.shard_server_user = c.username
     WHERE NOT EXISTS (SELECT 1 FROM pg_foreign_server WHERE srvname = server_name)
     GROUP BY 1, 2
 

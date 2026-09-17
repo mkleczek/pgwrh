@@ -168,7 +168,7 @@ SELECT
     CASE WHEN local THEN rel_id ELSE remote_rel_id END AS shard_rel_id,
     'pgwrh_replica_subscription' AS subname,
     sa.pubname,
-    sa.shard_server_user,
+    sa.shard_server_users,
     sa.dbnames,
     host,
     port,
@@ -201,13 +201,14 @@ FROM
 -- controller's same-zone preference without adding an assignment field.
 CREATE VIEW assignment_target AS
 SELECT (a.schema_name, a.table_name)::rel_id AS node_rel_id,
-       pgwrh_target_server(e.member_role, e.host, e.port, e.dbname, a.shard_server_user) AS server_name,
-       e.host, e.port, e.dbname, a.shard_server_user, count(*)::integer AS weight
+       e.member_role,
+       pgwrh_target_server(e.member_role, e.host, e.port, e.dbname, e.username) AS server_name,
+       e.host, e.port, e.dbname, e.username AS shard_server_user, count(*)::integer AS weight
 FROM fdw_shard_assignment a,
-     LATERAL unnest(a.shard_server_members, string_to_array(a.host, ','), string_to_array(a.port, ','), a.dbnames)
-         AS e(member_role, host, port, dbname)
-WHERE pgwrh_target_servers(a.shard_server_members, a.host, a.port, a.dbnames, a.shard_server_user) IS NOT NULL
-GROUP BY a.schema_name, a.table_name, e.member_role, e.host, e.port, e.dbname, a.shard_server_user;
+     LATERAL unnest(a.shard_server_members, string_to_array(a.host, ','), string_to_array(a.port, ','), a.dbnames, a.shard_server_users)
+         AS e(member_role, host, port, dbname, username)
+WHERE pgwrh_target_servers(a.shard_server_members, a.host, a.port, a.dbnames, a.shard_server_users) IS NOT NULL
+GROUP BY a.schema_name, a.table_name, e.member_role, e.host, e.port, e.dbname, e.username;
 
 CREATE VIEW subscribed_local_shard AS
     SELECT
