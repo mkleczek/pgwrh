@@ -1,0 +1,45 @@
+name: pgwrh-demo
+x-postgres: &postgres
+  image: ${PGWRH_IMAGE:-ghcr.io/mkleczek/pgwrh:0.3.0-pg18}
+  environment:
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: pgwrh-local-demo
+    POSTGRES_DB: pgwrh_demo
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U postgres -d pgwrh_demo && psql -U postgres -d pgwrh_demo -Atqc \"SELECT count(*) FROM pg_extension WHERE extname IN ('pgwrh', 'pgwrh_fdw', 'pgwrh_wait') AND extversion='0.3.0'\" | grep -qx 3"]
+    interval: 2s
+    timeout: 5s
+    retries: 60
+  shm_size: 256mb
+
+services:
+  controller:
+    <<: *postgres
+    ports: ["127.0.0.1:${PGWRH_CONTROLLER_PORT:-15432}:5432"]
+    volumes: ["controller:/var/lib/postgresql"]
+  replica1:
+    <<: *postgres
+    ports: ["127.0.0.1:${PGWRH_REPLICA1_PORT:-15433}:5432"]
+    volumes: ["replica1:/var/lib/postgresql"]
+  replica2:
+    <<: *postgres
+    ports: ["127.0.0.1:${PGWRH_REPLICA2_PORT:-15434}:5432"]
+    volumes: ["replica2:/var/lib/postgresql"]
+  setup:
+    image: ${PGWRH_IMAGE:-ghcr.io/mkleczek/pgwrh:0.3.0-pg18}
+    entrypoint: ["bash", "/demo/bootstrap.sh"]
+    environment:
+      PGUSER: postgres
+      PGPASSWORD: pgwrh-local-demo
+      PGDATABASE: pgwrh_demo
+      PGCONNECT_TIMEOUT: "5"
+    volumes: ["./:/demo:ro"]
+    depends_on:
+      controller: {condition: service_healthy}
+      replica1: {condition: service_healthy}
+      replica2: {condition: service_healthy}
+
+volumes:
+  controller:
+  replica1:
+  replica2:
