@@ -1,7 +1,7 @@
 # pgwrh-next integration audit
 
-This records the integration work before the unified 0.3.0 release. The current
-tree ships only 0.3.0 installation scripts; the upgrade scripts and regression
+This records the integration work before the unified 1.0.0 release. The current
+tree ships only 1.0.0 installation scripts; the upgrade scripts and regression
 mentioned in the historical validation below have been removed.
 
 Compared `pgwrh-next` (`tkuolkry`, commit `96c3a3d6`) with the working change
@@ -16,7 +16,7 @@ regression, and this audit. The original working tree is preserved in `vowyykwr`
 
 | Source change | Finding and resolution |
 | --- | --- |
-| `yknstuyu` / `bc4d9feb` — Planned version bump | Superseded by the unified 0.3.0 release, with fresh installation scripts only. |
+| `yknstuyu` / `bc4d9feb` — Planned version bump | Superseded by the unified 1.0.0 release, with fresh installation scripts only. |
 | `vystvkrw` / `d3d2a99e` — deleted flake.nix | Build workflow choice, with no runtime fix. Keep the current flake, which explicitly builds the SQL-only package with the older locked PostgreSQL; use the maintained PostgreSQL 18 test shell for integration tests. |
 | `tqnvvyws` / `ff05ea73` — Test suite | The test harness, seed correction, multi-replica fixtures, non-partitioned workaround, and offline scale-out regression are present. Current readiness and convergence checks account for retained local copies. The skipped skeleton tests from the old change provide no additional assertions. Corrected the test launcher's obsolete `pg_config` path. |
 | `rvurwluo` / `36adf7a2` — Gate remote route changes on target index readiness | The controller already requires subscription, online status, credentials, and indexes before exposing a changed target route, while allowing unchanged routes during index builds. Restored all three missing regression tests: unchanged route, hidden unindexed target, and indexed target handoff. |

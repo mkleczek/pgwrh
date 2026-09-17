@@ -1,5 +1,5 @@
 {
-  description = "pgwrh 0.3.0 and PostgreSQL 18 with all required extensions";
+  description = "pgwrh 1.0.0 and PostgreSQL 18 with all required extensions";
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   outputs = { self, nixpkgs }:
     let
@@ -24,7 +24,7 @@
         }; });
       checks = forAllSystems (system:
         let p = packagesFor system;
-        in { installed = p.pkgs.runCommand "pgwrh-installed-0.3.0" {
+        in { installed = p.pkgs.runCommand "pgwrh-installed-1.0.0" {
           nativeBuildInputs = [ p.postgresql ];
         } ''
           bash ${./test/packaging/installed.sh} ${./test/packaging/installed.sql}

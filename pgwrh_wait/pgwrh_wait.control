@@ -1,5 +1,5 @@
 comment = 'Commit visibility watermarks for pgwrh logical subscribers'
-default_version = '0.3.0'
+default_version = '1.0.0'
 module_pathname = 'pgwrh_wait'
 relocatable = false
 schema = pgwrh

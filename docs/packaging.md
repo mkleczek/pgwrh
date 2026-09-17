@@ -1,13 +1,13 @@
 # Building one package
 
-The root Makefile builds three SQL extensions by default: `pgwrh`, `pgwrh_wait`,
-and `pgwrh_fdw`. It delegates to a separate Makefile in each extension directory:
-`pgwrh/`, `pgwrh_wait/`, and `pgwrh_fdw/`. Each owns its control file, SQL scripts,
+The root Makefile builds four SQL extensions by default: `pgwrh`, `pgwrh_ui`,
+`pgwrh_wait`, and `pgwrh_fdw`. It delegates to a separate Makefile in each extension directory:
+`pgwrh/`, `pgwrh_ui/`, `pgwrh_wait/`, and `pgwrh_fdw/`. Each owns its control file, SQL scripts,
 and any native sources. All tests live under `test/`. Building from a release
 archive never fetches Git history or other dependencies.
 
 The combined build currently requires PostgreSQL 18 development files, PGXS,
-libpq, a C compiler, GNU Make, and the standard text utilities used to assemble
+libpq, a C compiler, GNU Make, Python 3, and the standard text utilities used to assemble
 the pgwrh SQL script. Select one PostgreSQL installation for all components:
 
 ```sh
@@ -36,7 +36,7 @@ The spec builds the following architecture-specific packages:
 
 | Package | Contents |
 | --- | --- |
-| `pgwrh_18` | All three extensions, two shared libraries, installation SQL, licenses, and documentation |
+| `pgwrh_18` | All four extensions, two shared libraries, installation SQL, licenses, and documentation |
 | `pgwrh_18-llvmjit` | LLVM bitcode and indexes for both shared libraries; requires exactly the same version/release of `pgwrh_18` |
 
 Standard RPM tooling also generates debug packages where enabled. The release
@@ -65,22 +65,22 @@ sudo dnf builddep --define 'pgmajorversion 18' packaging/rpm/pgwrh.spec
 ```
 
 The source archive must include the reorganized extension directories and
-`test/check-install.py`. `Source0` names the eventual `v0.3.0` release archive;
+`test/check-install.py`. `Source0` names the eventual `v1.0.0` release archive;
 that tag has not been published as part of this change. To build a development
 snapshot, export the desired commit with the release-compatible archive prefix:
 
 ```sh
 mkdir -p "$HOME/rpmbuild/SOURCES"
-git archive --format=tar.gz --prefix=pgwrh-0.3.0/ \
-  --output="$HOME/rpmbuild/SOURCES/pgwrh-0.3.0.tar.gz" HEAD
+git archive --format=tar.gz --prefix=pgwrh-1.0.0/ \
+  --output="$HOME/rpmbuild/SOURCES/pgwrh-1.0.0.tar.gz" HEAD
 rpmbuild -ba --define 'pgmajorversion 18' packaging/rpm/pgwrh.spec
 ```
 
 With Jujutsu, replace `HEAD` with the commit ID of the intended change, obtained
 using `jj log -r @ --no-graph -T commit_id`; Git's `HEAD` may point at its parent.
 Use a distinct snapshot release number when distributing unreleased builds.
-The spec checks that its version matches all three extension control files before
-building. Each extension ships only its `0.3.0` installation script; no upgrade
+The spec checks that its version matches all four extension control files before
+building. Each extension ships only its `1.0.0` installation script; no upgrade
 scripts or earlier installable versions are included.
 
 To build without LLVM, pass the same setting to dependency resolution and RPM:
@@ -96,7 +96,7 @@ It neither starts PostgreSQL nor writes into the system installation. The RPM
 has no service-management or database-modifying scriptlets: installation does
 not restart PostgreSQL, enable preloading, or issue `CREATE EXTENSION`.
 
-Release 0.3.0 was validated on AlmaLinux 9 (aarch64) with PGDG PostgreSQL 18.6:
+The 0.3.0 development build was validated on AlmaLinux 9 (aarch64) with PGDG PostgreSQL 18.6:
 both the default LLVM build and the `llvm=0` build produced binary and source RPMs, with all nine
 packaging checks passing in each build. Installing the default RPMs resolved
 `pg_background_18` 2.0.3. A private PostgreSQL cluster with `pgwrh_wait` preloaded
@@ -116,7 +116,7 @@ SQL and library so integration tests use the implementation being developed.
 Preloading `pgwrh_wait` remains an explicit server
 configuration step; it must happen before relying on the wait API.
 
-Release archives must contain `pgwrh/`, `pgwrh_wait/`, and `pgwrh_fdw/`,
+Release archives must contain `pgwrh/`, `pgwrh_ui/`, `pgwrh_wait/`, and `pgwrh_fdw/`,
 together with the root Makefile. Include `test/` to run the verification suites.
 No submodule initialization or separate pgwrh_fdw release download is required.
 Archive a reviewed release commit, including its subtree, rather than assembling
@@ -145,7 +145,7 @@ make test-fdw PG_CONFIG=/path/to/postgresql-18/bin/pg_config
 ```
 
 `test-packaging` requires only Python 3's standard library. It cleans build
-outputs, performs a parallel staged installation, checks all three extensions
+outputs, performs a parallel staged installation, checks all four extensions
 and both libraries, and verifies that uninstall removes the payload while leaving
 unrelated files intact. It also checks each native component independently,
 both SQL-only installation paths, and standalone installation from each extension

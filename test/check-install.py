@@ -44,12 +44,22 @@ def check_install(stage, log, extensions, options):
     for extension in extensions:
         control = (sharedir / (extension + ".control")).read_text()
         version = re.search(r"^default_version\s*=\s*'([^']+)'", control, re.M)[1]
-        assert version == "0.3.0", (extension, version)
+        assert version == "1.0.0", (extension, version)
         sql.add(f"{extension}--{version}.sql")
     assert {p.name for p in sharedir.glob("*.sql")} == sql
 
+    support = sharedir.parent / "pgwrh_ui"
+    if "pgwrh_ui" in extensions:
+        sources = ["README.md", "readonly.sql", "operator.sql", "postgrest.conf",
+                   "vendor/HTMX-LICENSE"]
+        assert {p.name for p in files(support)} == {Path(p).name for p in sources}
+        for source in sources:
+            assert (support / Path(source).name).read_bytes() == (ROOT / "pgwrh_ui" / source).read_bytes()
+    else:
+        assert not files(support), "UI support files installed without pgwrh_ui"
+
     libraries = {p.name for p in libdir.glob("*") if p.suffix in (".so", ".dylib")}
-    expected = set(extensions) - {"pgwrh"}
+    expected = set(extensions) - {"pgwrh", "pgwrh_ui"}
     assert {Path(p).stem for p in libraries} == expected, libraries
 
     # Uninstall must remove exactly the package payload, including LLVM files,
@@ -71,20 +81,20 @@ def main():
         # creates nested bitcode directories. Exercise LLVM with normal RPM
         # staging paths, and test DESTDIR quoting separately without bitcode.
         check_install(directory / "combined-stage", log,
-                      ["pgwrh", "pgwrh_fdw", "pgwrh_wait"], [])
-        check_install(directory / "wait-stage", log, ["pgwrh", "pgwrh_wait"],
+                      ["pgwrh", "pgwrh_ui", "pgwrh_fdw", "pgwrh_wait"], [])
+        check_install(directory / "wait-stage", log, ["pgwrh", "pgwrh_ui", "pgwrh_wait"],
                       ["WITH_FDW=0"])
-        check_install(directory / "fdw-stage", log, ["pgwrh", "pgwrh_fdw"],
+        check_install(directory / "fdw-stage", log, ["pgwrh", "pgwrh_ui", "pgwrh_fdw"],
                       ["WITH_LSN_WAIT=0"])
-        check_install(directory / "sql pgxs stage", log, ["pgwrh"],
+        check_install(directory / "sql pgxs stage", log, ["pgwrh", "pgwrh_ui"],
                       ["WITH_LSN_WAIT=0", "WITH_FDW=0"])
-        check_install(directory / "sql no-pgxs stage", log, ["pgwrh"],
+        check_install(directory / "sql no-pgxs stage", log, ["pgwrh", "pgwrh_ui"],
                       ["NO_PGXS=1"])
-        for extension in ("pgwrh", "pgwrh_wait", "pgwrh_fdw"):
+        for extension in ("pgwrh", "pgwrh_ui", "pgwrh_wait", "pgwrh_fdw"):
             check_install(directory / (extension + "-standalone-stage"), log,
                           [extension], ["-C", str(ROOT / extension)])
         check_install(directory / "combined space stage", log,
-                      ["pgwrh", "pgwrh_fdw", "pgwrh_wait"], ["with_llvm=no"])
+                      ["pgwrh", "pgwrh_ui", "pgwrh_fdw", "pgwrh_wait"], ["with_llvm=no"])
     print("PASS: all packaging modes (no system installation)", flush=True)
 
 

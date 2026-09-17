@@ -14,7 +14,7 @@ The fork is licensed under **AGPL-3.0-only**, with PostgreSQL's original notices
 and permissions preserved. See [LICENSING.md](LICENSING.md).
 
 This component was imported as a Git subtree into pgwrh. Builds, integration,
-and releases are coordinated in the pgwrh repository, with version **0.3.0**
+and releases are coordinated in the pgwrh repository, with version **1.0.0**
 shared by all three extensions. The initial import and its PostgreSQL ancestry
 remain recorded in history. See
 [upstream maintenance](UPSTREAM.md) and [combined packaging](../docs/packaging.md).
@@ -34,8 +34,8 @@ make PG_CONFIG=/path/to/postgresql-18/bin/pg_config install
 
 The install command needs write access to that PostgreSQL installation.
 Builds for other major versions are rejected. Both the SQL extension version
-and the library's module version are `0.3.0`. A fresh `CREATE EXTENSION pgwrh_fdw`
-uses the single `pgwrh_fdw--0.3.0.sql` installation script, including all
+and the library's module version are `1.0.0`. A fresh `CREATE EXTENSION pgwrh_fdw`
+uses the single `pgwrh_fdw--1.0.0.sql` installation script, including all
 connection-management functions and `pgwrh_fdw_set_members(text, text[])`.
 There are no migration or upgrade scripts. Existing experimental installations
 need a planned recreation of the extension and its dependent foreign objects;

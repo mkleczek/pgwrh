@@ -1,0 +1,5 @@
+comment = 'Controller-only management console for pgwrh, served by PostgREST'
+default_version = '1.0.0'
+relocatable = false
+schema = pgwrh_ui
+requires = 'pgwrh'

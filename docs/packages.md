@@ -1,7 +1,12 @@
 # Native PostgreSQL 18 packages
 
-The release build produces one package containing `pgwrh`, `pgwrh_fdw`, and
-`pgwrh_wait`, all at version 0.3.0. Packages install files and dependencies;
+The optional `pgwrh_ui` console is packaged with its assets and deployment
+examples. Enable it only in the controller database with
+`CREATE EXTENSION pgwrh_ui;` and run PostgREST separately. See the
+[UI deployment guide](../pgwrh_ui/README.md) for installed file locations and setup.
+
+The release build produces one package containing `pgwrh`, `pgwrh_ui`, `pgwrh_fdw`, and
+`pgwrh_wait`, all at version 1.0.0. Packages install files and dependencies;
 they do not create extensions, change server configuration, or restart services.
 Only fresh installation is supported.
 
@@ -14,10 +19,10 @@ Then use the package manager so dependencies are resolved automatically:
 
 ```sh
 # Debian/Ubuntu, from the directory containing the downloaded package:
-sudo apt install ./postgresql-18-pgwrh_0.3.0-1+*_*.deb
+sudo apt install ./postgresql-18-pgwrh_1.0.0-1+*_*.deb
 
 # EL9 (RHEL, Rocky Linux, AlmaLinux):
-sudo dnf install ./pgwrh_18-0.3.0-1PGDG.el9."$(uname -m)".rpm
+sudo dnf install ./pgwrh_18-1.0.0-1PGDG.el9."$(uname -m)".rpm
 ```
 
 The RPM's optional `pgwrh_18-llvmjit` package supplies LLVM bitcode. The Debian
@@ -110,7 +115,7 @@ For a native Debian build, copy `packaging/deb/debian` to `debian` in an unpacke
 release archive, install its declared build dependencies using `apt-get build-dep .`,
 then run `dpkg-buildpackage -us -uc -b`. The source uses standard debhelper
 packaging; `packaging/deb/debian/source/format` also supports a `3.0 (quilt)` source
-package when the corresponding `pgwrh_0.3.0.orig.tar.gz` is placed in the parent
+package when the corresponding `pgwrh_1.0.0.orig.tar.gz` is placed in the parent
 directory. See [RPM packaging](packaging.md) for native RPM builds.
 
 Building these artifacts does not publish them to PGDG or any package repository.

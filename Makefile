@@ -30,7 +30,7 @@ WITH_LSN_WAIT ?= 1
 WITH_FDW ?= 1
 endif
 
-EXTENSIONS = pgwrh
+EXTENSIONS = pgwrh pgwrh_ui
 ifeq ($(WITH_LSN_WAIT),1)
 ifdef NO_PGXS
 $(error WITH_LSN_WAIT=1 requires PGXS; omit NO_PGXS)
@@ -74,8 +74,9 @@ prepare:
 	$(MAKE) -C pgwrh $@ PG_CONFIG="$(PG_CONFIG)"
 
 # PostgreSQL 18 can load extension files from a writable staging directory.
-testgres-ext: pgwrh-all $(if $(filter 1,$(WITH_FDW)),pgwrh_fdw-all)
+testgres-ext: pgwrh-all pgwrh_ui-all $(if $(filter 1,$(WITH_FDW)),pgwrh_fdw-all)
 	$(MAKE) -C pgwrh stage PG_CONFIG="$(PG_CONFIG)" STAGE_DIR="$(TESTGRES_EXT_ROOT)"
+	$(MAKE) -C pgwrh_ui stage PG_CONFIG="$(PG_CONFIG)" STAGE_DIR="$(TESTGRES_EXT_ROOT)"
 ifeq ($(WITH_FDW),1)
 	$(MAKE) -C pgwrh_fdw stage PG_CONFIG="$(PG_CONFIG)" STAGE_DIR="$(TESTGRES_EXT_ROOT)"
 endif
@@ -83,6 +84,7 @@ endif
 ifeq ($(WITH_LSN_WAIT),1)
 test-stage: all
 	$(MAKE) -C pgwrh stage PG_CONFIG="$(PG_CONFIG)" STAGE_DIR="$(TEST_STAGE_ROOT)"
+	$(MAKE) -C pgwrh_ui stage PG_CONFIG="$(PG_CONFIG)" STAGE_DIR="$(TEST_STAGE_ROOT)"
 	$(MAKE) -C pgwrh_wait stage PG_CONFIG="$(PG_CONFIG)" STAGE_DIR="$(TEST_STAGE_ROOT)"
 ifeq ($(WITH_FDW),1)
 	$(MAKE) -C pgwrh_fdw stage PG_CONFIG="$(PG_CONFIG)" STAGE_DIR="$(TEST_STAGE_ROOT)"
@@ -97,6 +99,9 @@ endif
 
 test-pgwrh: testgres-ext
 	$(PYTHON) -m pytest test/pgwrh -v
+
+test-ui: testgres-ext
+	$(PYTHON) -m pytest test/pgwrh_ui -v
 
 ifeq ($(WITH_FDW),1)
 test-fdw: pgwrh_fdw-all
@@ -115,5 +120,5 @@ test-packaging:
 	PG_CONFIG="$(PG_CONFIG)" $(PYTHON) test/check-install.py
 
 .PHONY: all install uninstall clean prepare testgres-ext test-stage \
-	test-pgwrh test-wait test-fdw test-fdw-tap test-packaging \
+	test-pgwrh test-ui test-wait test-fdw test-fdw-tap test-packaging \
 	$(ALL_TARGETS) $(INSTALL_TARGETS) $(CLEAN_TARGETS) $(UNINSTALL_TARGETS)
