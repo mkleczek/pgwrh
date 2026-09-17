@@ -18,7 +18,8 @@ done
 apt-get update
 apt-cache policy postgresql-18-pgwrh | tee /tmp/policy
 # APT must see a candidate from the signed local repository.
-grep -Eq 'Candidate: 0\.3\.0-' /tmp/policy
+version=$(cat /VERSION)
+grep -F "Candidate: $version-" /tmp/policy
 rpm --import /repository/pgwrh.asc
 for package in /repository/rpm/el9/*/*.rpm; do
     rpm --checksig "$package" | tee /tmp/signature

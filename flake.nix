@@ -1,13 +1,16 @@
 {
   description = "pgwrh 1.0.0 and PostgreSQL 18 with all required extensions";
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-  outputs = { self, nixpkgs }:
+  # Intel macOS is still supported by the 26.05 Darwin branch.
+  inputs.nixpkgs-intel-darwin.url = "github:NixOS/nixpkgs/nixpkgs-26.05-darwin";
+  outputs = { self, nixpkgs, nixpkgs-intel-darwin }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       packagesFor = system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          source = if system == "x86_64-darwin" then nixpkgs-intel-darwin else nixpkgs;
+          pkgs = import source { inherit system; };
           pgwrh = pkgs.postgresql_18.pkgs.callPackage ./nix/pgwrh.nix { };
           postgresql = pkgs.postgresql_18.withPackages (ps: [ pgwrh ps.pg_background ]);
         in { inherit pkgs pgwrh postgresql; };
