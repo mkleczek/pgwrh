@@ -16,7 +16,9 @@ Setting up and maintaining a highly available cluster of sharded storage servers
 Adding a new replica often requires rebalancing (ie. reorganizing data placement among replicas).
 
 _pgwrh_ minimizes the need to copy data by utilizing _Weighted Randezvous Hashing_ algorithm to distribute shards among replicas.
-Adding replicas never requires moving data between existing ones.
+Within each availability zone, adding a host preserves the relative WRH ranking
+of existing hosts. Changes to AZ shares or the requested copy count can also move
+copies between zones.
 ### Data redundancy
 _pgwrh_ maintains requested level of redundancy of shard data.
 
@@ -26,7 +28,10 @@ Administrator can specify:
 
 So it is possible to implement policies like: _"Shards X, Y, Z should be distributed among 20% of replicas in the cluster, but in no fewer than 2 copies"_.
 ### Availability zones
-Replicas can be assigned to _availability zones_ and _pgwrh_ ensures shard copies are distributed evenly across all of them.
+Replicas can be assigned to _availability zones_. By default, shard copies are
+distributed evenly across them. Versioned [AZ affinity policies](docs/az-affinity.md)
+can prefer particular zones while enforcing a minimum number of copies surviving
+any single AZ failure.
 
 ### Zero downtime reconfiguration of cluster topology
 Changing cluster topology very often requires lengthy process of data copying and indexing.
@@ -49,10 +54,13 @@ behind native partitioned shield views. See [the protocol and tradeoffs](docs/re
 
 ## Ease of deployment and cluster administration
 
+The optional [pgwrh_ui controller console](pgwrh_ui/README.md) provides cluster
+overview, placement previews, rollout diagnostics and replica management through
+external PostgREST and bundled htmx. Install it only in the controller database.
 
 ## SQL API with PostgreSQL 18 extensions
 
-pgwrh's management API is implemented in SQL/PLpgSQL. Version 0.3.0 also requires
+pgwrh's management API is implemented in SQL/PLpgSQL. Version 1.0.0 also requires
 its bundled native `pgwrh_fdw` extension and `pg_background`. The optional
 `pgwrh_wait` API provides replication visibility barriers. See
 [LSN waiting](docs/lsn-wait.md) and the [FDW documentation](pgwrh_fdw/README.md).
@@ -69,8 +77,8 @@ multiple machines by:
 
 # Installation
 
-The complete **0.3.0** bundle targets **PostgreSQL 18**. All three extensions share
-version 0.3.0. This release supports fresh installation only, with no migration
+The complete **1.0.0** bundle targets **PostgreSQL 18**. All four extensions share
+version 1.0.0. This release supports fresh installation only, with no migration
 or upgrade scripts for earlier installations.
 
 | Environment | Installation guide |
@@ -80,17 +88,17 @@ or upgrade scripts for earlier installations.
 | Debian 13, Ubuntu 24.04/26.04 | [DEB packages](docs/packages.md) |
 | Nix or NixOS | [Complete PostgreSQL bundle and NixOS module](docs/nix.md) |
 
-Binary packages and container references become available when the 0.3.0
+Binary packages and container references become available when the 1.0.0
 release workflow publishes them. Before publication, the linked guides describe
-local builds. Every distribution includes `pgwrh`, `pgwrh_fdw`, and `pgwrh_wait`;
+local builds. Every distribution includes `pgwrh`, `pgwrh_ui`, `pgwrh_fdw`, and `pgwrh_wait`;
 packages resolve `pg_background` as a dependency, and the container/Nix bundle
 includes it. Controller and shard connections use the bundled `pgwrh_fdw`;
 PostgreSQL's stock `postgres_fdw` extension is not required.
 
 ## Build from source
 
-Use the 0.3.0 source archive or release tag. A complete build requires PostgreSQL
-18 development files, a C compiler, GNU Make, and the TLS/GSSAPI development
+Use the 1.0.0 source archive or release tag. A complete build requires PostgreSQL
+18 development files, a C compiler, GNU Make, Python 3, and the TLS/GSSAPI development
 libraries used by the selected PostgreSQL installation:
 
 ```sh
@@ -128,6 +136,7 @@ for artifact publication.
 
 ```text
 pgwrh/          SQL extension: control file, SQL sources, and Makefile
+pgwrh_ui/       Optional SQL controller console served by external PostgREST
 pgwrh_wait/     Replication wait extension: control file, SQL, C sources, and Makefile
 pgwrh_fdw/      Foreign data wrapper: sources, control file, SQL, docs, and Makefile
 test/
@@ -146,8 +155,8 @@ docs/           Project documentation
 ```
 
 Run `make` and `make install` from the repository root to build and install all
-three extensions. Each extension can also be built independently with
-`make -C pgwrh`, `make -C pgwrh_wait`, or `make -C pgwrh_fdw`. Build products and
+four extensions. Each extension can also be built independently with
+`make -C pgwrh`, `make -C pgwrh_ui`, `make -C pgwrh_wait`, or `make -C pgwrh_fdw`. Build products and
 staged test extensions live under `.build/`; PGXS object files and libraries
 remain next to their extension sources.
 

@@ -2,8 +2,8 @@
 
 Validated on 2026-09-14, locally on macOS arm64 and in Linux CI.
 
-The records below describe development before the unified 0.3.0 release.
-The current tree ships only `pgwrh_fdw--0.3.0.sql` and no upgrade scripts.
+The records below describe development before the unified 1.0.0 release.
+The current tree ships only `pgwrh_fdw--1.0.0.sql` and no upgrade scripts.
 
 ## Weighted routing and initial connection failover
 

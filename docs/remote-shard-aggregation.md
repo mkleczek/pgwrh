@@ -151,7 +151,7 @@ transactions, concurrent reads, rollback, maximal subtree selection, nested RANG
 LIST and HASH layouts, empty leaves, endpoint failover, restart, credential rotation,
 and generic prepared-query partition pruning through native shields.
 
-Version 0.3.0 is the only installable version of all three bundled extensions.
+Version 1.0.0 is the only installable version of all three bundled extensions.
 Install the release files on every node and initialize a fresh database with
 `CREATE EXTENSION pgwrh CASCADE`. No migration or upgrade scripts are provided.
 Worker execution uses pg_background's cookie-protected v2 API; the integration

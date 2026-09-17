@@ -57,6 +57,8 @@ CREATE TABLE  replication_group_config (
 
     min_replica_count int NOT NULL CHECK ( min_replica_count >= 0 ) DEFAULT 1,
     min_replica_count_per_availability_zone int NOT NULL CHECK ( min_replica_count_per_availability_zone >= 0 ) DEFAULT 1,
+    min_replica_count_after_az_failure int NOT NULL DEFAULT 0
+        CHECK ( min_replica_count_after_az_failure >= 0 ),
 
     PRIMARY KEY (replication_group_id, version)
 );
@@ -186,12 +188,37 @@ CREATE TABLE sharded_table (
     version config_version NOT NULL,
     replication_factor decimal(5, 2) NOT NULL CHECK ( replication_factor BETWEEN 0 AND 100 ),
     sharding_key_expression text NOT NULL DEFAULT 'SELECT $1 || $2',
+    min_replica_count_after_az_failure int
+        CHECK ( min_replica_count_after_az_failure >= 0 ),
 
     PRIMARY KEY (replication_group_id, sharded_table_schema, sharded_table_name, version),
     FOREIGN KEY (replication_group_id, version)
         REFERENCES replication_group_config(replication_group_id, version)
         ON DELETE CASCADE
 );
+
+COMMENT ON COLUMN replication_group_config.min_replica_count_after_az_failure IS
+'Required surviving copies after loss of any single availability zone. Zero adds no failure-survival requirement.';
+COMMENT ON COLUMN sharded_table.min_replica_count_after_az_failure IS
+'NULL inherits the nearest explicitly configured ancestor requirement, then the replication group default.';
+
+CREATE TABLE sharded_table_az_affinity (
+    replication_group_id text NOT NULL,
+    version config_version NOT NULL,
+    sharded_table_schema text NOT NULL,
+    sharded_table_name text NOT NULL,
+    availability_zone text NOT NULL,
+    weight int NOT NULL CHECK (weight > 0),
+
+    PRIMARY KEY (replication_group_id, version, sharded_table_schema, sharded_table_name, availability_zone),
+    FOREIGN KEY (replication_group_id, sharded_table_schema, sharded_table_name, version)
+        REFERENCES sharded_table (replication_group_id, sharded_table_schema, sharded_table_name, version)
+        ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED
+);
+COMMENT ON TABLE sharded_table_az_affinity IS
+'Relative zone preferences inherited independently per zone from the nearest configured ancestor.
+Unspecified weights are one; an explicit weight of one cancels an inherited preference.
+A preference for a zone without eligible hosts does not exclude any other zone.';
 
 CREATE TABLE shard_index_template (
     replication_group_id text NOT NULL,

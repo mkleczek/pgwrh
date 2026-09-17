@@ -3,12 +3,14 @@ on:
   pull_request:
     paths:
       - 'pgwrh/**'
+      - 'pgwrh_ui/**'
       - 'pgwrh_fdw/**'
       - 'pgwrh_wait/**'
       - 'Makefile'
       - 'packaging/**'
       - 'examples/compose/**'
       - 'test/packaging/**'
+      - 'test/check-install.py'
       - '*.nix'
       - 'nix/**'
       - 'flake.lock'

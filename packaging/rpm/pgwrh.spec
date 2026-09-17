@@ -18,9 +18,9 @@
 
 Summary:        Sharding and replica read consistency for PostgreSQL
 Name:           %{sname}_%{pgmajorversion}
-Version:        0.3.0
+Version:        1.0.0
 Release:        1PGDG%{?dist}
-License:        AGPL-3.0-or-later AND AGPL-3.0-only AND PostgreSQL
+License:        AGPL-3.0-or-later AND AGPL-3.0-only AND PostgreSQL AND 0BSD
 URL:            https://github.com/mkleczek/%{sname}
 Source0:        https://github.com/mkleczek/%{sname}/archive/refs/tags/v%{version}.tar.gz#/%{sname}-%{version}.tar.gz
 
@@ -39,7 +39,8 @@ BuildRequires:  openssl-devel
 
 %description
 pgwrh distributes PostgreSQL shards across logical replicas using weighted
-rendezvous hashing. This package includes the pgwrh SQL extension, pgwrh_wait
+rendezvous hashing. This package includes the pgwrh SQL extension, pgwrh_ui
+for a controller console served by external PostgREST, pgwrh_wait
 for replication visibility barriers, and pgwrh_fdw for virtual foreign servers
 and propagation of transaction settings.
 
@@ -75,7 +76,7 @@ just-in-time compiler.
 %prep
 %setup -q -n %{sname}-%{version}
 # A release archive must contain the matching extension and bundled sources.
-for extension in pgwrh pgwrh_wait pgwrh_fdw; do
+for extension in pgwrh pgwrh_ui pgwrh_wait pgwrh_fdw; do
     grep -Eq "^default_version[[:space:]]*=[[:space:]]*'%{version}'" "$extension/$extension.control"
 done
 
@@ -107,6 +108,9 @@ PATH=%{pginstdir}/bin:$PATH %{__make} test-packaging \
 %doc %{pginstdir}/doc/extension/README-pgwrh_fdw.md
 %{pginstdir}/share/extension/pgwrh.control
 %{pginstdir}/share/extension/pgwrh--%{version}.sql
+%{pginstdir}/share/extension/pgwrh_ui.control
+%{pginstdir}/share/extension/pgwrh_ui--%{version}.sql
+%{pginstdir}/share/pgwrh_ui/
 %{pginstdir}/share/extension/pgwrh_wait.control
 %{pginstdir}/share/extension/pgwrh_wait--%{version}.sql
 %{pginstdir}/share/extension/pgwrh_fdw.control
@@ -123,6 +127,11 @@ PATH=%{pginstdir}/bin:$PATH %{__make} test-packaging \
 %endif
 
 %changelog
+* Thu Sep 17 2026 Michal Kleczek <michal@kleczek.org> - 1.0.0-1PGDG
+- Prepare the 1.0.0 release of all four PostgreSQL 18 extensions.
+- Include the controller UI, bundled assets, and deployment examples.
+- Keep fresh-installation-only packaging with no upgrade scripts.
+
 * Wed Sep 16 2026 Michal Kleczek <michal@kleczek.org> - 0.3.0-1PGDG
 - Package the bundled pgwrh, pgwrh_wait, and pgwrh_fdw extensions for PostgreSQL 18.
 - Split LLVM bitcode into a matching llvmjit subpackage.

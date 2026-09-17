@@ -1,7 +1,12 @@
 # Containers and the local demonstration cluster
 
-The image contains PostgreSQL 18, `pg_background`, and all three
-pgwrh extensions at version 0.3.0. It enables logical replication and preloads
+The optional `pgwrh_ui` console is packaged with its assets and deployment
+examples. Enable it only in the controller database with
+`CREATE EXTENSION pgwrh_ui;` and run PostgREST separately. See the
+[UI deployment guide](../pgwrh_ui/README.md) for installed file locations and setup.
+
+The image contains PostgreSQL 18, `pg_background`, and all four
+pgwrh extensions at version 1.0.0. It enables logical replication and preloads
 `pgwrh_wait`. During initialization of an empty volume it runs
 `CREATE EXTENSION pgwrh CASCADE` and `CREATE EXTENSION pgwrh_wait` in `POSTGRES_DB`,
 enabling the core with its dependencies and the independent wait API.
@@ -9,7 +14,7 @@ Existing volumes are not initialized again.
 
 ## Try sharding locally
 
-Download and unpack the 0.3.0 source archive, then:
+Download and unpack the 1.0.0 source archive, then:
 
 ```sh
 cd examples/compose
@@ -42,14 +47,14 @@ and start fresh, use `docker compose down -v`.
 From the repository root:
 
 ```sh
-docker build -f packaging/container/Dockerfile -t pgwrh:0.3.0-local .
-PGWRH_IMAGE=pgwrh:0.3.0-local docker compose -f examples/compose/compose.yaml up -d
-PGWRH_IMAGE=pgwrh:0.3.0-local docker compose -f examples/compose/compose.yaml logs -f setup
+docker build -f packaging/container/Dockerfile -t pgwrh:1.0.0-local .
+PGWRH_IMAGE=pgwrh:1.0.0-local docker compose -f examples/compose/compose.yaml up -d
+PGWRH_IMAGE=pgwrh:1.0.0-local docker compose -f examples/compose/compose.yaml logs -f setup
 ```
 
 The build tests the installed extensions in a temporary database before producing
 an image. `PGWRH_IMAGE` also permits using an immutable image digest. The default
-`ghcr.io/mkleczek/pgwrh:0.3.0-pg18` reference becomes available when the release
+`ghcr.io/mkleczek/pgwrh:1.0.0-pg18` reference becomes available when the release
 workflow publishes it; a local build is required before then.
 
 The image follows the [official PostgreSQL image](https://hub.docker.com/_/postgres)

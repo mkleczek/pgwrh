@@ -1,4 +1,4 @@
-# Publishing 0.3.0
+# Publishing 1.0.0
 
 The release pipeline builds the same reviewed source archive for every target:
 
@@ -9,9 +9,13 @@ The release pipeline builds the same reviewed source archive for every target:
 
 Every native package is installed in a clean runtime container. Tests first create
 `pgwrh_wait` alone and exercise its API without any other extension dependencies.
-They then explicitly create `pgwrh CASCADE`, verify version 0.3.0 and absence of
-upgrade paths for each of `pgwrh`, `pgwrh_fdw`, and `pgwrh_wait`, and call both
-native libraries. They verify that the controller uses `pgwrh_fdw` and that
+They then explicitly create `pgwrh CASCADE`, verify version 1.0.0 and absence of
+upgrade paths for each of `pgwrh`, `pgwrh_ui`, `pgwrh_fdw`, and `pgwrh_wait`, and call both
+native libraries. They render the UI and check its embedded htmx, JavaScript,
+and CSS assets. Staged installation tests verify the packaged UI setup guide,
+role scripts, PostgREST configuration, and htmx license. The UI remains an
+optional controller-only extension; packages do not start PostgREST.
+They verify that the controller uses `pgwrh_fdw` and that
 `postgres_fdw` is not enabled. They also check both installation orders and
 confirm that dropping `pgwrh` leaves the wait API usable. The container additionally runs the
 three-node Compose example and repeats setup to check reuse. The repository test
@@ -24,7 +28,8 @@ build and test only. Before tagging, run `python3 packaging/check-release.py`.
 The check requires VERSION, extension controls, installation scripts, Nix, RPM,
 DEB, container metadata and Compose references to agree. It also verifies that
 the core declares its dependencies and that `pgwrh_wait` and `pgwrh_fdw` declare
-none. No 0.2.2 release or migration/upgrade scripts are produced.
+none. It also verifies the UI dependency on `pgwrh` and its deployment files.
+No 0.2.2 release or migration/upgrade scripts are produced.
 
 ## One-time repository configuration
 
@@ -42,14 +47,14 @@ apply normally. Building or merging the packaging changes does not publish them.
 
 ## Release
 
-Create `v0.3.0` from the reviewed commit and publish its GitHub release. The
+Create `v1.0.0` from the reviewed commit and publish its GitHub release. The
 `release: published` event runs the complete validation matrix. Only after all
 checks pass does it sign and publish:
 
 - Source tarball, DEBs, signed RPMs, public signing key, and signed SHA256SUMS
   attached to the release. Complete build outputs, including SRPMs and debug
   artifacts, are also retained as workflow artifacts.
-- The tested images under `ghcr.io/mkleczek/pgwrh:0.3.0-pg18`, with a combined
+- The tested images under `ghcr.io/mkleczek/pgwrh:1.0.0-pg18`, with a combined
   AMD64/ARM64 manifest and individual architecture tags. No image is rebuilt
   between the demo test and publication.
 - Signed APT and YUM repositories to GitHub Pages. A repository archive is also
@@ -57,7 +62,7 @@ checks pass does it sign and publish:
 
 The workflow does not upload packages to the upstream PGDG repositories.
 Their acceptance is a separate process. Each repository publication currently
-contains this release only, matching the single-version 0.3.0 policy. Before a
+contains this release only, matching the single-version 1.0.0 policy. Before a
 future release, decide how to retain older packages and update the SQL-version
 policy. Base OS package repositories are resolved at build time; `.buildinfo`
 files record DEB build dependencies, and the Nix dependency graph is locked.
@@ -77,6 +82,10 @@ static host. It contains `apt/dists`, `apt/pool`, `rpm/el9`, and `pgwrh.asc`.
 The builder never uploads anything and does not alter input packages.
 
 ## Validation performed while preparing this packaging
+
+The results below were recorded with the 0.3.0 development version before
+the 1.0.0 version bump. The release workflow must validate the 1.0.0 artifacts
+before publication.
 
 On 2026-09-17, installed-extension checks passed for Nix on macOS ARM64 and Linux
 ARM64, DEBs on Ubuntu 24.04 (AMD64 and ARM64), Ubuntu 26.04 and Debian 13 (ARM64),

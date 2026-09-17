@@ -58,7 +58,7 @@
 
 PG_MODULE_MAGIC_EXT(
 					.name = "pgwrh_fdw",
-					.version = "0.3.0"
+					.version = "1.0.0"
 );
 
 /* Default CPU cost to start up a foreign query. */

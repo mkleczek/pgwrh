@@ -9,6 +9,7 @@ SELECT pg_catalog.pg_extension_config_dump('replication_group_member', '');
 SELECT pg_catalog.pg_extension_config_dump('shard_host', '');
 SELECT pg_catalog.pg_extension_config_dump('shard_host_weight', '');
 SELECT pg_catalog.pg_extension_config_dump('sharded_table', '');
+SELECT pg_catalog.pg_extension_config_dump('sharded_table_az_affinity', '');
 SELECT pg_catalog.pg_extension_config_dump('shard_index_template', '');
 SELECT pg_catalog.pg_extension_config_dump('shard', '');
 SELECT pg_catalog.pg_extension_config_dump('shard_assigned_host', '');
