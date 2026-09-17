@@ -1,0 +1,18 @@
+#!/usr/bin/make -f
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+PG_CONFIG = /usr/lib/postgresql/18/bin/pg_config
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	dh_auto_build -- PG_CONFIG=$(PG_CONFIG) with_llvm=no
+
+override_dh_auto_test:
+	$(MAKE) test-packaging PG_CONFIG=$(PG_CONFIG) with_llvm=no
+
+override_dh_auto_install:
+	dh_auto_install --destdir=debian/tmp -- PG_CONFIG=$(PG_CONFIG) with_llvm=no
+
+override_dh_auto_clean:
+	$(MAKE) clean PG_CONFIG=$(PG_CONFIG) with_llvm=no

@@ -1,0 +1,8 @@
+usr/lib/postgresql/18/lib/pgwrh_fdw.so
+usr/lib/postgresql/18/lib/pgwrh_wait.so
+usr/share/postgresql/18/extension/pgwrh.control
+usr/share/postgresql/18/extension/pgwrh--0.3.0.sql
+usr/share/postgresql/18/extension/pgwrh_fdw.control
+usr/share/postgresql/18/extension/pgwrh_fdw--0.3.0.sql
+usr/share/postgresql/18/extension/pgwrh_wait.control
+usr/share/postgresql/18/extension/pgwrh_wait--0.3.0.sql
