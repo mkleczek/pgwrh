@@ -1,0 +1,36 @@
+name: Core, wait and UI integration tests
+on:
+  workflow_call:
+    inputs:
+      source_artifact:
+        type: string
+        default: ''
+        required: false
+permissions:
+  contents: read
+jobs:
+  functional:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        if: inputs.source_artifact == ''
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        if: inputs.source_artifact != ''
+        with:
+          name: ${{ inputs.source_artifact }}
+          path: release-source
+      - name: Unpack the reviewed release source
+        if: inputs.source_artifact != ''
+        run: tar -xzf release-source/*.tar.gz --strip-components=1
+      - uses: cachix/install-nix-action@v31
+      - name: Test core, replication waits and the real PostgREST UI
+        run: nix develop .#tests --command bash test/run-functional.sh
+      - name: Preserve integration test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: functional-test-results
+          path: .build/test-results/

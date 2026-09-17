@@ -9,14 +9,13 @@ on:
       - 'Makefile'
       - 'packaging/**'
       - 'examples/compose/**'
-      - 'test/packaging/**'
-      - 'test/check-install.py'
+      - 'test/**'
       - '*.nix'
       - 'nix/**'
       - 'flake.lock'
       - 'VERSION'
       - '.dockerignore'
-      - '.github/workflows/release.yml'
+      - '.github/workflows/**'
   workflow_dispatch:
   release:
     types: [published]
@@ -47,6 +46,18 @@ jobs:
           name: source
           path: dist/*
           if-no-files-found: error
+
+  functional:
+    needs: source
+    uses: ./.github/workflows/functional.yml
+    with:
+      source_artifact: source
+
+  fdw:
+    needs: source
+    uses: ./.github/workflows/fdw.yml
+    with:
+      source_artifact: source
 
   native:
     needs: source
@@ -164,7 +175,7 @@ jobs:
 
   publish:
     if: github.event_name == 'release'
-    needs: [source, native, container, nix, repository-test]
+    needs: [source, functional, fdw, native, container, nix, repository-test]
     runs-on: ubuntu-24.04
     environment: release
     permissions:
