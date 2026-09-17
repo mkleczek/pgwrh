@@ -7,7 +7,7 @@ postgresqlBuildExtension {
   src = lib.fileset.toSource {
     root = ../.;
     fileset = lib.fileset.intersection
-      (lib.fileset.unions [ ../Makefile ../LICENSE ../pgwrh ../pgwrh_fdw ../pgwrh_wait ])
+      (lib.fileset.unions [ ../Makefile ../LICENSE ../pgwrh ../pgwrh_ui ../pgwrh_fdw ../pgwrh_wait ])
       (lib.fileset.fileFilter
         (file: !(lib.any file.hasExt [ "o" "so" "dylib" "bc" ]) && file.name != ".DS_Store")
         ../.);

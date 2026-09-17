@@ -16,7 +16,9 @@ Setting up and maintaining a highly available cluster of sharded storage servers
 Adding a new replica often requires rebalancing (ie. reorganizing data placement among replicas).
 
 _pgwrh_ minimizes the need to copy data by utilizing _Weighted Randezvous Hashing_ algorithm to distribute shards among replicas.
-Adding replicas never requires moving data between existing ones.
+Within each availability zone, adding a host preserves the relative WRH ranking
+of existing hosts. Changes to AZ shares or the requested copy count can also move
+copies between zones.
 ### Data redundancy
 _pgwrh_ maintains requested level of redundancy of shard data.
 
@@ -26,7 +28,10 @@ Administrator can specify:
 
 So it is possible to implement policies like: _"Shards X, Y, Z should be distributed among 20% of replicas in the cluster, but in no fewer than 2 copies"_.
 ### Availability zones
-Replicas can be assigned to _availability zones_ and _pgwrh_ ensures shard copies are distributed evenly across all of them.
+Replicas can be assigned to _availability zones_. By default, shard copies are
+distributed evenly across them. Versioned [AZ affinity policies](docs/az-affinity.md)
+can prefer particular zones while enforcing a minimum number of copies surviving
+any single AZ failure.
 
 ### Zero downtime reconfiguration of cluster topology
 Changing cluster topology very often requires lengthy process of data copying and indexing.
