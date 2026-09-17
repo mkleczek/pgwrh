@@ -10,7 +10,7 @@ RUN make -j2 PG_CONFIG=/usr/lib/postgresql/18/bin/pg_config with_llvm=no \
     && make install PG_CONFIG=/usr/lib/postgresql/18/bin/pg_config with_llvm=no DESTDIR=/stage
 FROM ${POSTGRES_IMAGE} AS runtime
 LABEL org.opencontainers.image.source="https://github.com/mkleczek/pgwrh" \
-      org.opencontainers.image.version="1.0.0" \
+      org.opencontainers.image.version="1.0.0-alpha1" \
       org.opencontainers.image.description="PostgreSQL 18 with pgwrh, pgwrh_ui, pgwrh_fdw, pgwrh_wait and pg_background"
 RUN apt-get update && apt-get install -y --no-install-recommends postgresql-18-pg-background \
     && rm -rf /var/lib/apt/lists/*

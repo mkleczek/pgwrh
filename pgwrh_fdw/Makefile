@@ -18,7 +18,7 @@ PG_CPPFLAGS = -I$(libpq_srcdir)
 SHLIB_LINK_INTERNAL = $(libpq)
 
 EXTENSION = pgwrh_fdw
-DATA = pgwrh_fdw--1.0.0.sql
+DATA = pgwrh_fdw--1.0.0-alpha1.sql
 
 PG_CONFIG ?= pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)

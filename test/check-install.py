@@ -44,7 +44,7 @@ def check_install(stage, log, extensions, options):
     for extension in extensions:
         control = (sharedir / (extension + ".control")).read_text()
         version = re.search(r"^default_version\s*=\s*'([^']+)'", control, re.M)[1]
-        assert version == "1.0.0", (extension, version)
+        assert version == "1.0.0-alpha1", (extension, version)
         sql.add(f"{extension}--{version}.sql")
     assert {p.name for p in sharedir.glob("*.sql")} == sql
 

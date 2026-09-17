@@ -1,4 +1,5 @@
 %global sname pgwrh
+%global upstream_version 1.0.0-alpha1
 
 # PGDG's build system supplies these macros; defaults also allow local builds.
 %{!?pgmajorversion:%global pgmajorversion 18}
@@ -18,11 +19,11 @@
 
 Summary:        Sharding and replica read consistency for PostgreSQL
 Name:           %{sname}_%{pgmajorversion}
-Version:        1.0.0
+Version:        1.0.0~alpha1
 Release:        1PGDG%{?dist}
 License:        AGPL-3.0-or-later AND AGPL-3.0-only AND PostgreSQL AND 0BSD
 URL:            https://github.com/mkleczek/%{sname}
-Source0:        https://github.com/mkleczek/%{sname}/archive/refs/tags/v%{version}.tar.gz#/%{sname}-%{version}.tar.gz
+Source0:        https://github.com/mkleczek/%{sname}/archive/refs/tags/v%{upstream_version}.tar.gz#/%{sname}-%{upstream_version}.tar.gz
 
 BuildRequires:  gcc make python3
 BuildRequires:  postgresql%{pgmajorversion}-devel
@@ -74,10 +75,10 @@ just-in-time compiler.
 %endif
 
 %prep
-%setup -q -n %{sname}-%{version}
+%setup -q -n %{sname}-%{upstream_version}
 # A release archive must contain the matching extension and bundled sources.
 for extension in pgwrh pgwrh_ui pgwrh_wait pgwrh_fdw; do
-    grep -Eq "^default_version[[:space:]]*=[[:space:]]*'%{version}'" "$extension/$extension.control"
+    grep -Eq "^default_version[[:space:]]*=[[:space:]]*'%{upstream_version}'" "$extension/$extension.control"
 done
 
 %build
@@ -107,14 +108,14 @@ PATH=%{pginstdir}/bin:$PATH %{__make} test-packaging \
 %doc %{pginstdir}/doc/extension/README-pgwrh_wait.md
 %doc %{pginstdir}/doc/extension/README-pgwrh_fdw.md
 %{pginstdir}/share/extension/pgwrh.control
-%{pginstdir}/share/extension/pgwrh--%{version}.sql
+%{pginstdir}/share/extension/pgwrh--%{upstream_version}.sql
 %{pginstdir}/share/extension/pgwrh_ui.control
-%{pginstdir}/share/extension/pgwrh_ui--%{version}.sql
+%{pginstdir}/share/extension/pgwrh_ui--%{upstream_version}.sql
 %{pginstdir}/share/pgwrh_ui/
 %{pginstdir}/share/extension/pgwrh_wait.control
-%{pginstdir}/share/extension/pgwrh_wait--%{version}.sql
+%{pginstdir}/share/extension/pgwrh_wait--%{upstream_version}.sql
 %{pginstdir}/share/extension/pgwrh_fdw.control
-%{pginstdir}/share/extension/pgwrh_fdw--%{version}.sql
+%{pginstdir}/share/extension/pgwrh_fdw--%{upstream_version}.sql
 %{pginstdir}/lib/pgwrh_wait.so
 %{pginstdir}/lib/pgwrh_fdw.so
 
@@ -127,8 +128,8 @@ PATH=%{pginstdir}/bin:$PATH %{__make} test-packaging \
 %endif
 
 %changelog
-* Thu Sep 17 2026 Michal Kleczek <michal@kleczek.org> - 1.0.0-1PGDG
-- Prepare the 1.0.0 release of all four PostgreSQL 18 extensions.
+* Sun Sep 20 2026 Michal Kleczek <michal@kleczek.org> - 1.0.0~alpha1-1PGDG
+- Prepare the 1.0.0-alpha1 release of all four PostgreSQL 18 extensions.
 - Include the controller UI, bundled assets, and deployment examples.
 - Keep fresh-installation-only packaging with no upgrade scripts.
 

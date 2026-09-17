@@ -1,7 +1,27 @@
-# Publishing 1.0.0
+# Publishing 1.0.0-alpha1
 
 This guide is for release maintainers. For installation, see the
 [project guide](../README.md#installation).
+
+Alpha1 is a testing prerelease. Preparation and validation are safe to run
+before publication; creating the tag, preparing a GitHub draft and publishing
+are separate, deliberate steps below.
+
+## Version and distribution policy
+
+`VERSION`, extension versions and the future Git tag use `1.0.0-alpha1` (tag
+`v1.0.0-alpha1`). Native package metadata uses `1.0.0~alpha1`, which sorts before
+stable `1.0.0`. The release tooling accepts `X.Y.Z` and the prerelease forms
+`X.Y.Z-alphaN`, `X.Y.Z-betaN` and `X.Y.Z-rcN`, with positive sequence numbers.
+
+Alpha releases must be marked **Pre-release** on GitHub. Draft creation sets
+this automatically and excludes them from **Latest**; publication rejects a
+prerelease flag that disagrees with `VERSION`. Alpha publication distributes
+versioned images, downloadable packages and a signed repository archive. Only
+stable releases deploy the APT/YUM repository on GitHub Pages, so existing
+repository users do not opt into an alpha automatically.
+
+## Release validation
 
 The release pipeline builds the same reviewed source archive for every target:
 
@@ -12,7 +32,7 @@ The release pipeline builds the same reviewed source archive for every target:
 
 Every native package is installed in a clean runtime container. Tests first create
 `pgwrh_wait` alone and exercise its API without any other extension dependencies.
-They then explicitly create `pgwrh CASCADE`, verify version 1.0.0 and absence of
+They then explicitly create `pgwrh CASCADE`, verify version 1.0.0-alpha1 and absence of
 upgrade paths for each of `pgwrh`, `pgwrh_ui`, `pgwrh_fdw`, and `pgwrh_wait`, and call both
 native libraries. They render the UI and check its embedded htmx, JavaScript,
 and CSS assets. Staged installation tests verify the packaged UI setup guide,
@@ -35,7 +55,7 @@ The check requires VERSION, extension controls, installation scripts, Nix, RPM,
 DEB, container metadata and Compose references to agree. It also verifies that
 the core declares its dependencies and that `pgwrh_wait` and `pgwrh_fdw` declare
 none. It also verifies the UI dependency on `pgwrh` and its deployment files.
-Only fresh 1.0.0 installation scripts are produced; no earlier release or
+Only fresh 1.0.0-alpha1 installation scripts are produced; no earlier release or
 migration/upgrade scripts are included.
 
 ## One-time repository configuration
@@ -54,14 +74,15 @@ apply normally. Building or merging the packaging changes does not publish them.
 
 ## Prepare a draft before publishing
 
-1. Review [the 1.0.0 release notes](releases/1.0.0.md) and a successful validation
+1. Review [the 1.0.0-alpha1 release notes](releases/1.0.0-alpha1.md) and a successful validation
    run on the intended commit. Keep the version tag fixed once artifacts are built.
-2. Create and push `v1.0.0` at that commit. This alone does not publish anything.
+2. Create and push `v1.0.0-alpha1` at that commit. This alone does not publish anything.
 3. Run **Release packages** on that tag with **prepare_draft** checked. The workflow
    rejects branch runs in this mode, runs every test and build, signs repositories
    and checksums, verifies the checksums/signature, and attaches artifacts to a
-   **draft** GitHub release using the checked-in release notes. An existing public
-   release is rejected. The `release` environment and its signing key are required.
+   **draft prerelease** on GitHub using the checked-in release notes. An existing
+   public release or a draft with the wrong prerelease status is rejected. The
+   `release` environment and its signing key are required.
 4. Download the draft source, packages and repository archive. Verify
    `SHA256SUMS.asc` using the independently confirmed signing fingerprint, then
    run `sha256sum --check SHA256SUMS`. Inspect package names, architectures, the
@@ -74,16 +95,18 @@ package discovery against `VERSION`, and verifies RPM and YUM signatures.
 
 ## Publish
 
-Publish the reviewed draft through GitHub. The `release: published` event reruns
+Keep **Pre-release** checked and **Set as the latest release** unchecked when
+publishing the reviewed alpha draft through GitHub. The `release: published` event reruns
 all validation and builds before signing and uploading the following:
 
 - Source tarball, DEBs, signed RPMs, public signing key and signed SHA256SUMS.
   Complete outputs, including SRPMs and debug artifacts, remain workflow artifacts.
-- Tested images at `ghcr.io/mkleczek/pgwrh:1.0.0-pg18`, with a combined AMD64/ARM64
+- Tested images at `ghcr.io/mkleczek/pgwrh:1.0.0-alpha1-pg18`, with a combined AMD64/ARM64
   manifest and individual architecture tags. No image is rebuilt between its
   quickstart test and publication within that run.
-- Signed APT and YUM repositories on GitHub Pages, plus a repository archive
-  attached to the release for alternative static hosting.
+- A signed APT/YUM repository archive attached to the release for separate
+  static hosting. Alpha publication leaves the stable GitHub Pages repository
+  untouched; stable releases also deploy their repository there.
 
 The public run rebuilds artifacts from the same tag; it does not promote the
 exact draft bytes. Base OS repositories are resolved at build time, so bytes
@@ -102,12 +125,22 @@ On a Linux host with Python 3, `apt-ftparchive` (apt-utils), RPM/rpmsign,
 
 ```sh
 python3 packaging/repository/build.py downloaded-artifacts public-repository \
-  --key FULL_SIGNING_KEY_FINGERPRINT
+  --version "$(cat VERSION)" --key FULL_SIGNING_KEY_FINGERPRINT
 ```
 
 The output directory must not already exist. Upload its contents to an HTTPS
 static host. It contains `apt/dists`, `apt/pool`, `rpm/el9`, and `pgwrh.asc`.
 The builder never uploads anything and does not alter input packages.
+
+## Request upstream PGDG packaging
+
+Once alpha1 is published and its native builds have passed, a packaging request
+can point maintainers to the immutable tag, source archive, license, dependency
+list, DEB recipe and RPM spec. State clearly that this is an opt-in testing
+prerelease and that database upgrades are not yet supported. Acceptance and
+repository placement are decisions for the PGDG maintainers; the project
+release does not depend on that process. Keep using the project's release assets
+for field testing while the request is reviewed.
 
 ## Validation evidence
 

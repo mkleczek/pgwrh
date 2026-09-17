@@ -63,7 +63,7 @@ partition DDL.
 A hierarchy change is not atomic across the cluster. During convergence, an old
 remote route can reference a parent whose contents have already changed on
 another replica. Partition keys and column definitions must remain compatible;
-version 1.0.0 does not coordinate general schema changes.
+version 1.0.0-alpha1 does not coordinate general schema changes.
 
 ## Limits
 

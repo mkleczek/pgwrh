@@ -70,12 +70,17 @@ For a native Debian build, copy `packaging/deb/debian` to `debian` in an
 unpacked release archive, install its declared build dependencies using `apt-get
 build-dep .`, then run `dpkg-buildpackage -us -uc -b`. The source uses standard
 debhelper packaging; `packaging/deb/debian/source/format` also supports a `3.0
-(quilt)` source package when the corresponding `pgwrh_1.0.0.orig.tar.gz` is
+(quilt)` source package when the corresponding `pgwrh_1.0.0~alpha1.orig.tar.gz` is
 placed in the parent directory. See [RPM integration](#pgdg-rpm-integration) for
 native RPM builds.
 
 Building these artifacts does not publish them to PGDG or any package
 repository.
+
+For prereleases, upstream tags and SQL scripts use `1.0.0-alpha1`, while DEB and
+RPM versions use `1.0.0~alpha1` to sort before final `1.0.0`. The RPM spec's
+`upstream_version` macro keeps source and SQL filenames separate from its
+package `Version`. The release checker verifies both representations.
 
 ## PGDG RPM integration
 
@@ -125,14 +130,14 @@ sudo dnf builddep --define 'pgmajorversion 18' packaging/rpm/pgwrh.spec
 ```
 
 The source archive must include the reorganized extension directories and
-`test/check-install.py`. `Source0` names the eventual `v1.0.0` release archive;
+`test/check-install.py`. `Source0` names the eventual `v1.0.0-alpha1` release archive;
 that tag has not been published as part of this change. To build a development
 snapshot, export the desired commit with the release-compatible archive prefix:
 
 ```sh
 mkdir -p "$HOME/rpmbuild/SOURCES"
-git archive --format=tar.gz --prefix=pgwrh-1.0.0/ \
-  --output="$HOME/rpmbuild/SOURCES/pgwrh-1.0.0.tar.gz" HEAD
+git archive --format=tar.gz --prefix=pgwrh-1.0.0-alpha1/ \
+  --output="$HOME/rpmbuild/SOURCES/pgwrh-1.0.0-alpha1.tar.gz" HEAD
 rpmbuild -ba --define 'pgmajorversion 18' packaging/rpm/pgwrh.spec
 ```
 
@@ -140,7 +145,7 @@ With Jujutsu, replace `HEAD` with the commit ID of the intended change, obtained
 using `jj log -r @ --no-graph -T commit_id`; Git's `HEAD` may point at its
 parent. Use a distinct snapshot release number when distributing unreleased
 builds. The spec checks that its version matches all four extension control
-files before building. Each extension ships only its `1.0.0` installation
+files before building. Each extension ships only its `1.0.0-alpha1` installation
 script; no upgrade scripts or earlier installable versions are included.
 
 To build without LLVM, pass the same setting to dependency resolution and RPM:

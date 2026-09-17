@@ -15,9 +15,14 @@ subscription has applied changes through a specified **log sequence number
 Start with the [local quickstart](#quickstart), then read [cluster concepts and
 rollouts](docs/overview.md).
 
+**1.0.0-alpha1 is a testing prerelease.** Try it with disposable or recoverable
+data and share feedback before 1.0.0. APIs and configuration may change, and an
+in-place upgrade to later releases is not promised. See the [alpha release
+notes](docs/releases/1.0.0-alpha1.md) for limitations and useful test scenarios.
+
 ## Components
 
-The pgwrh 1.0.0 distribution contains four PostgreSQL 18 extensions:
+The pgwrh 1.0.0-alpha1 distribution contains four PostgreSQL 18 extensions:
 
 | Extension | Purpose | Where to enable it |
 | --- | --- | --- |
@@ -48,12 +53,12 @@ distributes four example shards, and verifies that both replicas return the same
 100 rows. When it prints **Quickstart verified**, open [the
 console](http://localhost:13000/rpc/index?group_id=demo).
 
-The default image is `ghcr.io/mkleczek/pgwrh:1.0.0-pg18`. If it has not yet been
+The default image is `ghcr.io/mkleczek/pgwrh:1.0.0-alpha1-pg18`. If it has not yet been
 published, build and select a local image first:
 
 ```sh
-docker build -f packaging/container/Dockerfile -t pgwrh:1.0.0-local .
-PGWRH_IMAGE=pgwrh:1.0.0-local bash examples/compose/quickstart.sh
+docker build -f packaging/container/Dockerfile -t pgwrh:1.0.0-alpha1-local .
+PGWRH_IMAGE=pgwrh:1.0.0-alpha1-local bash examples/compose/quickstart.sh
 ```
 
 The demo uses fixed local credentials and loopback ports. See [the container
@@ -85,8 +90,8 @@ backups or a PostgreSQL high-availability plan.
 
 ## Installation
 
-The **1.0.0** bundle targets **PostgreSQL 18**. All four extensions share version
-1.0.0. This release supports fresh installation only; it includes no upgrade
+The **1.0.0-alpha1** bundle targets **PostgreSQL 18**. All four extensions share version
+1.0.0-alpha1. This release supports fresh installation only; it includes no upgrade
 scripts for earlier installations.
 
 | Environment | Guide |
@@ -120,10 +125,10 @@ Writes go to the controller. Use [replication visibility
 barriers](docs/lsn-wait.md) when a read must observe a known write. Queries
 spanning replicas do not have a single cluster-wide snapshot.
 
-Schema changes require operator coordination; version 1.0.0 has no coordinated
+Schema changes require operator coordination; version 1.0.0-alpha1 has no coordinated
 schema-change rollout facility. Placement rollouts do not make schema changes
 atomic across the cluster. Read the [recovery guide](docs/recovery.md) before
-deploying and the [release notes](docs/releases/1.0.0.md) for supported targets
+deploying and the [release notes](docs/releases/1.0.0-alpha1.md) for supported targets
 and limits.
 
 For source layout, tests and implementation details, see the [contributor

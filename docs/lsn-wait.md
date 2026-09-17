@@ -43,7 +43,7 @@ wait, call `pgwrh.applied_lsn(subscription_name)` in a separate health-check
 transaction. PostgreSQL accepts unknown custom settings, so a successful `SET`
 alone cannot confirm that the wait extension is available.
 
-Version 1.0.0 supports fresh installation only. Dropping the extension removes
+Version 1.0.0-alpha1 supports fresh installation only. Dropping the extension removes
 its SQL API; removing it from `shared_preload_libraries` requires a server
 restart.
 

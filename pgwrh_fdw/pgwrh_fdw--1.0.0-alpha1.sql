@@ -1,5 +1,5 @@
 /*
- * pgwrh_fdw 1.0.0 installation script.
+ * pgwrh_fdw 1.0.0-alpha1 installation script.
  * Derived from PostgreSQL's postgres_fdw installation and upgrade scripts.
  * Upstream permissions: COPYRIGHT. Fork modifications: AGPL-3.0-only, LICENSE.
  */
