@@ -20,7 +20,7 @@ Summary:        Sharding and replica read consistency for PostgreSQL
 Name:           %{sname}_%{pgmajorversion}
 Version:        0.3.0
 Release:        1PGDG%{?dist}
-License:        AGPL-3.0-or-later AND AGPL-3.0-only AND PostgreSQL
+License:        AGPL-3.0-or-later AND AGPL-3.0-only AND PostgreSQL AND 0BSD
 URL:            https://github.com/mkleczek/%{sname}
 Source0:        https://github.com/mkleczek/%{sname}/archive/refs/tags/v%{version}.tar.gz#/%{sname}-%{version}.tar.gz
 
@@ -75,7 +75,7 @@ just-in-time compiler.
 %prep
 %setup -q -n %{sname}-%{version}
 # A release archive must contain the matching extension and bundled sources.
-for extension in pgwrh pgwrh_wait pgwrh_fdw; do
+for extension in pgwrh pgwrh_ui pgwrh_wait pgwrh_fdw; do
     grep -Eq "^default_version[[:space:]]*=[[:space:]]*'%{version}'" "$extension/$extension.control"
 done
 
@@ -107,6 +107,8 @@ PATH=%{pginstdir}/bin:$PATH %{__make} test-packaging \
 %doc %{pginstdir}/doc/extension/README-pgwrh_fdw.md
 %{pginstdir}/share/extension/pgwrh.control
 %{pginstdir}/share/extension/pgwrh--%{version}.sql
+%{pginstdir}/share/extension/pgwrh_ui.control
+%{pginstdir}/share/extension/pgwrh_ui--%{version}.sql
 %{pginstdir}/share/extension/pgwrh_wait.control
 %{pginstdir}/share/extension/pgwrh_wait--%{version}.sql
 %{pginstdir}/share/extension/pgwrh_fdw.control
