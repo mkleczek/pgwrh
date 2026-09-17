@@ -23,7 +23,7 @@ postgresqlBuildExtension {
   meta = {
     description = "Sharding and replica read consistency for PostgreSQL 18";
     homepage = "https://github.com/mkleczek/pgwrh";
-    license = [ lib.licenses.agpl3Plus lib.licenses.agpl3Only lib.licenses.postgresql ];
+    license = [ lib.licenses.agpl3Plus lib.licenses.agpl3Only lib.licenses.postgresql lib.licenses.bsd0 ];
     platforms = postgresql.meta.platforms;
   };
 }
