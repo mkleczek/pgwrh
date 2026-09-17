@@ -24,6 +24,8 @@ ROOT = Path(__file__).resolve().parents[2]
 def serve(node, tmp_path, role='pgwrh_ui_viewer'):
     binary = os.environ.get('POSTGREST_BIN') or shutil.which('postgrest')
     if not binary:
+        if os.environ.get('PGWRH_REQUIRE_HTTP') == '1':
+            pytest.fail('PostgREST is required for release validation')
         pytest.skip('Set POSTGREST_BIN to run the PostgREST integration tests')
     with socket.socket() as listener:
         listener.bind(('127.0.0.1', 0))

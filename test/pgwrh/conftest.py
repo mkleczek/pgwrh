@@ -85,6 +85,9 @@ def postgres_node_factory():
             node = get_new_node(name, bin_dir=os.environ.get(POSTGRES_BIN_DIR_ENV))
             stack.enter_context(node)
             node.init(allow_logical=True)
+            # Distribution builds may default to /run/postgresql, which is not
+            # writable by the unprivileged test runner.
+            node.append_conf("unix_socket_directories = " + _quote_conf_value(node.base_dir))
             for line in POSTGRES_CONF:
                 node.append_conf(line)
             extension_paths = _extension_paths()
