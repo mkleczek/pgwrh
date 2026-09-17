@@ -75,7 +75,7 @@ per-connection propagation flag can become stale after rollback.
 
 ## Upstream strategy
 
-pgwrh_fdw shares SQL extension and module version `1.0.0` with the pgwrh release.
+pgwrh_fdw shares SQL extension and module version `1.0.0-alpha1` with the pgwrh release.
 This is the only installable version, with no upgrade scripts.
 The initial SQL install script directly defines the final upstream function
 signatures rather than replaying postgres_fdw's historical upgrades. The C

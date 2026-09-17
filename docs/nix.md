@@ -1,7 +1,7 @@
 # Nix and NixOS
 
 The default Nix package provides PostgreSQL 18, all four [pgwrh
-extensions](../README.md#components) at version 1.0.0, and their `pg_background`
+extensions](../README.md#components) at version 1.0.0-alpha1, and their `pg_background`
 dependency. Nix must have flakes enabled.
 
 From a release checkout:
@@ -18,7 +18,7 @@ environment.
 For NixOS, add the release as an input to the system flake:
 
 ```nix
-inputs.pgwrh.url = "github:mkleczek/pgwrh/v1.0.0";
+inputs.pgwrh.url = "github:mkleczek/pgwrh/v1.0.0-alpha1";
 ```
 
 Import `inputs.pgwrh.nixosModules.default` into the host modules and set

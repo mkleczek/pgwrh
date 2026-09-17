@@ -1,7 +1,7 @@
 # Containers and the local demonstration cluster
 
 The image includes PostgreSQL 18, the four [pgwrh
-extensions](../README.md#components) at version 1.0.0, and their `pg_background`
+extensions](../README.md#components) at version 1.0.0-alpha1, and their `pg_background`
 dependency. It configures logical replication and preloads `pgwrh_wait`.
 
 When initializing an empty volume, it enables `pgwrh` with its dependencies and
@@ -13,7 +13,7 @@ replicas.
 ## Try sharding locally
 
 Install Docker with Compose and curl. From a repository checkout or unpacked
-1.0.0 source archive, run the command below. If the release image has not yet
+1.0.0-alpha1 source archive, run the command below. If the release image has not yet
 been published, [build a local image](#build-a-local-image) first.
 
 ```sh
@@ -54,12 +54,12 @@ reconciliation. To delete the demo data and start fresh, use `docker compose
 From the repository root:
 
 ```sh
-docker build -f packaging/container/Dockerfile -t pgwrh:1.0.0-local .
-PGWRH_IMAGE=pgwrh:1.0.0-local bash examples/compose/quickstart.sh
+docker build -f packaging/container/Dockerfile -t pgwrh:1.0.0-alpha1-local .
+PGWRH_IMAGE=pgwrh:1.0.0-alpha1-local bash examples/compose/quickstart.sh
 ```
 
 `PGWRH_IMAGE` also accepts an immutable image digest. The default
-`ghcr.io/mkleczek/pgwrh:1.0.0-pg18` reference becomes available when the release
+`ghcr.io/mkleczek/pgwrh:1.0.0-alpha1-pg18` reference becomes available when the release
 workflow publishes it; use the local build before then.
 
 The image follows the [official PostgreSQL

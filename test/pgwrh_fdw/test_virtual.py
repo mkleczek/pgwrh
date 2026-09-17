@@ -410,7 +410,7 @@ class VirtualServerTests(unittest.TestCase):
         self.admin.sql("CREATE DATABASE " + database)
         with self.cluster.connect(database) as c:
             c.sql("""CREATE SCHEMA fdw_api;
-                     CREATE EXTENSION pgwrh_fdw WITH SCHEMA fdw_api VERSION '1.0.0';
+                     CREATE EXTENSION pgwrh_fdw WITH SCHEMA fdw_api VERSION '1.0.0-alpha1';
                      CREATE SERVER target FOREIGN DATA WRAPPER pgwrh_fdw;
                      CREATE SERVER route FOREIGN DATA WRAPPER pgwrh_fdw OPTIONS (members 'target');
                      CREATE USER MAPPING FOR PUBLIC SERVER route;
@@ -418,7 +418,7 @@ class VirtualServerTests(unittest.TestCase):
             before = c.sql("SELECT 'shard'::regclass::oid, ftserver FROM pg_foreign_table")
             self.assertIsNotNone(c.scalar("SELECT to_regprocedure('fdw_api.pgwrh_fdw_set_members(text,text[])')"))
             c.sql("SELECT fdw_api.pgwrh_fdw_set_members('route', ARRAY['target'])")
-            self.assertEqual(c.scalar("SELECT extversion FROM pg_extension WHERE extname = 'pgwrh_fdw'"), "1.0.0")
+            self.assertEqual(c.scalar("SELECT extversion FROM pg_extension WHERE extname = 'pgwrh_fdw'"), "1.0.0-alpha1")
             self.assertEqual(c.sql("SELECT 'shard'::regclass::oid, ftserver FROM pg_foreign_table"), before)
 
     def test_actual_mapping_and_context(self):

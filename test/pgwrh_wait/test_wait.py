@@ -10,7 +10,7 @@ from helpers import apply_blocked, barrier, block_apply, reader, token, waiting
 def test_release_has_only_fresh_installation_version(nodes):
     node = nodes("release")
     node.execute("CREATE EXTENSION pgwrh CASCADE")
-    expected = [("pgwrh", "1.0.0"), ("pgwrh_fdw", "1.0.0"), ("pgwrh_wait", "1.0.0")]
+    expected = [("pgwrh", "1.0.0-alpha1"), ("pgwrh_fdw", "1.0.0-alpha1"), ("pgwrh_wait", "1.0.0-alpha1")]
     assert node.execute("""SELECT extname, extversion FROM pg_extension
         WHERE extname IN ('pgwrh', 'pgwrh_fdw', 'pgwrh_wait')
         ORDER BY extname""") == expected

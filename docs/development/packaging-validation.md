@@ -1,8 +1,31 @@
 # Historical packaging validation
 
-The results below were recorded with the 0.3.0 development version before
-the 1.0.0 version bump. The release workflow must validate the 1.0.0 artifacts
-before publication.
+These local checks are development evidence. The release workflow must validate
+the exact release commit across its complete matrix before publication.
+
+## Alpha1 preparation, 2026-09-20
+
+The following checks passed with the `1.0.0-alpha1` extension versions and
+`1.0.0~alpha1` native package metadata:
+
+- Five release-metadata tests, including invalid versions, tag mismatches,
+  GitHub prerelease status and workflow output. Workflow actionlint also passed.
+- All 11 staged installation/uninstallation modes on macOS ARM64, including
+  the UI payload and installation without PL/Python.
+- Nix package build and installed-extension checks on macOS ARM64.
+- Ubuntu 24.04 ARM64 DEB and EL9 ARM64 RPM builds, including the RPM LLVM
+  companion, followed by installed-extension and embedded UI asset checks.
+- Signed APT discovery and RPM/YUM signatures using a disposable test key.
+  Both package managers ordered the alpha before final `1.0.0`.
+- ARM64 container installation checks, fresh Compose initialization, repeated
+  setup, replica result equality, and the read-only PostgREST console and assets.
+
+No tag, GitHub draft, public release, container publication or Pages deployment
+was created by these checks. The full functional suites and remaining native
+architectures/distributions still require the release workflow; these local
+results do not claim that matrix has run for alpha1.
+
+## Earlier 0.3.0 development validation
 
 On 2026-09-17, installed-extension checks passed for Nix on macOS ARM64 and Linux
 ARM64, DEBs on Ubuntu 24.04 (AMD64 and ARM64), Ubuntu 26.04 and Debian 13 (ARM64),

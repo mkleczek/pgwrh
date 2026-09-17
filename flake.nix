@@ -1,5 +1,5 @@
 {
-  description = "pgwrh 1.0.0 and PostgreSQL 18 with all required extensions";
+  description = "pgwrh 1.0.0-alpha1 and PostgreSQL 18 with all required extensions";
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   # Intel macOS is still supported by the 26.05 Darwin branch.
   inputs.nixpkgs-intel-darwin.url = "github:NixOS/nixpkgs/nixpkgs-26.05-darwin";
@@ -29,7 +29,7 @@
         }; });
       checks = forAllSystems (system:
         let p = packagesFor system;
-        in { installed = p.pkgs.runCommand "pgwrh-installed-1.0.0" {
+        in { installed = p.pkgs.runCommand "pgwrh-installed-1.0.0-alpha1" {
           nativeBuildInputs = [ p.postgresql ];
         } ''
           bash ${./test/packaging/installed.sh} ${./test/packaging/installed.sql}

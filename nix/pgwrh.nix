@@ -3,7 +3,7 @@
 assert lib.versions.major postgresql.version == "18";
 postgresqlBuildExtension {
   pname = "pgwrh";
-  version = "1.0.0";
+  version = "1.0.0-alpha1";
   src = lib.fileset.toSource {
     root = ../.;
     fileset = lib.fileset.intersection

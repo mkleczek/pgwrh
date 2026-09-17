@@ -1,7 +1,7 @@
 EXTENSION = pgwrh_ui
 .DEFAULT_GOAL := all
 .DELETE_ON_ERROR:
-EXTVERSION = 1.0.0
+EXTVERSION = 1.0.0-alpha1
 BUILD = ../.build/pgwrh_ui
 DATA_built = $(BUILD)/$(EXTENSION)--$(EXTVERSION).sql
 EXTRA_CLEAN = $(BUILD)

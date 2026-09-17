@@ -1,12 +1,12 @@
 name: pgwrh-demo
 x-postgres: &postgres
-  image: ${PGWRH_IMAGE:-ghcr.io/mkleczek/pgwrh:1.0.0-pg18}
+  image: ${PGWRH_IMAGE:-ghcr.io/mkleczek/pgwrh:1.0.0-alpha1-pg18}
   environment:
     POSTGRES_USER: postgres
     POSTGRES_PASSWORD: pgwrh-local-demo
     POSTGRES_DB: pgwrh_demo
   healthcheck:
-    test: ["CMD-SHELL", "pg_isready -U postgres -d pgwrh_demo && psql -U postgres -d pgwrh_demo -Atqc \"SELECT count(*) FROM pg_extension WHERE extname IN ('pgwrh', 'pgwrh_fdw', 'pgwrh_wait') AND extversion='1.0.0'\" | grep -qx 3"]
+    test: ["CMD-SHELL", "pg_isready -U postgres -d pgwrh_demo && psql -U postgres -d pgwrh_demo -Atqc \"SELECT count(*) FROM pg_extension WHERE extname IN ('pgwrh', 'pgwrh_fdw', 'pgwrh_wait') AND extversion='1.0.0-alpha1'\" | grep -qx 3"]
     interval: 2s
     timeout: 5s
     retries: 60
@@ -26,7 +26,7 @@ services:
     ports: ["127.0.0.1:${PGWRH_REPLICA2_PORT:-15434}:5432"]
     volumes: ["replica2:/var/lib/postgresql"]
   setup:
-    image: ${PGWRH_IMAGE:-ghcr.io/mkleczek/pgwrh:1.0.0-pg18}
+    image: ${PGWRH_IMAGE:-ghcr.io/mkleczek/pgwrh:1.0.0-alpha1-pg18}
     entrypoint: ["bash", "/demo/bootstrap.sh"]
     environment:
       PGUSER: postgres
@@ -40,7 +40,7 @@ services:
       replica2: {condition: service_healthy}
   ui-setup:
     profiles: [ui]
-    image: ${PGWRH_IMAGE:-ghcr.io/mkleczek/pgwrh:1.0.0-pg18}
+    image: ${PGWRH_IMAGE:-ghcr.io/mkleczek/pgwrh:1.0.0-alpha1-pg18}
     entrypoint: ["bash", "/demo/ui-setup.sh"]
     environment:
       PGHOST: controller

@@ -15,7 +15,7 @@ The extension is based on PostgreSQL's `postgres_fdw`. Without the
 wrapper's query, connection and transaction behavior. Both wrappers can be
 enabled in the same database.
 
-Version **1.0.0** is shared by all four extensions in the pgwrh distribution.
+Version **1.0.0-alpha1** is shared by all four extensions in the pgwrh distribution.
 The fork is licensed under **AGPL-3.0-only**, with PostgreSQL's original notices
 preserved. See [LICENSING.md](LICENSING.md).
 
@@ -33,7 +33,7 @@ make -C pgwrh_fdw PG_CONFIG=/path/to/postgresql-18/bin/pg_config install
 ```
 
 The install command needs write access to that PostgreSQL installation. Only
-PostgreSQL 18 is supported. Version 1.0.0 supports fresh installation; there are
+PostgreSQL 18 is supported. Version 1.0.0-alpha1 supports fresh installation; there are
 no migration or upgrade scripts. Existing experimental installations need a
 planned recreation of the extension and dependent foreign objects. Installing
 new files alone does not update extensions already enabled in a database.
@@ -178,7 +178,7 @@ This propagates transaction context; it does not interpret LSNs, inspect
 subscriptions, wait for replication, establish a global snapshot, or implement
 distributed atomic commit. Different remote participants retain upstream FDW
 snapshot semantics. Arbitrary later GUC synchronization, remote changes made by
-user code, and parallel-worker context transfer are outside version 1.0.0.
+user code, and parallel-worker context transfer are outside version 1.0.0-alpha1.
 Upstream `postgres_fdw` does not provide parallel-aware foreign scans; async
 execution is supported and tested. Compatibility with other PostgreSQL major
 versions or untested minors is not claimed.

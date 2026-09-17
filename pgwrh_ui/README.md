@@ -42,7 +42,7 @@ queries already using the host.
 
 ## Install
 
-Requirements: PostgreSQL 18 with pgwrh 1.0.0, and PostgREST with custom media
+Requirements: PostgreSQL 18 with pgwrh 1.0.0-alpha1, and PostgREST with custom media
 handler support. The Compose example pins PostgREST 14.16. The console does not
 require the optional `pgwrh_wait` extension.
 

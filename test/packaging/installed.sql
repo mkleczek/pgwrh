@@ -27,9 +27,9 @@ BEGIN
         WHERE s.srvname = 'replica_controller'),
         'The controller connection must use the bundled FDW';
     FOREACH extension_name IN ARRAY ARRAY['pgwrh', 'pgwrh_ui', 'pgwrh_fdw', 'pgwrh_wait'] LOOP
-        ASSERT (SELECT extversion = '1.0.0' FROM pg_extension WHERE extname = extension_name),
+        ASSERT (SELECT extversion = '1.0.0-alpha1' FROM pg_extension WHERE extname = extension_name),
             'Installed extension version differs from the release';
-        ASSERT (SELECT array_agg(version ORDER BY version) = ARRAY['1.0.0']
+        ASSERT (SELECT array_agg(version ORDER BY version) = ARRAY['1.0.0-alpha1']
             FROM pg_available_extension_versions WHERE name = extension_name),
             'Unexpected historical installation scripts';
         ASSERT NOT EXISTS (SELECT FROM pg_extension_update_paths(extension_name) WHERE path IS NOT NULL),

@@ -4,7 +4,7 @@ The [controller](overview.md#controller-replicas-and-shards) holds source data
 and cluster configuration. Back up its application data and pgwrh metadata
 together. Replicas are derived copies; they do not replace a controller backup.
 Keep PostgreSQL configuration, credentials, TLS files, role definitions and the
-matching 1.0.0 extension packages alongside your database recovery plan.
+matching 1.0.0-alpha1 extension packages alongside your database recovery plan.
 
 ## Before an incident
 
@@ -41,7 +41,7 @@ replica daemons, and prevent clients or replicas from connecting to the new
 host. Never run two writable controllers for the same cluster. Keep the restored
 controller isolated until recovery checks and replica rebuilding are complete.
 
-1. Install PostgreSQL 18 and the same pgwrh 1.0.0 extension files and dependencies.
+1. Install PostgreSQL 18 and the same pgwrh 1.0.0-alpha1 extension files and dependencies.
    Apply the [server settings](packages.md), including wait preloading if used.
 2. Inspect `roles.sql`. Remove only the `CREATE ROLE` statement for a bootstrap
    administrator that already exists on the destination; retain its applicable
