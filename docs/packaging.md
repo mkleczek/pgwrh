@@ -7,8 +7,12 @@ and any native sources. All tests live under `test/`. Building from a release
 archive never fetches Git history or other dependencies.
 
 The combined build currently requires PostgreSQL 18 development files, PGXS,
-libpq, a C compiler, GNU Make, Python 3, and the standard text utilities used to assemble
+libpq, a C compiler, GNU Make, a POSIX shell, `sha384sum` (coreutils) or `shasum`,
+and the standard text utilities used to assemble
 the pgwrh SQL script. Select one PostgreSQL installation for all components:
+
+Python 3 is needed by the packaging checks and integration tests, including the
+RPM/DEB test phases. It is not needed to build `pgwrh_ui` or embed its assets.
 
 ```sh
 make -j4 PG_CONFIG=/usr/pgsql-18/bin/pg_config

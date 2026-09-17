@@ -18,13 +18,16 @@ optional controller-only extension; packages do not start PostgREST.
 They verify that the controller uses `pgwrh_fdw` and that
 `postgres_fdw` is not enabled. They also check both installation orders and
 confirm that dropping `pgwrh` leaves the wait API usable. The container additionally runs the
-three-node Compose example and repeats setup to check reuse. The repository test
+documented Compose quickstart with the read-only PostgREST console and repeats setup to check reuse.
+The release is also gated on the complete core, wait, and UI suites, including
+real PostgREST HTTP tests with no skips, plus FDW regressions and upstream SCRAM
+TAP tests. These run against the same source archive used by every build. The repository test
 uses an ephemeral key to check APT indexes, RPM signatures, and YUM metadata.
 
 ## Validate without publishing
 
 Open a pull request or manually run **Release packages** in Actions. These events
-build and test only. Before tagging, run `python3 packaging/check-release.py`.
+build and test only when **prepare_draft** is left unchecked. Before tagging, run `python3 packaging/check-release.py`.
 The check requires VERSION, extension controls, installation scripts, Nix, RPM,
 DEB, container metadata and Compose references to agree. It also verifies that
 the core declares its dependencies and that `pgwrh_wait` and `pgwrh_fdw` declare
@@ -45,27 +48,48 @@ No 0.2.2 release or migration/upgrade scripts are produced.
 GitHub environment protection rules, if configured by the repository owner,
 apply normally. Building or merging the packaging changes does not publish them.
 
-## Release
+## Prepare a draft before publishing
 
-Create `v1.0.0` from the reviewed commit and publish its GitHub release. The
-`release: published` event runs the complete validation matrix. Only after all
-checks pass does it sign and publish:
+1. Review [the 1.0.0 release notes](releases/1.0.0.md) and a successful validation
+   run on the intended commit. Keep the version tag fixed once artifacts are built.
+2. Create and push `v1.0.0` at that commit. This alone does not publish anything.
+3. Run **Release packages** on that tag with **prepare_draft** checked. The workflow
+   rejects branch runs in this mode, runs every test and build, signs repositories
+   and checksums, verifies the checksums/signature, and attaches artifacts to a
+   **draft** GitHub release using the checked-in release notes. An existing public
+   release is rejected. The `release` environment and its signing key are required.
+4. Download the draft source, packages and repository archive. Verify
+   `SHA256SUMS.asc` using the independently confirmed signing fingerprint, then
+   run `sha256sum --check SHA256SUMS`. Inspect package names, architectures, the
+   release notes and the complete Actions results. Images from this run remain
+   workflow artifacts; GHCR and Pages are untouched.
 
-- Source tarball, DEBs, signed RPMs, public signing key, and signed SHA256SUMS
-  attached to the release. Complete build outputs, including SRPMs and debug
-  artifacts, are also retained as workflow artifacts.
-- The tested images under `ghcr.io/mkleczek/pgwrh:1.0.0-pg18`, with a combined
-  AMD64/ARM64 manifest and individual architecture tags. No image is rebuilt
-  between the demo test and publication.
-- Signed APT and YUM repositories to GitHub Pages. A repository archive is also
+Manual validation with **prepare_draft** unchecked needs no production signing
+key. The repository smoke test uses a disposable signing key, checks signed APT
+package discovery against `VERSION`, and verifies RPM and YUM signatures.
+
+## Publish
+
+Publish the reviewed draft through GitHub. The `release: published` event reruns
+all validation and builds before signing and uploading the following:
+
+- Source tarball, DEBs, signed RPMs, public signing key and signed SHA256SUMS.
+  Complete outputs, including SRPMs and debug artifacts, remain workflow artifacts.
+- Tested images at `ghcr.io/mkleczek/pgwrh:1.0.0-pg18`, with a combined AMD64/ARM64
+  manifest and individual architecture tags. No image is rebuilt between its
+  quickstart test and publication within that run.
+- Signed APT and YUM repositories on GitHub Pages, plus a repository archive
   attached to the release for alternative static hosting.
 
-The workflow does not upload packages to the upstream PGDG repositories.
-Their acceptance is a separate process. Each repository publication currently
-contains this release only, matching the single-version 1.0.0 policy. Before a
-future release, decide how to retain older packages and update the SQL-version
-policy. Base OS package repositories are resolved at build time; `.buildinfo`
-files record DEB build dependencies, and the Nix dependency graph is locked.
+The public run rebuilds artifacts from the same tag; it does not promote the
+exact draft bytes. Base OS repositories are resolved at build time, so bytes
+may differ. The public run replaces draft attachments with the artifacts it
+actually tested. A failed run leaves the GitHub release visible, but blocks
+artifact publication until checks pass; inspect Actions before announcing it.
+
+The workflow does not upload packages to upstream PGDG. Each repository
+publication currently contains this release only. DEB `.buildinfo` files record
+build dependencies, and the Nix dependency graph is locked.
 
 ## Build a signed repository elsewhere
 
@@ -81,33 +105,9 @@ The output directory must not already exist. Upload its contents to an HTTPS
 static host. It contains `apt/dists`, `apt/pool`, `rpm/el9`, and `pgwrh.asc`.
 The builder never uploads anything and does not alter input packages.
 
-## Validation performed while preparing this packaging
+## Validation evidence
 
-The results below were recorded with the 0.3.0 development version before
-the 1.0.0 version bump. The release workflow must validate the 1.0.0 artifacts
-before publication.
-
-On 2026-09-17, installed-extension checks passed for Nix on macOS ARM64 and Linux
-ARM64, DEBs on Ubuntu 24.04 (AMD64 and ARM64), Ubuntu 26.04 and Debian 13 (ARM64),
-and EL9 RPMs on ARM64 (with LLVM) and AMD64 (without LLVM). The NixOS module was
-also evaluated for an x86_64 Linux host. The ARM64 Compose image passed fresh
-initialization and repeated setup, with identical row counts, sums, and content
-checksums on both replicas. Signed APT discovery and RPM/YUM signature checks
-passed with an ephemeral test key. Workflow syntax and shell steps passed actionlint.
-
-Standalone wait installation, both installation orders, and continued wait API
-operation after removing the core passed on macOS ARM64 Nix, the ARM64 container,
-Ubuntu 24.04 ARM64 DEBs, and EL9 ARM64 RPMs with LLVM. The 51-test wait suite
-passed, as did the explicit core/wait coexistence reinstallation check and fresh
-Compose setup. The release guard rejected an injected dependency on `pgwrh`.
-
-All 54 core tests passed with controller and shard connections using `pgwrh_fdw`
-and no `postgres_fdw` extension installed. The macOS ARM64 Nix check and EL9
-ARM64 RPM build with LLVM passed with the reduced dependency set; the built
-RPM's metadata no longer requires `postgresql18-contrib`.
-
-The local emulated x86_64 LLVM 21 linker segfaulted on a trivial standalone input
-as well as during RPM bitcode indexing. Its native x86_64 CI validation remains
-required; the release workflow uses native runners and does not bypass this
-check. The remaining architectures in the matrix are likewise validated by CI
-before publication. These local results do not imply that a release was published.
+Use the successful **Release packages** run for the exact release commit as the
+release record. Local checks and earlier runs do not replace the native matrix.
+[Historical packaging results](development/packaging-validation.md) are retained
+as development notes, separate from the release procedure.

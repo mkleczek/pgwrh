@@ -17,6 +17,11 @@ on:
       - '.dockerignore'
       - '.github/workflows/**'
   workflow_dispatch:
+    inputs:
+      prepare_draft:
+        description: Sign artifacts and attach them to a draft release (run on the version tag)
+        type: boolean
+        default: false
   release:
     types: [published]
 permissions:
@@ -36,7 +41,12 @@ jobs:
       - id: version
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
+          PREPARE_DRAFT: ${{ inputs.prepare_draft }}
         run: |
+          if [ "$PREPARE_DRAFT" = true ]; then
+            test "$GITHUB_REF_TYPE" = tag
+            RELEASE_TAG=$GITHUB_REF_NAME
+          fi
           version=$(python3 packaging/check-release.py --tag "$RELEASE_TAG")
           echo "version=$version" >> "$GITHUB_OUTPUT"
           mkdir dist
@@ -134,10 +144,10 @@ jobs:
         working-directory: src/examples/compose
         run: docker compose down -v
       - name: Save the tested image
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || inputs.prepare_draft
         run: docker save "$PGWRH_IMAGE" | gzip > image-${{ matrix.arch }}.tar.gz
       - uses: actions/upload-artifact@v4
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || inputs.prepare_draft
         with:
           name: image-${{ matrix.arch }}
           path: image-${{ matrix.arch }}.tar.gz
@@ -174,7 +184,7 @@ jobs:
           docker run --rm -v "$PWD/artifacts:/artifacts:ro" pgwrh-repository-test
 
   publish:
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' || inputs.prepare_draft
     needs: [source, functional, fdw, native, container, nix, repository-test]
     runs-on: ubuntu-24.04
     environment: release
@@ -215,12 +225,28 @@ jobs:
           cd dist
           sha256sum ./* > SHA256SUMS
           gpg --batch --yes --local-user "$SIGNING_FINGERPRINT" --armor --detach-sign SHA256SUMS
+          gpg --verify SHA256SUMS.asc SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - name: Create or check the draft release
+        if: inputs.prepare_draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "v$VERSION" --json isDraft > release.json; then
+            test "$(jq -r .isDraft release.json)" = true
+          else
+            gh release create "v$VERSION" --verify-tag --draft --title "pgwrh $VERSION" \
+              --notes-file "src/docs/releases/$VERSION.md"
+          fi
       - uses: docker/login-action@v3
+        if: github.event_name == 'release'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish the tested images and multi-architecture tag
+        if: github.event_name == 'release'
         env:
           REPOSITORY: ${{ github.repository }}
         run: |
@@ -238,6 +264,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: gh release upload "v$VERSION" dist/* --clobber
       - uses: actions/upload-pages-artifact@v3
+        if: github.event_name == 'release'
         with: {path: repository}
       - name: Remove the temporary signing key
         if: always()
