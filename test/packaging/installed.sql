@@ -13,6 +13,7 @@ SELECT pgwrh.applied_lsn('packaging_probe');
 
 -- Install the core after the wait API, reusing the pgwrh schema.
 CREATE EXTENSION pgwrh CASCADE;
+CREATE EXTENSION pgwrh_ui;
 DO $$
 DECLARE
     extension_name text;
@@ -25,7 +26,7 @@ BEGIN
         JOIN pg_foreign_data_wrapper f ON f.oid = s.srvfdw
         WHERE s.srvname = 'replica_controller'),
         'The controller connection must use the bundled FDW';
-    FOREACH extension_name IN ARRAY ARRAY['pgwrh', 'pgwrh_fdw', 'pgwrh_wait'] LOOP
+    FOREACH extension_name IN ARRAY ARRAY['pgwrh', 'pgwrh_ui', 'pgwrh_fdw', 'pgwrh_wait'] LOOP
         ASSERT (SELECT extversion = '0.3.0' FROM pg_extension WHERE extname = extension_name),
             'Installed extension version differs from the release';
         ASSERT (SELECT array_agg(version ORDER BY version) = ARRAY['0.3.0']
