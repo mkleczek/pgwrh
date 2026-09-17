@@ -50,19 +50,12 @@ behind native partitioned shield views. See [the protocol and tradeoffs](docs/re
 ## Ease of deployment and cluster administration
 
 
-## Pure SQL/PGSQL
-This makes it easy to use _pgwrh_ in cloud environments that limit possibilities of custom extension installation.
+## SQL API with PostgreSQL 18 extensions
 
-An optional PostgreSQL 18 C component, `pgwrh_wait`, monitors committed logical
-apply progress and provides waits for read-your-writes barriers. See
-[LSN waiting](docs/lsn-wait.md) for installation, snapshot requirements, and
-the limits of the guarantee. The bundled `pgwrh_fdw` extension propagates selected
-transaction settings to foreign servers; see [the FDW documentation](pgwrh_fdw/README.md).
-Use `WITH_LSN_WAIT=0 WITH_FDW=0` when building SQL-only pgwrh.
-
-***
-_Caveat_ at the moment _pgwrh_ requires _pg_background_ to operate as it needs a way to execute SQL commands
-outside current transaction (_CREATE/ALTER SUBSCRIPTION_ must not be executed in transaction).
+pgwrh's management API is implemented in SQL/PLpgSQL. Version 0.3.0 also requires
+its bundled native `pgwrh_fdw` extension and `pg_background`. The optional
+`pgwrh_wait` API provides replication visibility barriers. See
+[LSN waiting](docs/lsn-wait.md) and the [FDW documentation](pgwrh_fdw/README.md).
 
 ## Based on built-in PostgreSQL facilities - no need for custom query parser/planner
 Contrary to other PostgreSQL sharding solutions that implement a query parser and interpreter to direct queries to
@@ -76,41 +69,60 @@ multiple machines by:
 
 # Installation
 
-## Prerequisites
+The complete **0.3.0** bundle targets **PostgreSQL 18**. All three extensions share
+version 0.3.0. This release supports fresh installation only, with no migration
+or upgrade scripts for earlier installations.
 
-| Name | Version |
-| :---- | :---: |
-| PostgreSQL | 16+ |
-| pg_background | 1.6+ with the cookie-protected v2 API |
+| Environment | Installation guide |
+| --- | --- |
+| Local trial on Linux, macOS or Windows with Docker | [Ready-to-run Compose cluster](docs/containers.md) |
+| RHEL/Rocky/AlmaLinux 9 | [RPM packages](docs/packages.md) |
+| Debian 13, Ubuntu 24.04/26.04 | [DEB packages](docs/packages.md) |
+| Nix or NixOS | [Complete PostgreSQL bundle and NixOS module](docs/nix.md) |
 
-The only version shipped is **0.3.0**, shared by `pgwrh`, `pgwrh_wait`, and
-`pgwrh_fdw`. This release supports fresh installation only; it contains no
-migration or upgrade scripts for existing installations.
+Binary packages and container references become available when the 0.3.0
+release workflow publishes them. Before publication, the linked guides describe
+local builds. Every distribution includes `pgwrh`, `pgwrh_fdw`, and `pgwrh_wait`;
+packages resolve `pg_background` as a dependency, and the container/Nix bundle
+includes it. Controller and shard connections use the bundled `pgwrh_fdw`;
+PostgreSQL's stock `postgres_fdw` extension is not required.
 
-## Extension installation
+## Build from source
 
-Clone the Git repository.
+Use the 0.3.0 source archive or release tag. A complete build requires PostgreSQL
+18 development files, a C compiler, GNU Make, and the TLS/GSSAPI development
+libraries used by the selected PostgreSQL installation:
+
 ```sh
-git clone https://github.com/mkleczek/pgwrh.git
+make -j4 PG_CONFIG=/path/to/postgresql18/bin/pg_config
+sudo make install PG_CONFIG=/path/to/postgresql18/bin/pg_config
 ```
-Install the extension.
+
+Install `pg_background` with the cookie-protected v2 API (1.6 or newer).
+Append `pgwrh_wait` to `shared_preload_libraries`, preserving existing entries,
+and restart PostgreSQL before using the wait API. As a database administrator:
+
+```sql
+CREATE EXTENSION pgwrh CASCADE;
+CREATE EXTENSION pgwrh_wait;
+```
+
+The second command enables the optional wait API. `pgwrh_wait` can also be used
+independently with built-in logical replication; it does not require `pgwrh`,
+`pgwrh_fdw`, or `pg_background` to be enabled in the database.
+
+The [native package guide](docs/packages.md) covers logical replication settings
+and database activation. To diagnose the selected database from this checkout:
+
 ```sh
-cd pgwrh
-make install
+psql -X -d your_database -f docs/check-installation.sql
 ```
-The default build includes `pgwrh`, `pgwrh_wait`, and `pgwrh_fdw` and requires
-PostgreSQL 18 development files. The FDW sources are included in this repository
-and release archives; no separate checkout or download is needed to build them.
-On PostgreSQL 16/17 or for SQL-only pgwrh, run
-`make WITH_LSN_WAIT=0 WITH_FDW=0 install` instead. Add `pgwrh_wait` to
-`shared_preload_libraries` and restart before using its wait APIs.
-See [packaging](docs/packaging.md) for a single staged installation suitable for
-one RPM, build options, and package validation. Installing the bundled files does
-not change existing foreign servers or enable transaction-parameter propagation.
-Create extension in PostgreSQL database.
-```sh
-psql -c "CREATE EXTENSION pgwrh CASCADE"
-```
+
+The check verifies the full bundle, including the optional wait API, without
+changing configuration. It does not verify cluster membership or shard placement.
+See [packaging](docs/packaging.md)
+for staged installation and build variants, and [releasing](docs/releasing.md)
+for artifact publication.
 
 # Repository layout
 
@@ -128,7 +140,8 @@ flake.nix       Complete PostgreSQL 18 bundle, extension package, and NixOS modu
 flake.lock
 shell.nix       PostgreSQL 18 integration-test environment
 nix/            Supporting Nix expressions
-packaging/rpm/  PGDG-compatible RPM spec
+packaging/      RPM, DEB, container, and signed repository build tooling
+examples/compose/  Controller and two-replica demonstration
 docs/           Project documentation
 ```
 

@@ -42,6 +42,41 @@ run only `CREATE EXTENSION pgwrh_wait;`; it has no extension dependencies, altho
 the native package still includes the full bundle and installs its dependencies.
 Cluster membership and shard placement are configured separately.
 
+## Install from the signed project repository
+
+These endpoints become available after the release workflow publishes to GitHub
+Pages. They are the project's repositories; configure PGDG separately for
+PostgreSQL and `pg_background`. For alternative hosting, substitute its base URL.
+
+On Debian 13 or Ubuntu 24.04/26.04:
+
+```sh
+sudo install -d -m 755 /etc/apt/keyrings
+curl -fsSL https://mkleczek.github.io/pgwrh/pgwrh.asc | sudo tee /etc/apt/keyrings/pgwrh.asc >/dev/null
+. /etc/os-release
+echo "deb [signed-by=/etc/apt/keyrings/pgwrh.asc] https://mkleczek.github.io/pgwrh/apt $VERSION_CODENAME main" | sudo tee /etc/apt/sources.list.d/pgwrh.list
+sudo apt update
+sudo apt install postgresql-18-pgwrh
+```
+
+On EL9, save this as `/etc/yum.repos.d/pgwrh.repo`:
+
+```ini
+[pgwrh]
+name=pgwrh for PostgreSQL 18
+baseurl=https://mkleczek.github.io/pgwrh/rpm/el9/$basearch
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://mkleczek.github.io/pgwrh/pgwrh.asc
+```
+
+Then run `sudo dnf install pgwrh_18`. The release includes the public key and a
+signed checksum manifest for verifying downloaded release assets as well.
+After database activation, `psql -X -d your_database -f docs/check-installation.sql`
+from a source checkout reports missing prerequisites for the full bundle,
+including the optional wait API.
+
 ## Build release artifacts locally
 
 Docker BuildKit exports packages to a local directory. The Dockerfiles run
