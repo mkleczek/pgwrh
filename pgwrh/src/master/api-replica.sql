@@ -263,13 +263,19 @@ FROM replication_group_member reader
 WHERE reader.member_role = CURRENT_ROLE;
 GRANT SELECT ON serving_subtree TO PUBLIC;
 
-CREATE VIEW credentials AS
+CREATE VIEW local_credentials AS
 SELECT
     creds.username,
     creds.password
 FROM
-    replication_group_member
-        JOIN replication_group_credentials creds USING (replication_group_id)
+    replica_credentials creds
 WHERE
-    member_role = CURRENT_ROLE;
-GRANT SELECT ON credentials TO PUBLIC;
+    creds.member_role = CURRENT_ROLE;
+GRANT SELECT ON local_credentials TO PUBLIC;
+
+CREATE VIEW remote_credentials AS
+SELECT creds.member_role, creds.username, creds.password
+FROM replication_group_member reader
+    JOIN replica_credentials creds USING (replication_group_id)
+WHERE reader.member_role = CURRENT_ROLE AND creds.member_role <> CURRENT_ROLE;
+GRANT SELECT ON remote_credentials TO PUBLIC;

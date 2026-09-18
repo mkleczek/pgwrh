@@ -92,6 +92,13 @@ FROM
     replication_group_config_lock
 ;
 
+-- Destination identity belongs to the protocol even while generation remains
+-- shared by the group. Future generators can specialize this view per member.
+CREATE VIEW replica_credentials AS
+SELECT m.replication_group_id, m.member_role, c.version, c.username, c.password
+FROM replication_group_member m
+    JOIN replication_group_credentials c USING (replication_group_id);
+
 CREATE OR REPLACE VIEW shard_assignment_per_member AS
 SELECT
     replication_group_id,

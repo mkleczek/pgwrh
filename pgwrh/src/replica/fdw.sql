@@ -75,11 +75,18 @@ CREATE FOREIGN TABLE fdw_replica_state (
 ) SERVER replica_controller
 OPTIONS (table_name 'replica_state');
 
-CREATE FOREIGN TABLE fdw_credentials (
+CREATE FOREIGN TABLE fdw_local_credentials (
     username text,
     password text
 ) SERVER replica_controller
-OPTIONS (table_name 'credentials');
+OPTIONS (table_name 'local_credentials');
+
+CREATE FOREIGN TABLE fdw_remote_credentials (
+    member_role text,
+    username text,
+    password text
+) SERVER replica_controller
+OPTIONS (table_name 'remote_credentials');
 
 CREATE FOREIGN TABLE fdw_serving_subtree (member_role text, schema_name text, table_name text)
 SERVER replica_controller OPTIONS (table_name 'serving_subtree');
