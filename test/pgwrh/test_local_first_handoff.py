@@ -64,9 +64,9 @@ def wait_prepared(cluster):
     source, destination, _ = cluster.replicas
     wait_until(lambda: destination.query_scalar('SELECT count(*) FROM pgwrh.connected_local_shard') == 2,
                timeout=60, message='destination copies were not attached')
-    wait_until(lambda: source.query_scalar('''SELECT count(*) FROM pgwrh.prepared_remote_shard
-        WHERE shard_server_user = (SELECT username FROM pgwrh.fdw_remote_credentials
-            WHERE username IN (SELECT shard_server_user FROM pgwrh.fdw_shard_assignment) LIMIT 1)''') == 2,
+    wait_until(lambda: source.query_scalar('''SELECT count(*) FROM pgwrh.prepared_remote_shard p
+        WHERE shard_server_targets = (SELECT jsonb_object_agg(server_name, shard_server_user)
+            FROM pgwrh.assignment_target a WHERE a.node_rel_id = p.rel_id)''') == 2,
                timeout=60, message='source did not prepare its replacements')
 
 
@@ -102,10 +102,11 @@ def test_prepared_replacements_allow_commit_only_for_local_readers(handoff_clust
             WHERE replication_group_id = 'g1')''') == 2
     with source.node.connect() as paused:
         paused.execute('SELECT pg_advisory_lock(2895359559)')
-        for field, stale in (('shard_server_targets', "'[\"stale\"]'::jsonb"), ('shard_server_user', "'\"stale\"'::jsonb")):
+        for stale in ("'{\"stale\":\"user\"}'::jsonb",
+                      "(SELECT jsonb_object_agg(key, 'stale') FROM jsonb_each(p->'shard_server_targets'))"):
             with cluster.master.node.connect() as report:
                 report.execute(f"""UPDATE pgwrh.replication_group_member
-                    SET prepared_remote_shards = (SELECT jsonb_agg(p || jsonb_build_object('{field}', {stale}))
+                    SET prepared_remote_shards = (SELECT jsonb_agg(p || jsonb_build_object('shard_server_targets', {stale}))
                         FROM jsonb_array_elements(prepared_remote_shards::jsonb) p)
                     WHERE host_id = 'source' """)
                 with pytest.raises(Exception, match='required remote shards'):
