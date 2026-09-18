@@ -59,12 +59,27 @@ membership changes. A retained foreign table must have its desired targets
 before analysis or reattachment. Local-to-remote and remote-to-local attachment
 changes retain their existing locks.
 
-Repeated entries in the existing aligned member/host/port lists become actual
+The assignment API carries `shard_server_members text[]`, comma-separated
+`host` and `port` lists, and `dbnames text[]`. Entries align by position, including
+repetitions. `dbnames` replaces the development API's scalar `dbname`: a native
+array preserves commas and other punctuation inside database names. Missing,
+empty or differently sized endpoint lists cannot produce a ready route.
+`pgwrh_target_servers` accepts this database array as its fourth argument.
+
+Repeated entries in the aligned member/host/port/database lists become actual
 server `load_balance_weight` values, preserving `same_zone_multiplier`. Reuse of
 an active or idle connection still takes priority over weights. Target sets with
 identical members share the FDW's transaction routing decision and join
 pushdown. Detached stable foreign tables remain while their logical nodes exist;
 target cleanup preserves every target referenced by an owned virtual server.
+
+`shard_host.dbname` supplies each destination database for both assignment and
+controller readiness checks. The `replica_controller` server and the logical
+subscription instead use `configure_controller(..., dbname := ...)`.
+Subscription discovery is scoped to the current database because PostgreSQL's
+subscription catalog spans the whole server. Replicas in sibling databases can
+share generated login credentials; each grants its local replica role and
+retires that membership without dropping a login still used by a sibling.
 
 After commit releases an outgoing copy, the replica replaces the local leaf with
 its prepared foreign leaf in one transaction. Query-root locking prevents
@@ -167,6 +182,11 @@ attachment transactions, concurrent reads, rollback, maximal subtree selection,
 nested RANGE, LIST and HASH layouts, empty leaves, endpoint failover, restart,
 credential rotation, and generic prepared-query partition pruning through native
 shields.
+
+`test/pgwrh/test_database_names.py` covers distinct controller and replica names,
+quoted names, replicas sharing a server, reads through each target, replication,
+handoff and credential rotation. Backup/restore tests retain registered database
+names, and the routing tests cover list alignment and aggregation identity.
 
 Version 1.0.0 is the only installable version of all four bundled extensions.
 Install the release files on every node and initialize a fresh database with
