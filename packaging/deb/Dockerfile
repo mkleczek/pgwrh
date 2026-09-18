@@ -15,9 +15,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
     && apt-get build-dep -y .
 COPY . .
 RUN . /etc/os-release \
-    && sed -i "1s/0.3.0-1/0.3.0-1+${VERSION_CODENAME}/" debian/changelog \
+    && sed -i "1s/1.0.0-1/1.0.0-1+${VERSION_CODENAME}/" debian/changelog \
     && dpkg-buildpackage -us -uc -b \
-    && mkdir /artifacts && cp /build/*.deb /build/*.ddeb /build/*.changes /build/*.buildinfo /artifacts/
+    && mkdir /artifacts \
+    && find /build -maxdepth 1 -type f \( -name '*.deb' -o -name '*.ddeb' -o -name '*.changes' -o -name '*.buildinfo' \) \
+        -exec cp '{}' /artifacts/ \;
 FROM repository AS verify
 COPY --from=build /artifacts /artifacts
 COPY test/packaging /test

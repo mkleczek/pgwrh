@@ -1,52 +1,38 @@
 # Native PostgreSQL 18 packages
 
-The release build produces one package containing `pgwrh`, `pgwrh_fdw`, and
-`pgwrh_wait`, all at version 0.3.0. Packages install files and dependencies;
-they do not create extensions, change server configuration, or restart services.
-Only fresh installation is supported.
+The package contains all four [pgwrh extensions](../README.md#components) at
+version 1.0.0, plus their documentation and console setup files. It installs
+files and dependencies; enabling extensions and configuring PostgreSQL are
+separate steps. Only fresh installation is supported.
 
 ## Install release assets
 
-Download the asset matching the operating system and CPU from the GitHub release.
-Configure the official [PGDG APT](https://www.postgresql.org/download/linux/ubuntu/)
-or [PGDG YUM](https://www.postgresql.org/download/linux/redhat/) repository first.
-Then use the package manager so dependencies are resolved automatically:
+After release publication, download the asset matching the operating system and
+CPU from the [GitHub
+release](https://github.com/mkleczek/pgwrh/releases/tag/v1.0.0). To build
+packages before publication, see [local package
+builds](packaging.md#build-package-artifacts-locally). Configure the official
+[PGDG APT](https://www.postgresql.org/download/linux/ubuntu/) or [PGDG
+YUM](https://www.postgresql.org/download/linux/redhat/) repository first. Then
+use the package manager so dependencies are resolved automatically:
 
 ```sh
 # Debian/Ubuntu, from the directory containing the downloaded package:
-sudo apt install ./postgresql-18-pgwrh_0.3.0-1+*_*.deb
+sudo apt install ./postgresql-18-pgwrh_1.0.0-1+*_*.deb
 
 # EL9 (RHEL, Rocky Linux, AlmaLinux):
-sudo dnf install ./pgwrh_18-0.3.0-1PGDG.el9."$(uname -m)".rpm
+sudo dnf install ./pgwrh_18-1.0.0-1PGDG.el9."$(uname -m)".rpm
 ```
 
-The RPM's optional `pgwrh_18-llvmjit` package supplies LLVM bitcode. The Debian
-package builds without LLVM bitcode; PostgreSQL can use both native libraries
-without it. Debug packages are for debugging and are not needed to install pgwrh.
-
-On subscribers using the wait API, append `pgwrh_wait` to the existing
-`shared_preload_libraries` setting and restart PostgreSQL. Configure logical
-replication, including `wal_level = logical` on publishers and worker/slot
-capacity appropriate to the number of shards. See
-[PostgreSQL's configuration guide](https://www.postgresql.org/docs/18/logical-replication-config.html).
-Then, as a database administrator:
-
-```sql
-CREATE EXTENSION pgwrh CASCADE;
-CREATE EXTENSION pgwrh_wait;
-```
-
-The first command also creates `pgwrh_fdw` and `pg_background`.
-The second enables the optional wait API. For a subscriber needing only that API,
-run only `CREATE EXTENSION pgwrh_wait;`; it has no extension dependencies, although
-the native package still includes the full bundle and installs its dependencies.
-Cluster membership and shard placement are configured separately.
+The RPM's `pgwrh_18-llvmjit` companion package is optional. Debug packages are
+also optional and are not needed for normal operation.
 
 ## Install from the signed project repository
 
 These endpoints become available after the release workflow publishes to GitHub
 Pages. They are the project's repositories; configure PGDG separately for
-PostgreSQL and `pg_background`. For alternative hosting, substitute its base URL.
+PostgreSQL and `pg_background`. For alternative hosting, substitute its base
+URL.
 
 On Debian 13 or Ubuntu 24.04/26.04:
 
@@ -72,45 +58,43 @@ gpgkey=https://mkleczek.github.io/pgwrh/pgwrh.asc
 ```
 
 Then run `sudo dnf install pgwrh_18`. The release includes the public key and a
-signed checksum manifest for verifying downloaded release assets as well.
-After database activation, `psql -X -d your_database -f docs/check-installation.sql`
+signed checksum manifest for verifying downloaded release assets as well. After
+database activation, `psql -X -d your_database -f docs/check-installation.sql`
 from a source checkout reports missing prerequisites for the full bundle,
 including the optional wait API.
 
-## Build release artifacts locally
+## Configure PostgreSQL and enable extensions
 
-Docker BuildKit exports packages to a local directory. The Dockerfiles run
-packaging checks, install the resulting package, and exercise both native
-libraries against a temporary PostgreSQL cluster before exporting artifacts.
-Run from the repository root:
+Enable `pgwrh` in the controller and each replica database. In logical
+replication, the source is the publisher and the receiver is a subscriber; see
+[cluster concepts](overview.md) for these roles.
 
-```sh
-docker build -f packaging/deb/Dockerfile \
-  --build-arg BASE_IMAGE=ubuntu:24.04 \
-  --output type=local,dest=.build/packages/noble .
+On subscribers using the optional `pgwrh_wait` visibility API, append
+`pgwrh_wait` to the existing `shared_preload_libraries` setting and restart
+PostgreSQL. Configure logical replication, including `wal_level = logical` on
+publishers and worker/slot capacity appropriate to the number of shards. See
+[PostgreSQL's configuration
+guide](https://www.postgresql.org/docs/18/logical-replication-config.html).
+Then, as a database administrator:
 
-docker build -f packaging/deb/Dockerfile \
-  --build-arg BASE_IMAGE=ubuntu:26.04 \
-  --output type=local,dest=.build/packages/resolute .
-
-docker build -f packaging/deb/Dockerfile \
-  --build-arg BASE_IMAGE=debian:trixie-slim \
-  --output type=local,dest=.build/packages/trixie .
-
-docker build -f packaging/rpm/Dockerfile \
-  --output type=local,dest=.build/packages/el9 .
+```sql
+CREATE EXTENSION pgwrh CASCADE;
+-- Optional, after preloading pgwrh_wait and restarting PostgreSQL:
+CREATE EXTENSION pgwrh_wait;
 ```
 
-Use `--platform linux/amd64` or `--platform linux/arm64` to select the target;
-prefer native builders for release validation. For RPMs without LLVM, pass
-`--build-arg WITH_LLVM=0`. DEB versions include the distribution codename to
-prevent ambiguity between artifacts for different distributions.
+The first command also creates `pgwrh_fdw` and `pg_background`. The second
+enables the optional wait API. For a subscriber needing only that API, run only
+`CREATE EXTENSION pgwrh_wait;`; it has no extension dependencies, although the
+native package still includes the full bundle and installs its dependencies.
+Cluster membership and shard placement are configured separately.
 
-For a native Debian build, copy `packaging/deb/debian` to `debian` in an unpacked
-release archive, install its declared build dependencies using `apt-get build-dep .`,
-then run `dpkg-buildpackage -us -uc -b`. The source uses standard debhelper
-packaging; `packaging/deb/debian/source/format` also supports a `3.0 (quilt)` source
-package when the corresponding `pgwrh_0.3.0.orig.tar.gz` is placed in the parent
-directory. See [RPM packaging](packaging.md) for native RPM builds.
+Enable the optional console only in the controller database, after enabling
+`pgwrh`:
 
-Building these artifacts does not publish them to PGDG or any package repository.
+```sql
+CREATE EXTENSION pgwrh_ui;
+```
+
+Run PostgREST separately and follow the [console deployment
+guide](../pgwrh_ui/README.md) for access roles and web-service configuration.
