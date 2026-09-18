@@ -188,7 +188,7 @@ SELECT
     host,
     port,
     dbnames,
-    shard_server_user,
+    shard_server_users,
     pubname,
     connect_remote,
     retained_shard_server_name,
@@ -207,7 +207,7 @@ Presents a particular replication_group_member (as identified by member_role) vi
 Each member sees all shards with the following information for each shard:
 * "local" flag saying if this shard should be replicated to this member
 * positionally aligned shard_server_members, host, port and dbnames for remote replicas
-* shard_server_user identifying the credentials for those destinations';
+* shard_server_users identifying the credentials for those destinations';
 
 CREATE OR REPLACE VIEW shard_index AS
 SELECT

@@ -74,7 +74,7 @@ CREATE VIEW remote_node_assignment AS
 WITH structure AS MATERIALIZED (
     SELECT DISTINCT * FROM shard_structure_r
 ), assignment AS MATERIALIZED (
-    SELECT a.*, pgwrh_target_servers(shard_server_members, host, port, dbnames, shard_server_user) AS target_servers
+    SELECT a.*, pgwrh_target_servers(shard_server_members, host, port, dbnames, shard_server_users) AS target_servers
     FROM fdw_shard_assignment a
 ), descendants AS MATERIALIZED (
     SELECT * FROM shard_descendant
@@ -85,7 +85,6 @@ WITH structure AS MATERIALIZED (
         d.ancestor_rel_id AS rel_id,
         min(a.host) AS host,
         min(a.port) AS port,
-        min(a.shard_server_user) AS shard_server_user,
         count(*) AS leaf_count,
         min(a.target_servers::text)::text[] AS target_servers
     FROM descendants d
@@ -118,7 +117,7 @@ WITH structure AS MATERIALIZED (
 SELECT
     s.*,
     pgwrh_shard_server(s.schema_name, s.table_name) AS shard_server_name,
-    e.host, e.port, e.shard_server_user,
+    e.host, e.port,
     e.leaf_count,
     format('%s_remote', s.schema_name) AS shard_server_schema_name,
     (format('%s_remote', s.schema_name), s.table_name)::rel_id AS remote_rel_id,

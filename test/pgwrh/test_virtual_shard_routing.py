@@ -81,9 +81,9 @@ def test_assignment_repetitions_become_target_weights(postgres_node_factory):
             SET search_path = pg_temp, pgwrh, public;
             CREATE TEMP TABLE fdw_shard_assignment (LIKE pgwrh.fdw_shard_assignment);
             INSERT INTO fdw_shard_assignment
-                (schema_name, table_name, shard_server_members, host, port, dbnames, shard_server_user)
-            VALUES ('data', 'a', ARRAY['near','far','near','near'], 'hn,hf,hn,hn', '1,2,1,1', ARRAY['near db','far,db','near db','near db'], 'u'),
-                   ('data', 'b', ARRAY['far','near','near','near'], 'hf,hn,hn,hn', '2,1,1,1', ARRAY['far,db','near db','near db','near db'], 'u');
+                (schema_name, table_name, shard_server_members, host, port, dbnames, shard_server_users)
+            VALUES ('data', 'a', ARRAY['near','far','near','near'], 'hn,hf,hn,hn', '1,2,1,1', ARRAY['near db','far,db','near db','near db'], ARRAY['near_u','far_u','near_u','near_u']),
+                   ('data', 'b', ARRAY['far','near','near','near'], 'hf,hn,hn,hn', '2,1,1,1', ARRAY['far,db','near db','near db','near db'], ARRAY['far_u','near_u','near_u','near_u']);
         """)
         conn.execute('CREATE TEMP VIEW assignment_target AS' + definition)
         assert conn.execute('SELECT host, weight FROM assignment_target ORDER BY host, node_rel_id') == [
@@ -110,9 +110,12 @@ def test_route_reports_each_actual_member(postgres_node_factory):
             CREATE TEMP VIEW owned_server AS SELECT * FROM pg_foreign_server;
         """)
         conn.execute('CREATE TEMP VIEW remote_server_route AS' + definition)
-        assert conn.execute("SELECT shard_server_user, shard_server_targets FROM remote_server_route WHERE srvname = 'virtual'") == [
-            ('reader', ['actual_a', 'actual_b'])]
+        assert conn.execute("SELECT shard_server_targets FROM remote_server_route WHERE srvname = 'virtual'") == [
+            ({'actual_a': 'reader', 'actual_b': 'reader'},)]
         conn.execute("ALTER USER MAPPING FOR PUBLIC SERVER actual_b OPTIONS (SET user 'different')")
+        assert conn.execute("SELECT shard_server_targets FROM remote_server_route WHERE srvname = 'virtual'") == [
+            ({'actual_a': 'reader', 'actual_b': 'different'},)]
+        conn.execute('DROP USER MAPPING FOR PUBLIC SERVER actual_b')
         assert conn.execute("SELECT count(*) FROM remote_server_route WHERE srvname = 'virtual'") == [(0,)]
         conn.execute('DROP SERVER actual_b CASCADE')
         assert conn.execute("SELECT count(*) FROM remote_server_route WHERE srvname = 'virtual'") == [(0,)]
