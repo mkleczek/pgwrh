@@ -28,6 +28,8 @@ def handoff_cluster(postgres_node_factory, request):
             (replication_group_id, sharded_table_schema, sharded_table_name, replication_factor)
         VALUES ('g1', 'data', 'root', 0);
     ''')
+    if databases.get('credentials_sql'):
+        master.execute(databases['credentials_sql'])
     replica_factory = postgres_node_factory
     if databases.get('shared'):
         shared = postgres_node_factory('shared_replicas', install_extension=False)
@@ -36,6 +38,14 @@ def handoff_cluster(postgres_node_factory, request):
             shared.execute(f'CREATE DATABASE {quote_ident(dbname)}')
             node = DatabaseNode(shared, dbname)
             node.execute('CREATE EXTENSION pgwrh CASCADE')
+            return node
+
+    if databases.get('replica_setup'):
+        base_factory = replica_factory
+
+        def replica_factory(name, **kwargs):
+            node = base_factory(name, **kwargs)
+            databases['replica_setup'](node)
             return node
 
     cluster = PgwrhCluster(master, replica_factory)
