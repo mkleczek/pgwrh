@@ -6,11 +6,14 @@ from threading import Event
 import pytest
 
 from .pgwrh_testkit import MasterHandle, PgwrhCluster, ReplicaSpec, wait_until
+from .conftest import DatabaseNode
+from .pgwrh_testkit import quote_ident
 
 
 @pytest.fixture
-def handoff_cluster(postgres_node_factory):
-    master = MasterHandle(postgres_node_factory('master'))
+def handoff_cluster(postgres_node_factory, request):
+    databases = getattr(request, 'param', {})
+    master = MasterHandle(postgres_node_factory('master', dbname=databases.get('master')))
     master.execute('''
         CREATE ROLE test_replica;
         CREATE SCHEMA data AUTHORIZATION test_replica;
@@ -25,9 +28,24 @@ def handoff_cluster(postgres_node_factory):
             (replication_group_id, sharded_table_schema, sharded_table_name, replication_factor)
         VALUES ('g1', 'data', 'root', 0);
     ''')
-    cluster = PgwrhCluster(master, postgres_node_factory)
-    cluster.add_replicas([ReplicaSpec('source'), ReplicaSpec('destination'), ReplicaSpec('reader')])
-    master.execute("DELETE FROM pgwrh.shard_host_weight WHERE host_id <> 'source'")
+    replica_factory = postgres_node_factory
+    if databases.get('shared'):
+        shared = postgres_node_factory('shared_replicas', install_extension=False)
+
+        def replica_factory(name, *, dbname):
+            shared.execute(f'CREATE DATABASE {quote_ident(dbname)}')
+            node = DatabaseNode(shared, dbname)
+            node.execute('CREATE EXTENSION pgwrh CASCADE')
+            return node
+
+    cluster = PgwrhCluster(master, replica_factory)
+    cluster.add_replicas([ReplicaSpec(name, dbname=databases.get(name))
+                          for name in ('source', 'destination', 'reader')])
+    if databases:
+        master.execute("UPDATE pgwrh.sharded_table SET replication_factor = 100")
+        master.execute("DELETE FROM pgwrh.shard_host_weight WHERE host_id = 'reader'")
+    else:
+        master.execute("DELETE FROM pgwrh.shard_host_weight WHERE host_id <> 'source'")
     cluster.deploy(timeout=60)
     return cluster
 

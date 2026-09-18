@@ -115,7 +115,7 @@ SELECT
         THEN target_port
         ELSE coalesce(current_port, '')
     END AS port,
-    current_database() AS dbname,
+    CASE WHEN target_route_ready THEN target_dbnames ELSE current_dbnames END AS dbnames,
     CASE WHEN target_route_ready
         THEN target_credentials.username
         ELSE current_username
@@ -234,6 +234,7 @@ FROM
                 table_name,
                 string_agg(host_name, ',' ORDER BY sah.availability_zone, sah.host_id) AS current_host,
                 array_agg(shm.member_role ORDER BY sah.availability_zone, sah.host_id) AS current_members,
+                array_agg(dbname ORDER BY sah.availability_zone, sah.host_id) AS current_dbnames,
                 string_agg(port::text, ',' ORDER BY sah.availability_zone, sah.host_id) AS current_port
             FROM
                 shard_assigned_host sah
@@ -276,6 +277,7 @@ FROM
                 table_name,
                 string_agg(host_name, ',' ORDER BY sah.availability_zone, sah.host_id) AS target_host,
                 array_agg(member_role ORDER BY sah.availability_zone, sah.host_id) AS target_members,
+                array_agg(dbname ORDER BY sah.availability_zone, sah.host_id) AS target_dbnames,
                 string_agg(port::text, ',' ORDER BY sah.availability_zone, sah.host_id) AS target_port
             FROM
                 shard_assigned_host sah
@@ -332,8 +334,8 @@ CREATE VIEW shard_destinations AS
 SELECT a.replication_group_id, a.version, a.schema_name, a.table_name,
        c.username,
        md5(string_agg(a.availability_zone || a.host_id, ',' ORDER BY a.availability_zone, a.host_id)) AS legacy_server_name,
-       array_agg(DISTINCT pgwrh_target_server(m.member_role, h.host_name, h.port::text, current_database(), c.username)
-                 ORDER BY pgwrh_target_server(m.member_role, h.host_name, h.port::text, current_database(), c.username)) AS target_servers
+       array_agg(DISTINCT pgwrh_target_server(m.member_role, h.host_name, h.port::text, h.dbname, c.username)
+                 ORDER BY pgwrh_target_server(m.member_role, h.host_name, h.port::text, h.dbname, c.username)) AS target_servers
 FROM shard_assigned_host a
     JOIN shard_host h USING (replication_group_id, availability_zone, host_id)
     JOIN replication_group_member m USING (replication_group_id, availability_zone, host_id)
