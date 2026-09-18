@@ -219,7 +219,6 @@ shard_server AS (
         shard_server_schema_name,
         host,
         port,
-        dbname,
         shard_server_user,
         target_servers
     FROM
@@ -259,6 +258,7 @@ owned_namespace AS (
 ),
 owned_subscription AS (
     SELECT * FROM pg_subscription s JOIN shard_subscription USING (subname)
+    WHERE s.subdbid = (SELECT oid FROM pg_database WHERE datname = current_database())
 ),
 shard_index AS (
     SELECT
@@ -562,12 +562,28 @@ scripts (async, transactional, description, commands) AS (
     GROUP BY 1, 2 -- make sure we produce empty set when no results
 
     UNION ALL
+    -- Roles are shared by databases on the same PostgreSQL server. A sibling
+    -- replica may already have created this credential; grant local access too.
+    SELECT FALSE, TRUE, 'Granting shard access to existing credentials',
+        array_agg(format('GRANT %I TO %I', "@extschema@".pgwrh_replica_role_name(), username))
+    FROM roles JOIN pg_roles u ON u.rolname = username
+    WHERE NOT EXISTS (
+        SELECT 1 FROM pg_auth_members a JOIN pg_roles gr ON gr.oid = a.roleid
+        WHERE a.member = u.oid AND gr.rolname = "@extschema@".pgwrh_replica_role_name()
+    )
+    GROUP BY 1, 2
+
+    UNION ALL
     -- Clean up
     SELECT
         FALSE,
         TRUE,
-        format('Dropping no longer needed roles [%s]', string_agg(u.rolname, ', ')),
-        array_agg(format('DROP ROLE %I', u.rolname))
+        format('Retiring no longer needed credentials [%s]', string_agg(u.rolname, ', ')),
+        array_agg(CASE WHEN EXISTS (
+            SELECT 1 FROM pg_auth_members other
+            WHERE other.member = u.oid AND other.roleid <> gr.oid
+        ) THEN format('REVOKE %I FROM %I', gr.rolname, u.rolname)
+          ELSE format('DROP ROLE %I', u.rolname) END)
     FROM
         pg_roles u
             JOIN pg_auth_members ON member = u.oid
