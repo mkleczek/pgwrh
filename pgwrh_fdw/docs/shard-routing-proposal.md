@@ -1,8 +1,14 @@
 # Proposal: shard-aware connection reuse in pgwrh_fdw
 
-Status: architecture proposal, based on the working tree on 2026-09-14. The
-interfaces and options below are proposed, not implemented. This document does
-not change the existing FDW or pgwrh rollout behavior.
+Status: historical architecture proposal, based on the working tree on
+2026-09-14. It is retained as design context, not as current configuration guidance.
+
+Connection reuse, virtual-server routing and join pushdown were subsequently
+implemented with interfaces that differ from this proposal. Use the
+[virtual-server guide](virtual-servers.md) and
+[replica routing implementation](../../docs/development/replica-routing.md) for
+current behavior. References below to the "current implementation" mean the
+2026-09-14 baseline; proposed options are not an API reference.
 
 ## Recommendation
 

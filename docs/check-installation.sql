@@ -8,9 +8,9 @@ BEGIN
     FOR check_result IN
         SELECT * FROM (VALUES
             ('PostgreSQL 18', current_setting('server_version_num')::int / 10000 = 18),
-            ('pgwrh 0.3.0', EXISTS (SELECT FROM pg_extension WHERE extname = 'pgwrh' AND extversion = '0.3.0')),
-            ('pgwrh_fdw 0.3.0', EXISTS (SELECT FROM pg_extension WHERE extname = 'pgwrh_fdw' AND extversion = '0.3.0')),
-            ('pgwrh_wait 0.3.0', EXISTS (SELECT FROM pg_extension WHERE extname = 'pgwrh_wait' AND extversion = '0.3.0')),
+            ('pgwrh 1.0.0', EXISTS (SELECT FROM pg_extension WHERE extname = 'pgwrh' AND extversion = '1.0.0')),
+            ('pgwrh_fdw 1.0.0', EXISTS (SELECT FROM pg_extension WHERE extname = 'pgwrh_fdw' AND extversion = '1.0.0')),
+            ('pgwrh_wait 1.0.0', EXISTS (SELECT FROM pg_extension WHERE extname = 'pgwrh_wait' AND extversion = '1.0.0')),
             ('pg_background v2 API', (SELECT count(DISTINCT p.proname) = 4
                 FROM pg_proc p JOIN pg_extension e ON p.pronamespace = e.extnamespace
                 WHERE e.extname = 'pg_background' AND p.proname IN

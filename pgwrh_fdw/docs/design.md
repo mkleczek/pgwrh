@@ -1,5 +1,9 @@
 # Design and upstream maintenance
 
+This contributor guide describes how `pgwrh_fdw` propagates transaction settings
+and how to maintain its PostgreSQL fork. Read the [user contract](../README.md)
+first; [virtual-server internals](virtual-server-internals.md) covers routing.
+
 ## Contract
 
 Capture all supported custom parameters on the first configured remote
@@ -71,7 +75,7 @@ per-connection propagation flag can become stale after rollback.
 
 ## Upstream strategy
 
-pgwrh_fdw shares SQL extension and module version `0.3.0` with the pgwrh release.
+pgwrh_fdw shares SQL extension and module version `1.0.0` with the pgwrh release.
 This is the only installable version, with no upgrade scripts.
 The initial SQL install script directly defines the final upstream function
 signatures rather than replaying postgres_fdw's historical upgrades. The C

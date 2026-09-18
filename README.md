@@ -1,312 +1,125 @@
 # pgwrh
 
-An extension implementing sharding for PostgreSQL based on logical replication and the bundled pgwrh_fdw.
-The goal is to scale **_read queries_** overcoming main limitation of traditional setups based on streaming replication and hot standbys:
-lack of sharding and large storage requirements.
+pgwrh scales PostgreSQL read queries by distributing **shards**—the leaf
+partitions of a table—across replicas. Each replica stores an assigned subset of
+the data and can query other replicas for the remaining shards, so it can serve
+queries over the complete table without storing a full copy.
 
-See [Architecture](https://github.com/mkleczek/pgwrh/wiki/Architecture) for more information on inner workings.
+Applications write to the **controller**, the PostgreSQL database that holds the
+source data and manages shard placement. **Replicas** receive their assigned
+shards through logical replication. Replication is asynchronous: a replica may
+not immediately see a write made on the controller.
 
-:warning: **WIP**: readme might be incomplete and contain mistakes in usage instrutions (as the API is still changing)
+Start with the [local quickstart](#quickstart), then read [cluster concepts and
+rollouts](docs/overview.md).
 
-# Features
+## Components
 
-## Horizontal Scalability and High Availability
-### No need for rebalancing
-Setting up and maintaining a highly available cluster of sharded storage servers is inherently tricky, especially during changes to cluster topology.
-Adding a new replica often requires rebalancing (ie. reorganizing data placement among replicas).
+The pgwrh 1.0.0 distribution contains four PostgreSQL 18 extensions:
 
-_pgwrh_ minimizes the need to copy data by utilizing _Weighted Randezvous Hashing_ algorithm to distribute shards among replicas.
-Adding replicas never requires moving data between existing ones.
-### Data redundancy
-_pgwrh_ maintains requested level of redundancy of shard data.
+| Extension | Purpose | Where to enable it |
+| --- | --- | --- |
+| `pgwrh` | Manages shard placement, replication and configuration rollouts | Controller and replicas |
+| `pgwrh_fdw` | Foreign data wrapper (FDW) for queries and connections between databases | Enabled automatically by `CREATE EXTENSION pgwrh CASCADE` |
+| `pgwrh_wait` | Lets a read wait until a specified write has been replicated | Optional, on subscribers serving reads that need this guarantee |
+| `pgwrh_ui` | Browser console for monitoring and managing the cluster | Optional, controller only |
 
-Administrator can specify:
-* the percentage of replicas to host each shard
-* the minimum number of copies of any shard (regardless of the percentage setting above)
+The core also requires `pg_background` 1.6 or newer to run background tasks.
+Packages install it as a dependency; the container and Nix bundle include it.
+The console uses **PostgREST**, a separate web service that connects to the
+controller database. See [console setup](pgwrh_ui/README.md).
 
-So it is possible to implement policies like: _"Shards X, Y, Z should be distributed among 20% of replicas in the cluster, but in no fewer than 2 copies"_.
-### Availability zones
-Replicas can be assigned to _availability zones_ and _pgwrh_ ensures shard copies are distributed evenly across all of them.
-
-### Zero downtime reconfiguration of cluster topology
-Changing cluster topology very often requires lengthy process of data copying and indexing.
-Exposing replicas that do not have necessary indexes created imposes a risk of downtimes due to long queries causing exhaustion of connection pools. 
-
-_pgwrh_ makes sure the cluster can operate without disruptions and that not-yet-ready replicas are isolated from query traffic.
-
-## Sharding policy flexibility and storage tiering
-_pgwrh_ does not dictate how data is split into shards. It is possible to implement _any_ sharding policy by utilizing PostgreSQL partitioning.
-_pgwrh_ will distribute _leaves_ of partition hierarchy among replicas.
-It is also possible to specify different levels of redundancy for different subtrees of partitioning hierarchy.
-
-Thanks to this it is possible to have more replicas maintain _hot_ data and have _cold_ data storage requirements minimized.
-
-## Remote shard aggregation
-
-Replicas keep local shards attached through rollout while preparing their remote
-replacements. After an atomic handoff, they can combine complete remote subtrees
-behind native partitioned shield views. See [the protocol and tradeoffs](docs/remote-shard-aggregation.md).
-
-## Ease of deployment and cluster administration
-
-
-## SQL API with PostgreSQL 18 extensions
-
-pgwrh's management API is implemented in SQL/PLpgSQL. Version 0.3.0 also requires
-its bundled native `pgwrh_fdw` extension and `pg_background`. The optional
-`pgwrh_wait` API provides replication visibility barriers. See
-[LSN waiting](docs/lsn-wait.md) and the [FDW documentation](pgwrh_fdw/README.md).
-
-## Based on built-in PostgreSQL facilities - no need for custom query parser/planner
-Contrary to other PostgreSQL sharding solutions that implement a query parser and interpreter to direct queries to
-the right replicas, _pgwrh_ uses PostgreSQL partitioning and the bundled pgwrh_fdw,
-which is derived from PostgreSQL's postgres_fdw.
-
-PostgreSQL query planner and executor - while still somewhat limited - have capabilities to distribute computing among
-multiple machines by:
-* _pushing down_ filtering and aggregates (see https://www.postgresql.org/docs/current/runtime-config-query.html#GUC-ENABLE-PARTITIONWISE-AGGREGATE)
-* skip execution of unnecessary query plan nodes (see https://www.postgresql.org/docs/current/runtime-config-query.html#GUC-ENABLE-PARTITION-PRUNING)
-
-# Installation
-
-The complete **0.3.0** bundle targets **PostgreSQL 18**. All three extensions share
-version 0.3.0. This release supports fresh installation only, with no migration
-or upgrade scripts for earlier installations.
-
-| Environment | Installation guide |
-| --- | --- |
-| Local trial on Linux, macOS or Windows with Docker | [Ready-to-run Compose cluster](docs/containers.md) |
-| RHEL/Rocky/AlmaLinux 9 | [RPM packages](docs/packages.md) |
-| Debian 13, Ubuntu 24.04/26.04 | [DEB packages](docs/packages.md) |
-| Nix or NixOS | [Complete PostgreSQL bundle and NixOS module](docs/nix.md) |
-
-Binary packages and container references become available when the 0.3.0
-release workflow publishes them. Before publication, the linked guides describe
-local builds. Every distribution includes `pgwrh`, `pgwrh_fdw`, and `pgwrh_wait`;
-packages resolve `pg_background` as a dependency, and the container/Nix bundle
-includes it. Controller and shard connections use the bundled `pgwrh_fdw`;
+`pgwrh_fdw` and `pgwrh_wait` can also be used independently of the core.
 PostgreSQL's stock `postgres_fdw` extension is not required.
 
-## Build from source
+## Quickstart
 
-Use the 0.3.0 source archive or release tag. A complete build requires PostgreSQL
-18 development files, a C compiler, GNU Make, and the TLS/GSSAPI development
-libraries used by the selected PostgreSQL installation:
+Install Docker with Compose and curl. From an unpacked source archive or
+repository checkout, run:
 
 ```sh
-make -j4 PG_CONFIG=/path/to/postgresql18/bin/pg_config
-sudo make install PG_CONFIG=/path/to/postgresql18/bin/pg_config
+bash examples/compose/quickstart.sh
 ```
 
-Install `pg_background` with the cookie-protected v2 API (1.6 or newer).
-Append `pgwrh_wait` to `shared_preload_libraries`, preserving existing entries,
-and restart PostgreSQL before using the wait API. As a database administrator:
+The script starts a controller, two replicas and a read-only console,
+distributes four example shards, and verifies that both replicas return the same
+100 rows. When it prints **Quickstart verified**, open [the
+console](http://localhost:13000/rpc/index?group_id=demo).
 
-```sql
-CREATE EXTENSION pgwrh CASCADE;
-CREATE EXTENSION pgwrh_wait;
+The default image is `ghcr.io/mkleczek/pgwrh:1.0.0-pg18`. If it has not yet been
+published, build and select a local image first:
+
+```sh
+docker build -f packaging/container/Dockerfile -t pgwrh:1.0.0-local .
+PGWRH_IMAGE=pgwrh:1.0.0-local bash examples/compose/quickstart.sh
 ```
 
-The second command enables the optional wait API. `pgwrh_wait` can also be used
-independently with built-in logical replication; it does not require `pgwrh`,
-`pgwrh_fdw`, or `pg_background` to be enabled in the database.
+The demo uses fixed local credentials and loopback ports. See [the container
+guide](docs/containers.md) for querying replicas, choosing ports, and stopping
+or removing the demo.
 
-The [native package guide](docs/packages.md) covers logical replication settings
-and database activation. To diagnose the selected database from this checkout:
+## Placement and read scaling
+
+- **Partitioning:** use PostgreSQL partitioning to define shards. Different
+  parts of a partition hierarchy can have different replication policies,
+  allowing more copies of frequently read data.
+- **Redundancy:** specify the percentage of replicas that should store each
+  shard and a minimum copy count. For example, keep a shard on 20% of replicas,
+  with at least two copies.
+- **Availability zones:** spread copies across zones, prefer selected zones,
+  and require a minimum number of copies to survive a single-zone failure.
+  See [AZ affinity](docs/az-affinity.md).
+- **Placement changes:** preview a configuration, prepare its replicas, and
+  commit it after readiness checks pass. Existing copies remain available
+  during preparation. See [rollouts](docs/overview.md#configuration-and-rollouts).
+- **Remote reads:** queries can combine local and remote shards. When a remote
+  replica holds an entire partition subtree, pgwrh can query it as a unit.
+  See [remote shard aggregation](docs/remote-shard-aggregation.md).
+
+Adding replicas can move shard copies. Placement favors retaining existing
+copies, but changes to copy counts, zone preferences or available hosts can
+require additional copying. Replication redundancy does not replace controller
+backups or a PostgreSQL high-availability plan.
+
+## Installation
+
+The **1.0.0** bundle targets **PostgreSQL 18**. All four extensions share version
+1.0.0. This release supports fresh installation only; it includes no upgrade
+scripts for earlier installations.
+
+| Environment | Guide |
+| --- | --- |
+| Linux, macOS or Windows with Docker | [Compose cluster and container](docs/containers.md) |
+| RHEL/Rocky/AlmaLinux 9 | [RPM packages](docs/packages.md) |
+| Debian 13, Ubuntu 24.04/26.04 | [DEB packages](docs/packages.md) |
+| Nix or NixOS | [PostgreSQL bundle and NixOS module](docs/nix.md) |
+| Source build | [Build requirements and installation](docs/packaging.md) |
+
+Release downloads, image tags and signed repositories are available after the
+release workflow publishes them. The guides also describe local builds.
+Installing extension files and enabling extensions in a database are separate
+steps; follow your guide's server settings and database activation instructions.
+
+From a source checkout, check an installation with:
 
 ```sh
 psql -X -d your_database -f docs/check-installation.sql
 ```
 
-The check verifies the full bundle, including the optional wait API, without
-changing configuration. It does not verify cluster membership or shard placement.
-See [packaging](docs/packaging.md)
-for staged installation and build variants, and [releasing](docs/releasing.md)
-for artifact publication.
+This checks the full bundle, including the optional wait API, without changing
+configuration. It does not verify cluster membership or shard placement.
 
-# Repository layout
+## Operations and limitations
 
-```text
-pgwrh/          SQL extension: control file, SQL sources, and Makefile
-pgwrh_wait/     Replication wait extension: control file, SQL, C sources, and Makefile
-pgwrh_fdw/      Foreign data wrapper: sources, control file, SQL, docs, and Makefile
-test/
-  pgwrh/        Controller and replica integration tests
-  pgwrh_wait/   Replication wait tests
-  pgwrh_fdw/    FDW integration, SQL, isolation, and TAP tests
-  check-install.py
-Makefile        Combined build, install, clean, and test entry points
-flake.nix       Complete PostgreSQL 18 bundle, extension package, and NixOS module
-flake.lock
-shell.nix       PostgreSQL 18 integration-test environment
-nix/            Supporting Nix expressions
-packaging/      RPM, DEB, container, and signed repository build tooling
-examples/compose/  Controller and two-replica demonstration
-docs/           Project documentation
-```
+Writes go to the controller. Use [replication visibility
+barriers](docs/lsn-wait.md) when a read must observe a known write. Queries
+spanning replicas do not have a single cluster-wide snapshot.
 
-Run `make` and `make install` from the repository root to build and install all
-three extensions. Each extension can also be built independently with
-`make -C pgwrh`, `make -C pgwrh_wait`, or `make -C pgwrh_fdw`. Build products and
-staged test extensions live under `.build/`; PGXS object files and libraries
-remain next to their extension sources.
+Schema changes require operator coordination; version 1.0.0 has no coordinated
+schema-change rollout facility. Placement rollouts do not make schema changes
+atomic across the cluster. Read the [recovery guide](docs/recovery.md) before
+deploying and the [release notes](docs/releases/1.0.0.md) for supported targets
+and limits.
 
-The root test targets are `test-pgwrh`, `test-wait`, `test-fdw`,
-`test-fdw-tap`, and `test-packaging`. For controller/replica tests, use the Nix
-environment, which stages the extensions and provides PostgreSQL and Python:
-
-```sh
-nix-shell --run 'pgwrh-test test/pgwrh -q'
-```
-
-See [packaging](docs/packaging.md), [LSN waiting](docs/lsn-wait.md), and the
-[FDW README](pgwrh_fdw/README.md) for suite-specific dependencies and commands.
-
-# Usage
-
-## On master server
-
-### Create your sharded table partitioning hierarchy
-
-The below example would create a two-level partition hierarchy for `test.my_table`:
-* First level by dates in `col3` (split by year)
-* Second level by hash on `col2`
-```pgsql
-CREATE SCHEMA IF NOT EXISTS test;
-
-CREATE TABLE test.my_data (col1 text, col2 text, col3 date) PARTITION BY RANGE (col3);
-CREATE TABLE test.my_data_2023 PARTITION OF parent FOR VALUES FROM (make_date(2023, 1, 1)) TO (make_date(2024, 1, 1));
-CREATE TABLE test.my_data_2024 PARTITION OF parent FOR VALUES FROM (make_date(2024, 1, 1)) TO (make_date(2025, 1, 1));
-CREATE TABLE test.my_data_2025 PARTITION OF parent FOR VALUES FROM (make_date(2025, 1, 1)) TO (make_date(2026, 1, 1));
-
-CREATE SCHEMA IF NOT EXISTS test_shards;
-DO$$
-DECLARE
-    r record;
-BEGIN
-    FOR r IN
-        SELECT
-            format('CREATE TABLE test_shards.my_data_%1$s_%2$s PARTITION OF test.my_data_%1$s (PRIMARY KEY (col1)) FOR VALUES WITH (MODULUS 16, REMAINDER %2$s)', year, rem) stmt
-        FROM generate_series(2023, 2025) year, generate_series(0, 15) rem
-    LOOP
-        EXECUTE r.stmt;
-    END LOOP;
-END$$;
-```
-
-That gives 48 (16 * 3) shards in total.
-
-**Note** that there are no specific requirements for the partitioning hierarchy and any partitioned table can be sharded - the above is only for illustration purposes.
-
-### Create a replica cluster
-
-Example:
-```pgsql
-SELECT pgwrh.create_replica_cluster('c01');
-```
-
-### Configure roles and user accounts for replicas
-
-(Optional) Create a role for you cluster replicas and grant rights to SELECT from shards.
-```pgsql
-CREATE ROLE c01_replica;
-
-GRANT SELECT ON ALL TABLES IN SCHEMA test_shards TO c01_replica;
-```
-
-Create account for each replica.
-```pgsql
-CREATE USER c01r01 PASSWORD 'c01r01Password' REPLICATION IN ROLE c01_replica;
-```
-
-## On every replica
-
-Make sure `pgwrh` extension is installed.
-
-### Configure connection to master server
-
-Call `configure_controller` function providing username and password of this replica account created on master.
-```pgsql
-SELECT configure_controller(
-    host => 'master.myorg',
-    port => '5432',
-    username => 'cr01r01', -- same as above
-    password => 'c01r01Password' -- same as above
-);
-```
-
-## Create and deploy replica cluster configuration
-
-### Specify what tables to replicate
-
-Example below would configure distribution of every partition of `test.my_data` to half (50%) of replicas,
-except partitions of `test.my_data_2024` which will be copied to all (100%) replicas.
-```pgsql
-WITH st(schema_name, table_name, replication_factory) AS (
-    VALUES
-        ('test', 'my_data', 50),
-        ('test', 'my_data_2024', 100)
-)
-INSERT INTO pgwrh.sharded_table (replication_group_id, sharded_table_schema, sharded_table_name, replication_factor)
-SELECT
-    'c01', schema_name, table_name, replication_factor
-FROM
-    st;
-```
-
-### Configure replicas
-Add replica to configuration:
-```pgsql
-SELECT pgwrh.add_replica('c01', 'c01r01', 'replica01.cluster01.myorg', 5432);
-```
-
-### Start deployment
-```pgsql
-SELECT pgwrh.start_rollout('c01');
-```
-
-New configuration is now visible to connected replicas which will start data replication.
-
-### Commit configuration
-Once all replicas confirmed configuration changes, execute:
-```pgsql
-SELECT pgwrh.commit_rollout('c01');
-```
-(this will fail if some replicas are not reconfigured yet)
-
-### Add more replicas
-```pgsql
-CREATE USER c01r02 PASSWORD 'c01r02Password' REPLICATION IN ROLE c01_replica;
-CREATE USER c01r03 PASSWORD 'c01r03Password' REPLICATION IN ROLE c01_replica;
-CREATE USER c01r04 PASSWORD 'c01r04Password' REPLICATION IN ROLE c01_replica;
-
-select pgwrh.add_replica(
-       _replication_group_id := 'c01',
-       _host_id := 'c01r02',
-       _host_name := 'replica02.cluster01.myorg',
-       _port := 5432);
-select pgwrh.add_replica(
-       _replication_group_id := 'c01',
-       _host_id := 'c01r03',
-       _host_name := 'replica03.cluster01.myorg',
-       _port := 5432,
-       _weight := 70);
-select pgwrh.add_replica(
-       _replication_group_id := 'c01',
-       _host_id := 'c01r04',
-       _host_name := 'replica04.cluster01.myorg',
-       _port := 5432);
-```
-It is possible to adjust the number of shards assigned to replicas by setting replica weight:
-```pgsql
-SELECT pgwrh.set_replica_weight('c01', 'c01r04', 200);
-```
-
-To deploy new configuration:
-```pgsql
-SELECT pgwrh.start_rollout('c01');
-```
-And then:
-```pgsql
-SELECT pgwrh.commit_rollout('c01');
-```
+For source layout, tests and implementation details, see the [contributor
+documentation](docs/development/README.md).

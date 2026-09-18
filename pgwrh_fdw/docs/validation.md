@@ -1,9 +1,9 @@
 # Validation record
 
-Validated on 2026-09-14, locally on macOS arm64 and in Linux CI.
-
-The records below describe development before the unified 0.3.0 release.
-The current tree ships only `pgwrh_fdw--0.3.0.sql` and no upgrade scripts.
+These historical records cover checks on 2026-09-14 and 2026-09-15 before the
+unified 1.0.0 release. Each section states its environment and scope; the initial
+Linux CI result does not cover later changes validated only locally.
+The current tree ships only `pgwrh_fdw--1.0.0.sql` and no upgrade scripts.
 
 ## Weighted routing and initial connection failover
 
@@ -150,7 +150,8 @@ make -C contrib/postgres_fdw install
 
 The SCRAM test used the matching 18.3 source's Perl test modules and locally
 available Perl 5.40 / IPC::Run dependencies. The test extension is staged without
-modifying system PostgreSQL. See the README for reusable test commands.
+modifying system PostgreSQL. See [test instructions](../../docs/development/testing.md#foreign-data-wrapper)
+for reusable commands.
 
 Investigation resolved these initial test failures:
 

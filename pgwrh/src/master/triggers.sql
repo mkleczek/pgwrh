@@ -187,6 +187,25 @@ EXECUTE FUNCTION forbid_locked_version_modifications();
 CREATE OR REPLACE TRIGGER clone_config AFTER INSERT ON sharded_table
 FOR EACH ROW EXECUTE FUNCTION clone_config_trigger();
 
+CREATE TRIGGER "00_next_pending_version" BEFORE INSERT ON sharded_table_az_affinity
+FOR EACH ROW EXECUTE FUNCTION next_pending_version_trigger();
+
+CREATE TRIGGER forbid_not_pending_version_insert BEFORE INSERT ON sharded_table_az_affinity
+FOR EACH ROW WHEN (is_locked(NEW.replication_group_id, NEW.version))
+EXECUTE FUNCTION forbid_locked_version_modifications();
+
+CREATE TRIGGER forbid_not_pending_version_update BEFORE UPDATE ON sharded_table_az_affinity
+FOR EACH ROW
+WHEN (is_locked(OLD.replication_group_id, OLD.version) OR is_locked(NEW.replication_group_id, NEW.version))
+EXECUTE FUNCTION forbid_locked_version_modifications();
+
+CREATE TRIGGER forbid_not_pending_version_delete BEFORE DELETE ON sharded_table_az_affinity
+FOR EACH ROW WHEN (is_locked(OLD.replication_group_id, OLD.version))
+EXECUTE FUNCTION forbid_locked_version_modifications();
+
+CREATE TRIGGER clone_config AFTER INSERT ON sharded_table_az_affinity
+FOR EACH ROW EXECUTE FUNCTION clone_config_trigger();
+
 CREATE OR REPLACE TRIGGER "00_next_pending_version" BEFORE INSERT ON shard_index_template
 FOR EACH ROW EXECUTE FUNCTION next_pending_version_trigger();
 
@@ -220,8 +239,11 @@ FOR EACH ROW EXECUTE FUNCTION replication_group_config_snapshot_trigger();
 CREATE FUNCTION before_clone_insert_trigger() RETURNS trigger LANGUAGE plpgsql AS
 $$
 BEGIN
-    INSERT INTO "@extschema@".replication_group_config (replication_group_id, version, min_replica_count, min_replica_count_per_availability_zone)
-    SELECT replication_group_id, NEW.target_version, min_replica_count, min_replica_count_per_availability_zone FROM
+    INSERT INTO "@extschema@".replication_group_config
+        (replication_group_id, version, min_replica_count, min_replica_count_per_availability_zone,
+         min_replica_count_after_az_failure)
+    SELECT replication_group_id, NEW.target_version, min_replica_count, min_replica_count_per_availability_zone,
+           min_replica_count_after_az_failure FROM
         "@extschema@".replication_group_config
     WHERE
             replication_group_id = NEW.replication_group_id
@@ -246,12 +268,21 @@ BEGIN
     WHERE
         (replication_group_id, version) = (NEW.replication_group_id, NEW.source_version)
     ON CONFLICT DO NOTHING;
-    INSERT INTO sharded_table (replication_group_id, sharded_table_schema, sharded_table_name, version, replication_factor, sharding_key_expression)
-    SELECT replication_group_id, sharded_table_schema, sharded_table_name, NEW.target_version, replication_factor, sharding_key_expression
+    INSERT INTO sharded_table
+        (replication_group_id, sharded_table_schema, sharded_table_name, version, replication_factor,
+         sharding_key_expression, min_replica_count_after_az_failure)
+    SELECT replication_group_id, sharded_table_schema, sharded_table_name, NEW.target_version, replication_factor,
+           sharding_key_expression, min_replica_count_after_az_failure
     FROM
         sharded_table
     WHERE
         (replication_group_id, version) = (NEW.replication_group_id, NEW.source_version)
+    ON CONFLICT DO NOTHING;
+    INSERT INTO sharded_table_az_affinity
+        (replication_group_id, version, sharded_table_schema, sharded_table_name, availability_zone, weight)
+    SELECT replication_group_id, NEW.target_version, sharded_table_schema, sharded_table_name, availability_zone, weight
+    FROM sharded_table_az_affinity
+    WHERE (replication_group_id, version) = (NEW.replication_group_id, NEW.source_version)
     ON CONFLICT DO NOTHING;
     INSERT INTO shard_index_template (replication_group_id, version, index_template_schema, index_template_table_name, index_template_name, index_template)
     SELECT replication_group_id, NEW.target_version, index_template_schema, index_template_table_name, index_template_name, index_template

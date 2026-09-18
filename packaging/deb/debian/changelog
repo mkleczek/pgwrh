@@ -1,3 +1,11 @@
+pgwrh (1.0.0-1) unstable; urgency=medium
+
+  * Prepare the 1.0.0 release of all four PostgreSQL 18 extensions.
+  * Include the controller UI, bundled assets, and deployment examples.
+  * Keep fresh-installation-only packaging with no upgrade scripts.
+
+ -- Michal Kleczek <michal@kleczek.org>  Thu, 17 Sep 2026 16:38:12 +0200
+
 pgwrh (0.3.0-1) unstable; urgency=medium
 
   * Package all three 0.3.0 extensions for PostgreSQL 18.

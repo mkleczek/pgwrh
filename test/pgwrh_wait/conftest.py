@@ -27,6 +27,7 @@ def nodes():
             node = stack.enter_context(get_new_node(
                 name, bin_dir=os.environ.get("PGWRH_TEST_BIN_DIR")))
             node.init(allow_logical=True)
+            node.append_conf("unix_socket_directories = '" + node.base_dir.replace("'", "''") + "'")
             controls = os.environ.get("PGWRH_TEST_CONTROL_PATH", "")
             libraries = os.environ.get("PGWRH_TEST_LIBRARY_PATH", "")
             node.append_conf("postgresql.conf", f"""
