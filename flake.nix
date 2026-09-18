@@ -1,13 +1,16 @@
 {
-  description = "pgwrh 0.3.0 and PostgreSQL 18 with all required extensions";
+  description = "pgwrh 1.0.0 and PostgreSQL 18 with all required extensions";
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-  outputs = { self, nixpkgs }:
+  # Intel macOS is still supported by the 26.05 Darwin branch.
+  inputs.nixpkgs-intel-darwin.url = "github:NixOS/nixpkgs/nixpkgs-26.05-darwin";
+  outputs = { self, nixpkgs, nixpkgs-intel-darwin }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       packagesFor = system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          source = if system == "x86_64-darwin" then nixpkgs-intel-darwin else nixpkgs;
+          pkgs = import source { inherit system; };
           pgwrh = pkgs.postgresql_18.pkgs.callPackage ./nix/pgwrh.nix { };
           postgresql = pkgs.postgresql_18.withPackages (ps: [ pgwrh ps.pg_background ]);
         in { inherit pkgs pgwrh postgresql; };
@@ -17,14 +20,16 @@
         in { inherit (p) pgwrh postgresql; default = p.postgresql; });
       devShells = forAllSystems (system:
         let p = packagesFor system;
-        in { default = p.pkgs.mkShell {
+        in {
+          tests = import ./nix/tests.nix { pkgs = p.pkgs; };
+          default = p.pkgs.mkShell {
           packages = [ p.postgresql p.postgresql.pg_config p.pkgs.python3 ];
           inputsFrom = [ p.pgwrh ];
           PG_CONFIG = "${p.postgresql.pg_config}/bin/pg_config";
         }; });
       checks = forAllSystems (system:
         let p = packagesFor system;
-        in { installed = p.pkgs.runCommand "pgwrh-installed-0.3.0" {
+        in { installed = p.pkgs.runCommand "pgwrh-installed-1.0.0" {
           nativeBuildInputs = [ p.postgresql ];
         } ''
           bash ${./test/packaging/installed.sh} ${./test/packaging/installed.sql}

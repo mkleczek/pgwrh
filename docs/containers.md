@@ -1,28 +1,32 @@
 # Containers and the local demonstration cluster
 
-The image contains PostgreSQL 18, `pg_background`, and all three
-pgwrh extensions at version 0.3.0. It enables logical replication and preloads
-`pgwrh_wait`. During initialization of an empty volume it runs
-`CREATE EXTENSION pgwrh CASCADE` and `CREATE EXTENSION pgwrh_wait` in `POSTGRES_DB`,
-enabling the core with its dependencies and the independent wait API.
-Existing volumes are not initialized again.
+The image includes PostgreSQL 18, the four [pgwrh
+extensions](../README.md#components) at version 1.0.0, and their `pg_background`
+dependency. It configures logical replication and preloads `pgwrh_wait`.
+
+When initializing an empty volume, it enables `pgwrh` with its dependencies and
+`pgwrh_wait` in `POSTGRES_DB`. Existing volumes are not initialized again. The
+Compose quickstart adds a controller-only browser console served by PostgREST.
+See [cluster concepts](overview.md) for the roles of the controller and
+replicas.
 
 ## Try sharding locally
 
-Download and unpack the 0.3.0 source archive, then:
+Install Docker with Compose and curl. From a repository checkout or unpacked
+1.0.0 source archive, run the command below. If the release image has not yet
+been published, [build a local image](#build-a-local-image) first.
 
 ```sh
-cd examples/compose
-docker compose up -d
-docker compose logs -f setup
+bash examples/compose/quickstart.sh
 ```
 
-Wait for **pgwrh demo ready**. The setup service creates a controller, two logical
-replicas, four hash partitions, and 100 example rows. It waits for rollout
-readiness, commits the configuration, and compares query results on both replicas.
+Wait for **Quickstart verified**. The setup service creates a controller, two
+logical replicas, four hash partitions, and 100 example rows. It waits for
+rollout readiness, commits the configuration, and compares query results on both
+replicas.
 
 ```sh
-docker compose exec replica1 psql -U postgres -d pgwrh_demo \
+docker compose -f examples/compose/compose.yaml exec replica1 psql -U postgres -d pgwrh_demo \
   -c 'SELECT count(*), sum(id) FROM demo.events;'
 ```
 
@@ -33,28 +37,35 @@ These fixed credentials are for this local demo. Do not expose it as a productio
 service. Override `PGWRH_CONTROLLER_PORT`, `PGWRH_REPLICA1_PORT`, and
 `PGWRH_REPLICA2_PORT` if those host ports are occupied.
 
-`docker compose down` retains database volumes. Running setup again reuses the
-demo configuration and restarts replica reconciliation. To delete the demo data
-and start fresh, use `docker compose down -v`.
+Open [the console](http://localhost:13000/rpc/index?group_id=demo) for the
+read-only console served by PostgREST 14.16. Override `PGWRH_UI_PORT` to change
+its loopback port. The `ui` Compose profile enables `pgwrh_ui` only on the
+controller and grants the viewer role to a dedicated login; it does not enable
+anonymous operator access. For a cluster without the console, use `docker
+compose up -d` in `examples/compose` without the `ui` profile.
 
-## Build and test before publication
+From `examples/compose`, `docker compose --profile ui down` retains database
+volumes. Running setup again reuses the demo configuration and restarts replica
+reconciliation. To delete the demo data and start fresh, use `docker compose
+--profile ui down -v`.
+
+## Build a local image
 
 From the repository root:
 
 ```sh
-docker build -f packaging/container/Dockerfile -t pgwrh:0.3.0-local .
-PGWRH_IMAGE=pgwrh:0.3.0-local docker compose -f examples/compose/compose.yaml up -d
-PGWRH_IMAGE=pgwrh:0.3.0-local docker compose -f examples/compose/compose.yaml logs -f setup
+docker build -f packaging/container/Dockerfile -t pgwrh:1.0.0-local .
+PGWRH_IMAGE=pgwrh:1.0.0-local bash examples/compose/quickstart.sh
 ```
 
-The build tests the installed extensions in a temporary database before producing
-an image. `PGWRH_IMAGE` also permits using an immutable image digest. The default
-`ghcr.io/mkleczek/pgwrh:0.3.0-pg18` reference becomes available when the release
-workflow publishes it; a local build is required before then.
+`PGWRH_IMAGE` also accepts an immutable image digest. The default
+`ghcr.io/mkleczek/pgwrh:1.0.0-pg18` reference becomes available when the release
+workflow publishes it; use the local build before then.
 
-The image follows the [official PostgreSQL image](https://hub.docker.com/_/postgres)
-entrypoint conventions. PostgreSQL 18 volumes mount at `/var/lib/postgresql`.
-Production deployments should supply their own credentials, storage, resource
-limits, replication settings and network configuration. Overriding the image's
-command replaces its default PostgreSQL settings; preserve the required preload
-and logical-replication settings. See [native installation](packages.md).
+The image follows the [official PostgreSQL
+image](https://hub.docker.com/_/postgres) entrypoint conventions. PostgreSQL 18
+volumes mount at `/var/lib/postgresql`. Production deployments should supply
+their own credentials, storage, resource limits, replication settings and
+network configuration. Overriding the image's command replaces its default
+PostgreSQL settings; preserve the required preload and logical-replication
+settings. See [native installation](packages.md).

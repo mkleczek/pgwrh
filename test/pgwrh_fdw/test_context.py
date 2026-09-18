@@ -84,13 +84,13 @@ class ContextTests(unittest.TestCase):
 
     def test_initial_release_installation(self):
         self.assertEqual(self.c.scalar(
-            "SELECT extversion FROM pg_extension WHERE extname = 'pgwrh_fdw'"), "0.3.0")
+            "SELECT extversion FROM pg_extension WHERE extname = 'pgwrh_fdw'"), "1.0.0")
         self.assertEqual(self.c.sql(
             "SELECT version FROM pg_available_extension_versions WHERE name = 'pgwrh_fdw'"),
-            [("0.3.0",)])
+            [("1.0.0",)])
         self.assertEqual(self.c.sql("SELECT * FROM pg_extension_update_paths('pgwrh_fdw')"), [])
         self.assertEqual(self.c.scalar(
-            "SELECT version FROM pg_get_loaded_modules() WHERE module_name = 'pgwrh_fdw'"), "0.3.0")
+            "SELECT version FROM pg_get_loaded_modules() WHERE module_name = 'pgwrh_fdw'"), "1.0.0")
         self.assertEqual(self.c.scalar("SELECT count(*) FROM pgwrh_fdw_get_connections()"), "0")
         self.assertEqual(self.c.scalar("SELECT count(*) FROM pgwrh_fdw_get_connections(true)"), "0")
         self.assertEqual(self.c.scalar("SELECT pgwrh_fdw_disconnect('s_a')"), "f")

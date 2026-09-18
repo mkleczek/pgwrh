@@ -55,12 +55,19 @@ CREATE OR REPLACE FUNCTION next_pending_version(group_id text) RETURNS config_ve
     LANGUAGE sql AS
 $$
     INSERT INTO "@extschema@".replication_group_config
+        (replication_group_id, version, min_replica_count,
+         min_replica_count_per_availability_zone,
+         min_replica_count_after_az_failure)
     SELECT
-        replication_group_id, "@extschema@".next_version(current_version)
+        g.replication_group_id, "@extschema@".next_version(current_version),
+        cfg.min_replica_count, cfg.min_replica_count_per_availability_zone,
+        cfg.min_replica_count_after_az_failure
     FROM
-        "@extschema@".replication_group
+        "@extschema@".replication_group g
+        JOIN "@extschema@".replication_group_config cfg
+          ON (cfg.replication_group_id, cfg.version) = (g.replication_group_id, g.current_version)
     WHERE
-        replication_group_id = group_id
+        g.replication_group_id = group_id
     ON CONFLICT DO NOTHING;
 
     SELECT

@@ -94,7 +94,9 @@ def test_scale_out_keeps_reads_stable_with_one_replica_offline(cluster_factory):
         )
     )
     _set_pending_replication_factor(cluster.master, factor=50)
-    cluster.deploy(commit=True)
+    # This scenario grows to six PostgreSQL instances on a shared CI runner.
+    # Allow the real copy/index/attachment work to finish before asserting readiness.
+    cluster.deploy(commit=True, timeout=120)
 
     _assert_current_shard_replica_count(cluster, expected_count=2)
     _assert_query_results_match(cluster.master, cluster.replicas, rounds=1)
@@ -105,7 +107,7 @@ def test_scale_out_keeps_reads_stable_with_one_replica_offline(cluster_factory):
             ReplicaSpec("replica5"),
         )
     )
-    cluster.deploy(commit=True)
+    cluster.deploy(commit=True, timeout=120)
 
     _assert_current_shard_replica_count(cluster, expected_count=3)
     _assert_query_results_match(cluster.master, cluster.replicas, rounds=1)

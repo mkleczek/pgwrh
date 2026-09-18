@@ -112,7 +112,10 @@ BEGIN
     INTO
         _handle
     FROM
-        "@extschema:pg_background@".pg_background_launch_v2('select async, transactional, description, commands from "@extschema@".sync');
+        -- The metadata plan expands many catalog expressions but returns few
+        -- rows. JIT compilation can dominate every pass on LLVM-enabled servers.
+        -- This worker owns its session, so application query settings are untouched.
+        "@extschema:pg_background@".pg_background_launch_v2('SET jit = off; select async, transactional, description, commands from "@extschema@".sync');
 
     RETURN QUERY
         SELECT
