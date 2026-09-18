@@ -42,7 +42,8 @@ CREATE FUNCTION mutate(
     group_id text, operation text, expected text,
     replica_id text DEFAULT '', availability_zone text DEFAULT '',
     host_name text DEFAULT '', port int DEFAULT 5432, member_role text DEFAULT '',
-    weight int DEFAULT 100, online boolean DEFAULT true, confirm boolean DEFAULT false
+    weight int DEFAULT 100, online boolean DEFAULT true, confirm boolean DEFAULT false,
+    dbname text DEFAULT current_database()
 ) RETURNS "text/html"
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER
 SET search_path = pg_catalog, pgwrh_ui, pg_temp SET lock_timeout = '3s' AS $$
@@ -85,13 +86,14 @@ BEGIN
         IF replica_id IS NULL OR btrim(replica_id)='' OR length(replica_id)>200
             OR availability_zone IS NULL OR btrim(availability_zone)='' OR length(availability_zone)>200
             OR host_name IS NULL OR btrim(host_name)='' OR length(host_name)>253
+            OR dbname IS NULL OR dbname=''
             OR port IS NULL OR port NOT BETWEEN 1 AND 65535 OR weight IS NULL OR weight<=0 THEN
-            RAISE sqlstate 'PT422' USING MESSAGE = 'Provide a replica ID, zone, hostname, port (1–65535), and positive weight.';
+            RAISE sqlstate 'PT422' USING MESSAGE = 'Provide a replica ID, zone, hostname, database, port (1–65535), and positive weight.';
         END IF;
         SELECT oid::regrole INTO role_id FROM pg_roles
         WHERE rolname=member_role AND rolcanlogin AND rolreplication AND NOT rolsuper;
         IF role_id IS NULL THEN RAISE sqlstate 'PT422' USING MESSAGE = 'Choose an existing non-superuser role with LOGIN and REPLICATION. Create it and grant shard access separately.'; END IF;
-        PERFORM pgwrh.add_replica(group_id,replica_id,host_name,port,role_id,availability_zone,weight);
+        PERFORM pgwrh.add_replica(group_id,replica_id,host_name,port,role_id,availability_zone,weight,dbname);
         message := 'Replica registered in the pending configuration. Configure its controller connection separately, then review placement and start rollout.';
     WHEN 'weight' THEN
         IF weight IS NULL OR weight<=0 THEN RAISE sqlstate 'PT422' USING MESSAGE = 'Weight must be positive. Use exclusion to remove a host from the next placement.'; END IF;
@@ -155,7 +157,7 @@ DECLARE
     state record; r record; token text; result text := ''; options text := ''; missing bigint;
 BEGIN
     IF group_id IS NULL OR NOT has_function_privilege(actor,
-        'pgwrh_ui.mutate(text,text,text,text,text,text,integer,text,integer,boolean,boolean)','EXECUTE') THEN RETURN ''; END IF;
+        'pgwrh_ui.mutate(text,text,text,text,text,text,integer,text,integer,boolean,boolean,text)','EXECUTE') THEN RETURN ''; END IF;
     SELECT * INTO STRICT state FROM group_state(group_id);
     token := revision(group_id);
     IF page='replicas' THEN
@@ -169,6 +171,7 @@ BEGIN
                 '<label>Availability zone<input name="availability_zone" value="default" required maxlength="200"></label>' ||
                 '<label>Hostname<input name="host_name" required maxlength="253"></label>' ||
                 '<label>Port<input name="port" type="number" value="5432" min="1" max="65535" required></label>' ||
+                '<label>Database<input name="dbname" value="' || escape(current_database()) || '" required></label>' ||
                 '<label>Replication role<select name="member_role" required><option value="">Choose a role</option>' || options || '</select></label>' ||
                 '<label>Weight<input name="weight" type="number" value="100" min="1" max="2147483647" required></label>' ||
                 '</div><button type="submit">Add to pending configuration</button></form></details>';

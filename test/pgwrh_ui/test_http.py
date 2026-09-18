@@ -127,3 +127,12 @@ def test_operator_form_posts_errors_and_origin_validation(configured, tmp_path):
         assert status == 422 and 'Weight must be positive' in html
         status, _, _ = request(url + 'mutate?' + urllib.parse.urlencode(fields), headers=headers)
         assert status == 403  # GET never performs management work
+        configured.execute('CREATE ROLE replica3 LOGIN REPLICATION')
+        status, _, html = request(url + 'mutate', {
+            'group_id':'g1', 'operation':'add', 'expected':token,
+            'replica_id':'r3', 'availability_zone':'a', 'host_name':'r3.invalid',
+            'member_role':'replica3', 'dbname':"replica <db>, '=\\",
+        }, headers)
+        assert status == 200 and 'Replica registered' in html
+        assert configured.execute("SELECT dbname FROM pgwrh.shard_host WHERE host_id='r3'") == [("replica <db>, '=\\",)]
+        assert 'replica &lt;db&gt;' in html
