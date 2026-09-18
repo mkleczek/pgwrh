@@ -20,9 +20,9 @@ Enable `pgwrh_fdw` in the local database first:
 CREATE EXTENSION pgwrh_fdw;
 
 CREATE SERVER replica_a FOREIGN DATA WRAPPER pgwrh_fdw
-    OPTIONS (host 'a', dbname 'app');
+    OPTIONS (host 'a', dbname 'app_a');
 CREATE SERVER replica_b FOREIGN DATA WRAPPER pgwrh_fdw
-    OPTIONS (host 'b', dbname 'app');
+    OPTIONS (host 'b', dbname 'app_b');
 CREATE USER MAPPING FOR CURRENT_USER SERVER replica_a
     OPTIONS (user 'reader', password 'replace-me');
 CREATE USER MAPPING FOR CURRENT_USER SERVER replica_b
@@ -36,6 +36,10 @@ CREATE USER MAPPING FOR PUBLIC SERVER replicas_ab;
 CREATE FOREIGN TABLE items(id bigint, value text)
     SERVER replicas_ab OPTIONS (schema_name 'public', table_name 'items');
 ```
+
+Each ordinary member has its own `dbname`; virtual-server load balancing does
+not require matching database names. Both databases must expose the relation
+named by the foreign table with compatible columns.
 
 `members` is a server-only option containing a nonempty comma-separated list of
 SQL identifiers. Whitespace is allowed; double-quote case-sensitive names and
