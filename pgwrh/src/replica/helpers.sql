@@ -19,7 +19,10 @@
 -- options parsing
 CREATE OR REPLACE FUNCTION opts(arr text[]) RETURNS TABLE(key text, value text, vals text[]) LANGUAGE sql AS
 $$
-SELECT kv[1] AS key, kv[2] AS value, vals FROM unnest(arr) AS o(val), string_to_array(o.val, '=') AS kv, string_to_array(kv[2], ',') vals
+SELECT key, value, string_to_array(value, ',') AS vals
+FROM unnest(arr) AS o(val),
+     LATERAL (SELECT split_part(val, '=', 1) AS key,
+                     substr(val, strpos(val, '=') + 1) AS value) kv
 $$;
 
 CREATE OR REPLACE FUNCTION update_server_options(_srvname text, srvoptions text[], host text, port text, dbname text DEFAULT current_database())
@@ -166,7 +169,7 @@ SELECT
     'pgwrh_replica_subscription' AS subname,
     sa.pubname,
     sa.shard_server_user,
-    sa.dbname,
+    sa.dbnames,
     host,
     port,
     connect_remote,
@@ -198,13 +201,13 @@ FROM
 -- controller's same-zone preference without adding an assignment field.
 CREATE VIEW assignment_target AS
 SELECT (a.schema_name, a.table_name)::rel_id AS node_rel_id,
-       pgwrh_target_server(e.member_role, e.host, e.port, a.dbname, a.shard_server_user) AS server_name,
-       e.host, e.port, a.dbname, a.shard_server_user, count(*)::integer AS weight
+       pgwrh_target_server(e.member_role, e.host, e.port, e.dbname, a.shard_server_user) AS server_name,
+       e.host, e.port, e.dbname, a.shard_server_user, count(*)::integer AS weight
 FROM fdw_shard_assignment a,
-     LATERAL unnest(a.shard_server_members, string_to_array(a.host, ','), string_to_array(a.port, ','))
-         AS e(member_role, host, port)
-WHERE pgwrh_target_servers(a.shard_server_members, a.host, a.port, a.dbname, a.shard_server_user) IS NOT NULL
-GROUP BY a.schema_name, a.table_name, e.member_role, e.host, e.port, a.dbname, a.shard_server_user;
+     LATERAL unnest(a.shard_server_members, string_to_array(a.host, ','), string_to_array(a.port, ','), a.dbnames)
+         AS e(member_role, host, port, dbname)
+WHERE pgwrh_target_servers(a.shard_server_members, a.host, a.port, a.dbnames, a.shard_server_user) IS NOT NULL
+GROUP BY a.schema_name, a.table_name, e.member_role, e.host, e.port, e.dbname, a.shard_server_user;
 
 CREATE VIEW subscribed_local_shard AS
     SELECT

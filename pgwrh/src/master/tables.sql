@@ -145,6 +145,7 @@ CREATE TABLE  shard_host (
     host_id text NOT NULL,
     host_name text NOT NULL,
     port int NOT NULL CHECK ( port > 0 ),
+    dbname text NOT NULL DEFAULT current_database() CHECK (dbname <> ''),
 
     online boolean NOT NULL DEFAULT true,
 
@@ -152,10 +153,12 @@ CREATE TABLE  shard_host (
     FOREIGN KEY (replication_group_id, availability_zone, host_id)
         REFERENCES replication_group_member(replication_group_id, availability_zone, host_id)
         ON DELETE CASCADE,
-    UNIQUE (host_name, port)
+    UNIQUE (host_name, port, dbname)
 );
 COMMENT ON TABLE shard_host IS
 'Represents a data replicating node in a cluster (replication group).';
+COMMENT ON COLUMN shard_host.dbname IS
+'Database on this shard host. Defaults to the controller database name.';
 COMMENT ON COLUMN shard_host.online IS
 'Shard host marked as offline is not going to receive any requests for data from other nodes.
 It is still replicating shards assigned to it.

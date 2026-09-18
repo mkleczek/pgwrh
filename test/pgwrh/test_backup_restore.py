@@ -62,7 +62,7 @@ def test_controller_dump_restore(postgres_node_factory, tmp_path, phase):
     """)
     if phase == "in_flight":
         source.execute("""SELECT pgwrh.add_replica('backup', 'replica', 'replica.invalid',
-            5432, 'backup_replica', 'a');
+            5432, 'backup_replica', 'a', _dbname := 'replica data');
             UPDATE pgwrh.replication_group_config SET min_replica_count = 1,
                 min_replica_count_per_availability_zone = 0,
                 min_replica_count_after_az_failure = 0 WHERE version = 'FLIP';

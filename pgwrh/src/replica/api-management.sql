@@ -18,7 +18,7 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-CREATE OR REPLACE FUNCTION configure_controller(host text, port text, username text, password text, start_daemon boolean DEFAULT true, refresh_seconds real DEFAULT 20)
+CREATE OR REPLACE FUNCTION configure_controller(host text, port text, username text, password text, start_daemon boolean DEFAULT true, refresh_seconds real DEFAULT 20, dbname text DEFAULT current_database())
     RETURNS void
     SET SEARCH_PATH FROM CURRENT
     SECURITY DEFINER
@@ -26,21 +26,30 @@ CREATE OR REPLACE FUNCTION configure_controller(host text, port text, username t
 $$
 DECLARE
     r record;
+    controller_conninfo text;
 BEGIN
-    FOR r IN SELECT * FROM "@extschema@".update_server_options('replica_controller', host, port) AS u(cmd) LOOP
+    IF dbname IS NULL OR dbname = '' THEN
+        RAISE EXCEPTION 'Controller database name must not be empty';
+    END IF;
+    FOR r IN SELECT * FROM "@extschema@".update_server_options('replica_controller', host, port, dbname) AS u(cmd) LOOP
             EXECUTE r.cmd;
     END LOOP;
     FOR r IN SELECT * FROM "@extschema@".update_user_mapping('replica_controller', username, password) AS u(cmd) LOOP
             EXECUTE r.cmd;
     END LOOP;
-    --format('host=%s port=%s user=%s password=%s dbname=%s target_session_attrs=primary'
+    -- libpq values need backslash escaping, independently of SQL literal quoting.
+    SELECT string_agg(key || '=' || chr(39) ||
+        replace(replace(value, chr(92), chr(92) || chr(92)), chr(39), chr(92) || chr(39)) || chr(39), ' ')
+    INTO controller_conninfo
+    FROM unnest(ARRAY['host', 'port', 'user', 'password', 'dbname'],
+                ARRAY[host, port, username, password, dbname]) AS o(key, value);
     PERFORM exec_dynamic(format('CREATE TRIGGER make_sure_daemon_started_on_ping AFTER INSERT ON ping
         FOR ROW EXECUTE FUNCTION make_sure_daemon_started_on_ping_trigger(%s)', refresh_seconds));
     ALTER TABLE ping ENABLE REPLICA TRIGGER make_sure_daemon_started_on_ping;
     INSERT INTO shard_subscription (subname) VALUES ('pgwrh_replica_subscription');
     PERFORM "@extschema@".bg_exec_wait(
-        format('CREATE SUBSCRIPTION pgwrh_replica_subscription CONNECTION ''host=%s port=%s user=%s password=%s dbname=%s target_session_attrs=primary'' PUBLICATION %I WITH (copy_data = false, %s)',
-               host, port, username, password, current_database(), 'pgwrh_controller_ping',
+        format('CREATE SUBSCRIPTION pgwrh_replica_subscription CONNECTION %L PUBLICATION %I WITH (copy_data = false, %s)',
+               controller_conninfo || ' target_session_attrs=primary', 'pgwrh_controller_ping',
                (
                    SELECT string_agg(format('%s = %L', key, val), ', ') FROM (
                          SELECT

@@ -81,13 +81,14 @@ def test_assignment_repetitions_become_target_weights(postgres_node_factory):
             SET search_path = pg_temp, pgwrh, public;
             CREATE TEMP TABLE fdw_shard_assignment (LIKE pgwrh.fdw_shard_assignment);
             INSERT INTO fdw_shard_assignment
-                (schema_name, table_name, shard_server_members, host, port, dbname, shard_server_user)
-            VALUES ('data', 'a', ARRAY['near','far','near','near'], 'hn,hf,hn,hn', '1,2,1,1', 'db', 'u'),
-                   ('data', 'b', ARRAY['far','near','near','near'], 'hf,hn,hn,hn', '2,1,1,1', 'db', 'u');
+                (schema_name, table_name, shard_server_members, host, port, dbnames, shard_server_user)
+            VALUES ('data', 'a', ARRAY['near','far','near','near'], 'hn,hf,hn,hn', '1,2,1,1', ARRAY['near db','far,db','near db','near db'], 'u'),
+                   ('data', 'b', ARRAY['far','near','near','near'], 'hf,hn,hn,hn', '2,1,1,1', ARRAY['far,db','near db','near db','near db'], 'u');
         """)
         conn.execute('CREATE TEMP VIEW assignment_target AS' + definition)
         assert conn.execute('SELECT host, weight FROM assignment_target ORDER BY host, node_rel_id') == [
             ('hf', 1), ('hf', 1), ('hn', 3), ('hn', 3)]
+        assert conn.execute('SELECT DISTINCT host, dbname FROM assignment_target ORDER BY host') == [('hf', 'far,db'), ('hn', 'near db')]
         assert conn.execute('SELECT count(DISTINCT server_name) FROM assignment_target') == [(2,)]
         conn.execute("UPDATE fdw_shard_assignment SET host = 'hn' WHERE table_name = 'a'")
         assert conn.execute('SELECT count(*) FROM assignment_target') == [(2,)]

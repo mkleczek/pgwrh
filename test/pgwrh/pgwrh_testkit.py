@@ -129,6 +129,7 @@ class ReplicaSpec:
     weight: int = 100
     refresh_seconds: float = 0.1
     member_role: str | None = None
+    dbname: str | None = None
 
     @property
     def login_role(self) -> str:
@@ -167,6 +168,7 @@ class ReplicaHandle:
         master_port: int,
         host: str = "localhost",
         start_daemon: bool = True,
+        master_dbname: str | None = None,
     ) -> None:
         self.execute(
             """
@@ -177,6 +179,7 @@ class ReplicaHandle:
                 password := {password},
                 start_daemon := {start_daemon},
                 refresh_seconds := {refresh_seconds}
+                {database_option}
             )
             """.format(
                 host=quote_literal(host),
@@ -185,6 +188,7 @@ class ReplicaHandle:
                 password=quote_literal(self.password),
                 start_daemon="true" if start_daemon else "false",
                 refresh_seconds=self.spec.refresh_seconds,
+                database_option=(f", dbname := {quote_literal(master_dbname)}" if master_dbname is not None else ""),
             )
         )
 
@@ -258,6 +262,8 @@ class MasterHandle:
             args.append(
                 f"_member_role := {quote_literal(replica.member_role)}::regrole"
             )
+        if replica.dbname is not None:
+            args.append(f"_dbname := {quote_literal(replica.dbname)}")
 
         self.execute(
             "SELECT pgwrh.add_replica(\n    " + ",\n    ".join(args) + "\n)"
@@ -270,7 +276,10 @@ class MasterHandle:
             password=password,
             group_id=self.group_id,
         )
-        handle.configure_controller(master_port=self.port)
+        master_dbname = self.query_scalar('SELECT current_database()')
+        replica_dbname = query_scalar(node, 'SELECT current_database()')
+        handle.configure_controller(master_port=self.port,
+                                    master_dbname=master_dbname if master_dbname != replica_dbname else None)
         return handle
 
     def start_rollout(self) -> None:
@@ -405,7 +414,7 @@ class PgwrhCluster:
     replicas: list[ReplicaHandle] = field(default_factory=list)
 
     def add_replica(self, replica: ReplicaSpec) -> ReplicaHandle:
-        node = self.node_factory(replica.name)
+        node = self.node_factory(replica.name, **({'dbname': replica.dbname} if replica.dbname is not None else {}))
         handle = self.master.register_replica(replica, node)
         self.replicas.append(handle)
         return handle

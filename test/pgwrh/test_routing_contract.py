@@ -4,20 +4,28 @@ from pathlib import Path
 def test_target_identity_and_canonical_members(postgres_node_factory):
     node = postgres_node_factory('target_identity')
     assert node.execute("""
-        SELECT pgwrh.pgwrh_target_servers(ARRAY['b','a','a'], 'hb,ha,ha', '2,1,1', 'db', 'reader')
-             = pgwrh.pgwrh_target_servers(ARRAY['a','b'], 'ha,hb', '1,2', 'db', 'reader'),
+        SELECT pgwrh.pgwrh_target_servers(ARRAY['b','a','a'], 'hb,ha,ha', '2,1,1', ARRAY['db_b','db_a','db_a'], 'reader')
+             = pgwrh.pgwrh_target_servers(ARRAY['a','b'], 'ha,hb', '1,2', ARRAY['db_a','db_b'], 'reader'),
                pgwrh.pgwrh_target_server('a','ha','1','db','reader')
             <> pgwrh.pgwrh_target_server('a','ha','2','db','reader'),
                pgwrh.pgwrh_target_server('a','ha','1','db','reader')
-            <> pgwrh.pgwrh_target_server('a','ha','1','db','rotated')
-    """) == [(True, True, True)]
+            <> pgwrh.pgwrh_target_server('a','ha','1','db','rotated'),
+               pgwrh.pgwrh_target_server('a','ha','1','db','reader')
+            <> pgwrh.pgwrh_target_server('a','ha','1','different','reader')
+    """) == [(True, True, True, True)]
     for roles, hosts, ports in (("ARRAY['a','b']", 'ha', '1,2'),
                                  ("ARRAY['a']", 'ha,hb', '1'),
                                  ("ARRAY['a',NULL]", 'ha,hb', '1,2'),
                                  ("ARRAY[['a']]", 'ha', '1'),
                                  ("ARRAY[]::text[]", '', ''),
                                  ("ARRAY['a']", '', '1')):
-        assert node.execute(f"SELECT pgwrh.pgwrh_target_servers({roles}, '{hosts}', '{ports}', 'db', 'reader') IS NULL") == [(True,)]
+        assert node.execute(f"SELECT pgwrh.pgwrh_target_servers({roles}, '{hosts}', '{ports}', ARRAY['db'], 'reader') IS NULL") == [(True,)]
+
+    for dbnames in ("NULL::text[]", "ARRAY[]::text[]", "ARRAY['db']",
+                    "ARRAY['db','other','extra']", "ARRAY['db',NULL]",
+                    "ARRAY['db','']", "ARRAY[['db','other']]"):
+        assert node.execute(f"""SELECT pgwrh.pgwrh_target_servers(
+            ARRAY['a','b'], 'ha,hb', '1,2', {dbnames}, 'reader') IS NULL""") == [(True,)]
 
 
 def test_readiness_requires_nonempty_allowed_actual_targets(postgres_node_factory):

@@ -187,7 +187,7 @@ SELECT
     shard_server_name,
     host,
     port,
-    dbname,
+    dbnames,
     shard_server_user,
     pubname,
     connect_remote,
@@ -206,7 +206,8 @@ COMMENT ON VIEW shard_assignment IS
 Presents a particular replication_group_member (as identified by member_role) view of the cluster (replicaton_group).
 Each member sees all shards with the following information for each shard:
 * "local" flag saying if this shard should be replicated to this member
-* information on how to connect to remote replicas for this shard: host, port, dbname, user, password';
+* positionally aligned shard_server_members, host, port and dbnames for remote replicas
+* shard_server_user identifying the credentials for those destinations';
 
 CREATE OR REPLACE VIEW shard_index AS
 SELECT

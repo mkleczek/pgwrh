@@ -82,7 +82,8 @@ CREATE FUNCTION add_replica(
         _port int,
         _member_role regrole DEFAULT NULL,
         _availability_zone text DEFAULT 'default',
-        _weight int DEFAULT 100)
+        _weight int DEFAULT 100,
+        _dbname text DEFAULT current_database())
     RETURNS void
     SET SEARCH_PATH FROM CURRENT
     LANGUAGE sql
@@ -93,15 +94,16 @@ $$
         VALUES (_replication_group_id, _replica_id, coalesce(_member_role::text, _replica_id::regrole::text), _availability_zone)
     ),
     h AS (
-        INSERT INTO shard_host (replication_group_id, availability_zone, host_id, host_name, port)
-        VALUES (_replication_group_id, _availability_zone, _replica_id, _host_name, _port)
+        INSERT INTO shard_host (replication_group_id, availability_zone, host_id, host_name, port, dbname)
+        VALUES (_replication_group_id, _availability_zone, _replica_id, _host_name, _port, _dbname)
     )
     INSERT INTO shard_host_weight (replication_group_id, availability_zone, host_id, weight)
     VALUES (_replication_group_id, _availability_zone, _replica_id, _weight)
 $$;
-COMMENT ON FUNCTION add_replica(_replication_group_id text, _host_id text, _host_name text, _port int, _member_role regrole, _availability_zone text, _weight int) IS
+COMMENT ON FUNCTION add_replica(_replication_group_id text, _host_id text, _host_name text, _port int, _member_role regrole, _availability_zone text, _weight int, _dbname text) IS
 $$
 Adds new replica to a cluster.
+_dbname identifies the replica database and defaults to the controller database name.
 $$;
 
 CREATE FUNCTION set_replica_weight(

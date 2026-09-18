@@ -13,6 +13,7 @@ from .pgwrh_testkit import (
     MasterHandle,
     PgwrhCluster,
     ReplicaSpec,
+    quote_ident,
 )
 
 POSTGRES_CONF = (
@@ -33,6 +34,26 @@ MISSING_EXTENSION_MESSAGE = (
     "Run `make testgres-ext` or set PGWRH_TEST_EXT_PATHS to a directory "
     "containing `extension/pgwrh.control`."
 )
+
+
+class DatabaseNode:
+    """Select a database while retaining the testgres node's lifecycle and tools."""
+
+    def __init__(self, node, dbname):
+        self.node = node
+        self.dbname = dbname
+
+    def __getattr__(self, name):
+        return getattr(self.node, name)
+
+    def execute(self, query, **kwargs):
+        return self.node.execute(query=query, dbname=self.dbname, **kwargs)
+
+    def connect(self, **kwargs):
+        return self.node.connect(dbname=self.dbname, **kwargs)
+
+    def psql(self, **kwargs):
+        return self.node.psql(dbname=self.dbname, **kwargs)
 
 
 def _extension_paths() -> str:
@@ -81,7 +102,7 @@ def postgres_node_factory():
     with ExitStack() as stack:
         stack.enter_context(scoped_config(use_python_logging=True))
 
-        def build(name: str, *, install_extension: bool = True):
+        def build(name: str, *, install_extension: bool = True, dbname: str | None = None):
             node = get_new_node(name, bin_dir=os.environ.get(POSTGRES_BIN_DIR_ENV))
             stack.enter_context(node)
             node.init(allow_logical=True)
@@ -101,6 +122,9 @@ def postgres_node_factory():
                     + _quote_conf_value(f"{extension_paths}:$system")
                 )
             node.start()
+            if dbname is not None:
+                node.execute(f'CREATE DATABASE {quote_ident(dbname)}')
+                node = DatabaseNode(node, dbname)
             if os.environ.get(DEBUG_ENV):
                 print("bin_dir:", node.bin_dir)
                 print("dynamic_library_path:", node.execute("SHOW dynamic_library_path")[0][0])
