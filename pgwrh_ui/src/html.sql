@@ -71,7 +71,7 @@ BEGIN
     FOR r IN SELECT * FROM replica_state(group_id) ORDER BY availability_zone, host_id LOOP
         rows := rows || '<tr><td><strong>' || escape(r.host_id) || '</strong><br><small>' || escape(r.member_role) ||
             '</small></td><td>' || escape(r.availability_zone) || '</td><td>' ||
-            coalesce(escape(r.host_name) || ':' || r.port, 'Proxy member') || '</td><td>' ||
+            coalesce(escape(r.host_name) || ':' || r.port || '<br><small>' || escape(r.dbname) || '</small>', 'Proxy member') || '</td><td>' ||
             badge(CASE WHEN r.online THEN 'Enabled' WHEN r.online IS FALSE THEN 'Maintenance' ELSE 'Proxy' END,
                 CASE WHEN r.online IS FALSE THEN 'warning' ELSE '' END) || '</td><td>' ||
             coalesce(r.current_weight::text,'—') || ' / ' || coalesce(r.pending_weight::text,'—') || '</td><td>' ||

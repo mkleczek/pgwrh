@@ -102,7 +102,7 @@ def test_controller_dump_restore(postgres_node_factory, tmp_path, phase):
     assert target.execute("""SELECT has_table_privilege('backup_reader', 'data.events', 'SELECT'),
         has_function_privilege('pgwrh_ui_viewer', 'pgwrh_ui.index(text,text,text,int)', 'EXECUTE'),
         has_function_privilege('pgwrh_ui_operator',
-            'pgwrh_ui.mutate(text,text,text,text,text,text,int,text,int,boolean,boolean)', 'EXECUTE'),
+            'pgwrh_ui.mutate(text,text,text,text,text,text,int,text,int,boolean,boolean,text)', 'EXECUTE'),
         has_table_privilege('pgwrh_ui_viewer', 'pgwrh.replication_group', 'SELECT')""") == [(True, True, True, False)]
     with pytest.raises(Exception, match="locked"):
         target.execute("""UPDATE pgwrh.sharded_table_az_affinity SET weight = 99
