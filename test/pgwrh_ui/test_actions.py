@@ -31,8 +31,11 @@ def report_all_local(node):
 def test_registration_and_pending_weight(configured):
     node = configured
     node.execute('CREATE ROLE replica3 LOGIN REPLICATION')
-    html = mutate(node,'add',replica_id='r3',availability_zone='a',host_name='r3.invalid',member_role='replica3',weight=70)
+    html = mutate(node,'add',replica_id='r3',availability_zone='a',host_name='r3.invalid',member_role='replica3',weight=70,dbname='replica <data>')
     assert 'Replica registered' in html
+    assert node.execute("SELECT dbname FROM pgwrh.shard_host WHERE host_id='r3'") == [('replica <data>',)]
+    assert node.execute("SELECT dbname FROM pgwrh_ui.replica_state('g1') WHERE host_id='r3'") == [('replica <data>',)]
+    assert 'replica &lt;data&gt;' in node.execute("SELECT pgwrh_ui.replicas_html('g1')")[0][0]
     assert node.execute("SELECT weight FROM pgwrh.shard_host_weight WHERE host_id='r3'") == [(70,)]
     assert node.execute("SELECT current_version,target_version FROM pgwrh.replication_group") == [('FLIP','FLIP')]
     html = mutate(node,'weight',replica_id='r3',availability_zone='a',weight=123)
@@ -49,6 +52,11 @@ def test_invalid_registration_is_atomic_and_does_not_create_roles(configured):
     assert 'already registered' in mutate(node,'add',replica_id='r3',availability_zone='a',host_name='r3.invalid',member_role='replica1')
     assert revision(node) == before
     assert node.execute("SELECT count(*) FROM pg_roles WHERE rolname='missing'") == [(0,)]
+    node.execute('CREATE ROLE replica3 LOGIN REPLICATION')
+    for dbname in ('', None):
+        assert 'Provide a replica ID' in mutate(node,'add',replica_id='r3',availability_zone='a',
+                                              host_name='r3.invalid',member_role='replica3',dbname=dbname)
+        assert revision(node) == before
 
 
 def test_stale_forms_and_partition_changes_are_rejected(configured):
@@ -111,7 +119,9 @@ def test_operator_boundary_and_controls(configured):
             conn.execute("SELECT pgwrh_ui.mutate('g1','start','irrelevant')")
     with configured.connect() as conn:
         conn.execute('SET ROLE pgwrh_ui_operator')
-        assert 'Add replica' in conn.execute("SELECT pgwrh_ui.index('g1','replicas')")[0][0]
+        html = conn.execute("SELECT pgwrh_ui.index('g1','replicas')")[0][0]
+        assert 'Add replica' in html
+        assert 'name="dbname" value="postgres" required' in html
         assert conn.execute("SELECT has_table_privilege(current_user,'pgwrh.shard_host_weight','UPDATE')") == [(False,)]
 
 

@@ -37,7 +37,7 @@ $$;
 
 CREATE FUNCTION replica_state(group_id text)
 RETURNS TABLE (
-    availability_zone text, host_id text, member_role text, host_name text, port int,
+    availability_zone text, host_id text, member_role text, host_name text, port int, dbname text,
     online boolean, current_weight int, pending_weight int,
     current_copies bigint, target_copies bigint, reported_local_copies int,
     reported_remote_routes int, prepared_remote_routes int,
@@ -45,7 +45,7 @@ RETURNS TABLE (
     sessions bigint
 )
 LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $$
-    SELECT m.availability_zone, m.host_id, m.member_role, h.host_name, h.port,
+    SELECT m.availability_zone, m.host_id, m.member_role, h.host_name, h.port, h.dbname,
         h.online, cw.weight, pw.weight,
         (SELECT count(*) FROM pgwrh.shard_assigned_host a
          WHERE (a.replication_group_id, a.availability_zone, a.host_id, a.version) =
