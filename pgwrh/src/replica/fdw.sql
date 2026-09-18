@@ -27,7 +27,7 @@ CREATE FOREIGN TABLE IF NOT EXISTS fdw_shard_assignment (
     host text,
     port text,
     dbnames text[],
-    shard_server_user text,
+    shard_server_users text[],
     pubname text,
     connect_remote boolean,
     retained_shard_server_name text,

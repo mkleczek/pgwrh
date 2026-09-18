@@ -219,7 +219,6 @@ shard_server AS (
         shard_server_schema_name,
         host,
         port,
-        shard_server_user,
         target_servers
     FROM
         remote_assignment
@@ -297,8 +296,10 @@ configured_remote_shard AS (
     FROM remote_shard rs
         JOIN remote_assignment a ON a.remote_rel_id = rs.rel_id
         JOIN remote_server_route r ON r.srvname = rs.srvname
-    WHERE r.shard_server_targets = a.target_servers
-        AND r.shard_server_user = a.shard_server_user
+    WHERE r.shard_server_targets = (
+        SELECT jsonb_object_agg(t.server_name, t.shard_server_user)
+        FROM target_server t WHERE t.server_name = ANY(a.target_servers)
+    )
 ),
 ready_remote_shard AS (
     SELECT

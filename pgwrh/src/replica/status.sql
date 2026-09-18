@@ -36,19 +36,16 @@ Local shard is considered ready if
 $$;
 
 -- Read actual catalog membership, never desired assignment, for readiness.
--- Legacy postgres_fdw routes remain reportable while their attachments migrate.
+-- Pair each target identity with its actual mapped username. Scalar legacy
+-- reports cannot describe this contract and are not accepted for readiness.
 CREATE VIEW remote_server_route AS
 WITH members AS (
     SELECT s.oid, s.srvname, target_name
     FROM owned_server s, LATERAL opts(s.srvoptions) o, unnest(o.vals) target_name
     WHERE o.key = 'members'
 )
-SELECT s.oid, s.srvname, u.value AS shard_server_user, NULL::text[] AS shard_server_targets
-FROM owned_server s JOIN pg_user_mappings um ON um.srvid = s.oid AND um.umuser = 0,
-     LATERAL opts(um.umoptions) u
-WHERE u.key = 'user' AND NOT EXISTS (SELECT 1 FROM members m WHERE m.oid = s.oid)
-UNION ALL
-SELECT m.oid, m.srvname, min(u.value), array_agg(DISTINCT m.target_name ORDER BY m.target_name)
+SELECT m.oid, m.srvname,
+       jsonb_object_agg(m.target_name, u.value) AS shard_server_targets
 FROM members m
     LEFT JOIN pg_foreign_server target ON target.srvname = m.target_name
     LEFT JOIN pg_user_mappings um ON um.srvid = target.oid AND um.umuser = 0
@@ -57,13 +54,12 @@ WHERE EXISTS (SELECT 1 FROM pg_user_mappings virtual
               WHERE virtual.srvid = m.oid AND virtual.umuser = 0
                     AND coalesce(cardinality(virtual.umoptions), 0) = 0)
 GROUP BY m.oid, m.srvname
-HAVING bool_and(target.oid IS NOT NULL AND u.value IS NOT NULL)
-       AND count(DISTINCT u.value) = 1;
+HAVING bool_and(target.oid IS NOT NULL AND u.value IS NOT NULL AND u.value <> '');
 
 -- Report leaf coverage of the actual reachable foreign tables, not the desired
 -- tree or attachments hidden inside a detached subtree.
 CREATE VIEW connected_remote_shard AS
-    SELECT DISTINCT d.rel_id, n.srvname AS shard_server_name, route.shard_server_user, route.shard_server_targets
+    SELECT DISTINCT d.rel_id, n.srvname AS shard_server_name, route.shard_server_targets
     FROM remote_node n
         JOIN reachable_shard reachable ON reachable.reg_class = n.reg_class
         JOIN shard_descendant d ON d.ancestor_rel_id = n.node_rel_id
@@ -73,7 +69,7 @@ COMMENT ON VIEW connected_remote_shard IS
 'Leaf coverage and destinations of remote routes reachable from a managed root.';
 
 CREATE VIEW prepared_remote_shard AS
-SELECT sa.rel_id, rs.srvname AS shard_server_name, route.shard_server_user, route.shard_server_targets
+SELECT sa.rel_id, rs.srvname AS shard_server_name, route.shard_server_targets
 FROM shard_assignment_r sa JOIN remote_shard rs ON rs.rel_id = sa.remote_rel_id
     JOIN remote_server_route route ON route.srvname = rs.srvname
 WHERE (
@@ -160,12 +156,12 @@ BEGIN
             connected_local_shards = (SELECT coalesce((SELECT json_agg(rel_id) FROM "@extschema@".connected_local_shard), '[]')),
             connected_remote_shards = (SELECT coalesce(json_agg(json_build_object(
                 'schema_name', (rel_id).schema_name, 'table_name', (rel_id).table_name,
-                'shard_server_name', shard_server_name, 'shard_server_user', shard_server_user,
+                'shard_server_name', shard_server_name,
                 'shard_server_targets', shard_server_targets)), '[]')
                 FROM "@extschema@".connected_remote_shard),
             prepared_remote_shards = (SELECT coalesce(json_agg(json_build_object(
                 'schema_name', (rel_id).schema_name, 'table_name', (rel_id).table_name,
-                'shard_server_name', shard_server_name, 'shard_server_user', shard_server_user,
+                'shard_server_name', shard_server_name,
                 'shard_server_targets', shard_server_targets)), '[]')
                 FROM "@extschema@".prepared_remote_shard),
             indexes = (SELECT coalesce((SELECT json_agg(i) FROM "@extschema@".local_shard_index i), '[]')),

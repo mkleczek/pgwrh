@@ -34,9 +34,9 @@ def selection(postgres_node_factory):
                 ('leaves', 'd', 2, 'data', 'right', true, 'data', 'root', NULL);
             INSERT INTO fdw_shard_assignment
                 (schema_name, table_name, local, connect_remote, shard_server_name,
-                 host, port, dbnames, shard_server_user)
+                 host, port, dbnames, shard_server_users)
             SELECT schema_name, table_name, false, true, 'server1',
-                   'host1,host2', '5432,5432', ARRAY['db1','db2'], 'reader'
+                   'host1,host2', '5432,5432', ARRAY['db1','db2'], ARRAY['reader1','reader2']
             FROM fdw_shard_structure WHERE is_leaf;
             UPDATE fdw_shard_assignment SET shard_server_members = ARRAY['host1', 'host2'];
             INSERT INTO fdw_serving_subtree
@@ -53,10 +53,10 @@ def selection(postgres_node_factory):
     ("UPDATE fdw_shard_assignment SET shard_server_name = table_name",
      [("data", "root", 4)]),
     ("UPDATE fdw_shard_assignment SET host = 'host2,host1', port = '5432,5432', "
-     "shard_server_members = ARRAY['host2','host1'], dbnames = ARRAY['db2','db1'] WHERE table_name = 'a'",
+     "shard_server_members = ARRAY['host2','host1'], dbnames = ARRAY['db2','db1'], shard_server_users = ARRAY['reader2','reader1'] WHERE table_name = 'a'",
      [("data", "root", 4)]),
     ("UPDATE fdw_shard_assignment SET host = 'host1,host2,host1', port = '5432,5432,5432', "
-     "shard_server_members = ARRAY['host1','host2','host1'], dbnames = ARRAY['db1','db2','db1'] WHERE table_name = 'a'",
+     "shard_server_members = ARRAY['host1','host2','host1'], dbnames = ARRAY['db1','db2','db1'], shard_server_users = ARRAY['reader1','reader2','reader1'] WHERE table_name = 'a'",
      [("data", "root", 4)]),
     ("UPDATE fdw_shard_assignment SET port = '5432,5433' WHERE table_name = 'a'",
      [("data", "right", 2), ("leaves", "a", 1), ("leaves", "b", 1)]),
@@ -74,7 +74,7 @@ def selection(postgres_node_factory):
     ("UPDATE fdw_shard_assignment SET connect_remote = false", [("data", "root", 4)]),
     ("UPDATE fdw_shard_assignment SET host = '' WHERE table_name = 'a'",
      [("data", "right", 2), ("leaves", "b", 1)]),
-    ("UPDATE fdw_shard_assignment SET shard_server_user = 'other' WHERE table_name = 'a'",
+    ("UPDATE fdw_shard_assignment SET shard_server_users = ARRAY['other','reader2'] WHERE table_name = 'a'",
      [("data", "right", 2), ("leaves", "a", 1), ("leaves", "b", 1)]),
     ("DELETE FROM fdw_shard_structure WHERE table_name IN ('c', 'd')", [("data", "left", 2)]),
     ("DELETE FROM fdw_serving_subtree WHERE member_role = 'host2' AND table_name = 'root'",
@@ -109,9 +109,9 @@ def test_root_bounds_and_separate_roots(selection):
         VALUES ('second', 'leaf', 1, 'second', 'root', true, 'second', 'root');
         INSERT INTO fdw_shard_assignment
             (schema_name, table_name, local, connect_remote, shard_server_name,
-             host, port, dbnames, shard_server_user, shard_server_members)
+             host, port, dbnames, shard_server_users, shard_server_members)
         SELECT 'second', 'leaf', local, connect_remote, shard_server_name,
-               host, port, dbnames, shard_server_user, shard_server_members
+               host, port, dbnames, shard_server_users, shard_server_members
         FROM fdw_shard_assignment LIMIT 1;
         INSERT INTO fdw_serving_subtree SELECT host, 'second', 'root'
         FROM unnest(ARRAY['host1', 'host2']) host;
@@ -275,8 +275,8 @@ def test_aggregates_fail_over_and_survive_daemon_restart(aggregated_cluster):
     # for both replicas before deliberately removing one of them.
     wait_until(lambda: reader.query_scalar("""SELECT count(*) FROM pgwrh.remote_node_assignment a
         JOIN pgwrh.remote_server_route r ON r.srvname = a.shard_server_name
-        WHERE cardinality(r.shard_server_targets) = 2
-          AND r.shard_server_targets = a.target_servers""") == len(ROOTS),
+        WHERE cardinality(a.target_servers) = 2
+          AND ARRAY(SELECT jsonb_object_keys(r.shard_server_targets) ORDER BY 1) = a.target_servers""") == len(ROOTS),
         timeout=60, message='reader did not install both failover targets')
     offline = cluster.replicas[0]
     offline.node.stop()

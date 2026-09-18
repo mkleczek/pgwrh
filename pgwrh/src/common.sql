@@ -50,20 +50,22 @@ $$;
 -- entries express routing weights; order and repetition do not change the set.
 -- An incomplete list must never become a smaller, apparently ready route.
 CREATE FUNCTION pgwrh_target_servers(member_roles text[], hosts text, ports text,
-                                     dbnames text[], username text)
+                                     dbnames text[], usernames text[])
 RETURNS text[] IMMUTABLE STRICT LANGUAGE sql AS
 $$
     WITH endpoints AS (
-        SELECT * FROM unnest(member_roles, string_to_array(hosts, ','), string_to_array(ports, ','), dbnames)
-            AS e(member_role, host, port, dbname)
+        SELECT * FROM unnest(member_roles, string_to_array(hosts, ','), string_to_array(ports, ','), dbnames, usernames)
+            AS e(member_role, host, port, dbname, username)
     )
     SELECT CASE WHEN array_ndims(member_roles) = 1
                     AND array_ndims(dbnames) = 1
+                    AND array_ndims(usernames) = 1
                     AND cardinality(member_roles) > 0
                     AND bool_and(member_role IS NOT NULL AND member_role <> ''
                                  AND host IS NOT NULL AND host <> ''
                                  AND port IS NOT NULL AND port <> ''
-                                 AND dbname IS NOT NULL AND dbname <> '')
+                                 AND dbname IS NOT NULL AND dbname <> ''
+                                 AND username IS NOT NULL AND username <> '')
                 THEN array_agg(DISTINCT "@extschema@".pgwrh_target_server(member_role, host, port, dbname, username)
                                ORDER BY "@extschema@".pgwrh_target_server(member_role, host, port, dbname, username))
            END
