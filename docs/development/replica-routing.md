@@ -18,7 +18,7 @@ PostgreSQL's partition pruning. There is no additional drain phase.
 A replica keeps a usable local leaf attached while either rollout configuration
 requires that copy. It prepares and analyzes the target foreign leaf
 independently of attachment. `prepared_remote_shards` reports its logical leaf
-identity, actual virtual server, actual target set, and mapped user.
+identity, actual virtual server, and each actual target's mapped username.
 `connected_remote_shards` reports the same identity and destination for routes
 that are actually reachable from query roots. A prepared foreign table does not
 claim to be an active route.
@@ -37,6 +37,11 @@ Prepared replacements cannot exempt a reader still querying the old remote
 source. The target and credential checks reject routes containing a destination
 outside the retained configuration or using another configuration's credentials.
 A nonempty subset is sufficient, allowing offline targets to be excluded.
+Both reports encode `shard_server_targets` as a JSON object mapping actual target
+server names to their mapped usernames. The controller checks each pair against
+the configuration's destinations. A known target paired with another target's
+username is invalid. Empty objects, old target arrays and scalar-user reports
+cannot satisfy readiness. Passwords are never included in these reports.
 
 Each logical remote node keeps a stable `pgwrh_shard_...` virtual server and a
 foreign table in `<schema>_remote`. Actual `pgwrh_target_...` servers identify a
@@ -60,13 +65,16 @@ before analysis or reattachment. Local-to-remote and remote-to-local attachment
 changes retain their existing locks.
 
 The assignment API carries `shard_server_members text[]`, comma-separated
-`host` and `port` lists, and `dbnames text[]`. Entries align by position, including
-repetitions. `dbnames` replaces the development API's scalar `dbname`: a native
-array preserves commas and other punctuation inside database names. Missing,
-empty or differently sized endpoint lists cannot produce a ready route.
-`pgwrh_target_servers` accepts this database array as its fourth argument.
+`host` and `port` lists, `dbnames text[]`, and `shard_server_users text[]`.
+Entries align by position, including repetitions. `dbnames` replaces the
+development API's scalar `dbname`: a native array preserves commas and other
+punctuation inside database names. `shard_server_users` replaces the scalar
+`shard_server_user`, permitting different usernames for different destinations.
+Missing, empty or differently sized lists cannot produce a ready route.
+`pgwrh_target_servers` accepts the database array as its fourth argument and the
+username array as its fifth.
 
-Repeated entries in the aligned member/host/port/database lists become actual
+Repeated entries in the aligned member/host/port/database/username lists become actual
 server `load_balance_weight` values, preserving `same_zone_multiplier`. Reuse of
 an active or idle connection still takes priority over weights. Target sets with
 identical members share the FDW's transaction routing decision and join
@@ -91,6 +99,36 @@ exposing a gap.
 Only a later reconciliation pass can aggregate the replacement foreign leaves.
 This separates the required local-to-remote handoff from the optional
 optimization.
+
+## Credential feeds and rotation
+
+The controller exposes two credential feeds, scoped to the connecting member:
+
+| Controller view | Columns | Replica use |
+| --- | --- | --- |
+| `local_credentials` | `username`, `password` | Install local logins and grant the local replica role |
+| `remote_credentials` | `member_role`, `username`, `password` | Configure outbound mappings to other members in the same group |
+
+Replicas read these through `fdw_local_credentials` and
+`fdw_remote_credentials`. The remote feed excludes the connecting member and
+other groups. Mappings select credentials by destination member and assigned
+username; outbound credentials do not cause local login creation or grants.
+Both feeds include credentials for every retained configuration, including a
+rollout being rolled back.
+
+The internal `replica_credentials` view identifies each credential by group,
+member and configuration version. For 1.0.0, it expands the existing
+`replication_group_credentials` into one row per member. The built-in generator
+still produces shared group credentials, with the existing automatic rotation
+and retirement rules. There are no new credential configuration parameters.
+Generating distinct credentials later can change this internal provider without
+changing the controller-replica protocol.
+
+Assignments verify that each destination has reported its own target username
+before selecting the new credentials. The existing collective readiness gate
+still controls switching; credentials remain available until commit or rollback
+acknowledgements allow the corresponding configuration to be released. This
+protocol does not introduce independent per-member rotation.
 
 ## Aggregation and serving trees
 
@@ -187,6 +225,12 @@ shields.
 quoted names, replicas sharing a server, reads through each target, replication,
 handoff and credential rotation. Backup/restore tests retain registered database
 names, and the routing tests cover list alignment and aggregation identity.
+`test/pgwrh/test_credential_protocol.py` substitutes a test-only provider with
+distinct credentials per member and requires SCRAM authentication. It checks
+feed scope, local grants, outbound mappings, reads through every destination,
+mismatched username reports, delayed login installation, rotation and rollback
+on separate servers and sibling databases. It also verifies that production
+generation remains shared.
 
 Version 1.0.0 is the only installable version of all four bundled extensions.
 Install the release files on every node and initialize a fresh database with
