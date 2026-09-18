@@ -28,6 +28,12 @@ placement, enable/disable routing for maintenance, and start, commit or roll
 back a rollout. Replica installation, credentials, grants, connection setup,
 group creation and table policies remain managed through the existing SQL API.
 
+Registration includes a **Database** field, initially set to the controller's
+database name. Set it to the replica's actual database name; the replica list
+shows it alongside the hostname and port. Configure the replica's connection
+back to the controller separately, as shown in
+[database connections](../docs/overview.md#database-connections).
+
 Exclusion edits the draft's host weights; it does not unregister the member.
 Maintenance changes `shard_host.online`; replicas learn the routing change on
 their next synchronization and continue replicating their assigned shards.

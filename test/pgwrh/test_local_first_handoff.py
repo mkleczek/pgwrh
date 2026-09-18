@@ -65,7 +65,7 @@ def wait_prepared(cluster):
     wait_until(lambda: destination.query_scalar('SELECT count(*) FROM pgwrh.connected_local_shard') == 2,
                timeout=60, message='destination copies were not attached')
     wait_until(lambda: source.query_scalar('''SELECT count(*) FROM pgwrh.prepared_remote_shard
-        WHERE shard_server_user = (SELECT username FROM pgwrh.fdw_credentials
+        WHERE shard_server_user = (SELECT username FROM pgwrh.fdw_remote_credentials
             WHERE username IN (SELECT shard_server_user FROM pgwrh.fdw_shard_assignment) LIMIT 1)''') == 2,
                timeout=60, message='source did not prepare its replacements')
 

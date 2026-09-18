@@ -28,6 +28,43 @@ Query the managed root table on a replica to include both local and remote data.
 See [remote shard aggregation](remote-shard-aggregation.md) for how complete
 subtrees can be queried remotely and for partition-change restrictions.
 
+## Database connections
+
+The controller and every replica can have their own database name. On the
+controller, pass the replica's database name as `_dbname` to
+`pgwrh.add_replica`. On that replica, pass the controller's database name as
+`dbname` to `pgwrh.configure_controller`.
+
+For example, with an existing replication group `readers` and replication login
+`replica_a`, register a replica whose database is `read_a` from controller
+database `app`:
+
+```sql
+-- Run in the controller database app.
+SELECT pgwrh.add_replica('readers', 'replica_a', 'replica-a', 5432,
+                        _dbname := 'read_a');
+
+-- Run in replica database read_a after enabling pgwrh.
+SELECT pgwrh.configure_controller('controller', '5432', 'replica_a', 'replace-me',
+                                 dbname := 'app');
+```
+
+Use the controller login's actual password and grant it access to the source
+shards before starting replication. Database selection applies both to the
+replica's configuration connection and its logical subscription. Remote reads
+use each destination replica's registered database; managed schema and table
+names remain the same across nodes.
+
+Both parameters are optional and default to `current_database()` on the database
+where the function runs. Existing calls therefore retain the same-name setup.
+The new parameters come after the existing parameters, so named arguments are
+convenient when setting just the database name.
+
+The registered endpoint is `(host_name, port, dbname)`, allowing separate replica
+databases on one PostgreSQL server. Those replicas share server resources and a
+failure domain. In the console, the **Database** field defaults to the controller
+database name and the replica list displays each registered database.
+
 ## Replication groups and placement
 
 A **replication group** associates replicas with the tables and placement

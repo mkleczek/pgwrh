@@ -10,6 +10,10 @@ source data and manages shard placement. **Replicas** receive their assigned
 shards through logical replication. Replication is asynchronous: a replica may
 not immediately see a write made on the controller.
 
+The controller and each replica can use different database names. See
+[database connections](docs/overview.md#database-connections) for registration
+and replica setup.
+
 Start with the [local quickstart](#quickstart), then read [cluster concepts and
 rollouts](docs/overview.md).
 

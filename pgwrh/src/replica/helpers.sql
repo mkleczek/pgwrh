@@ -201,6 +201,7 @@ FROM
 -- controller's same-zone preference without adding an assignment field.
 CREATE VIEW assignment_target AS
 SELECT (a.schema_name, a.table_name)::rel_id AS node_rel_id,
+       e.member_role,
        pgwrh_target_server(e.member_role, e.host, e.port, e.dbname, a.shard_server_user) AS server_name,
        e.host, e.port, e.dbname, a.shard_server_user, count(*)::integer AS weight
 FROM fdw_shard_assignment a,
