@@ -25,7 +25,7 @@ def snapshot(node):
             for (table,) in tables}
 
 
-@pytest.mark.parametrize("phase", ["committed", "pending", "in_flight"])
+@pytest.mark.parametrize("phase", ["committed", "pending", "in_flight", "credentials_preparing", "credentials_switching"])
 def test_controller_dump_restore(postgres_node_factory, tmp_path, phase):
     source = postgres_node_factory("backup_source")
     source.execute("""
@@ -69,6 +69,20 @@ def test_controller_dump_restore(postgres_node_factory, tmp_path, phase):
             UPDATE pgwrh.sharded_table SET min_replica_count_after_az_failure = 0
                 WHERE version = 'FLIP';""")
         source.execute("SELECT pgwrh.start_rollout('backup')")
+
+    if phase.startswith("credentials_"):
+        source.execute("""
+            CREATE ROLE backup_peer LOGIN;
+            SELECT pgwrh.add_replica('backup', 'replica', 'replica.invalid', 5432,
+                'backup_replica', 'a', _dbname := 'replica data');
+            SELECT pgwrh.add_replica('backup', 'peer', 'peer.invalid', 5432, 'backup_peer', 'a');
+            SELECT pgwrh.rotate_credentials('backup');
+        """)
+        if phase == 'credentials_switching':
+            source.execute("""UPDATE pgwrh.replication_group_member m SET users = (
+                SELECT json_agg(username) FROM pgwrh.replica_credentials c
+                WHERE c.member_role = m.member_role)""")
+        assert source.execute("SELECT count(*) FROM pgwrh.credential_generation") == [(2,)]
 
     before = snapshot(source)
     if phase == "in_flight":
@@ -115,3 +129,7 @@ def test_controller_dump_restore(postgres_node_factory, tmp_path, phase):
             target.execute("SELECT pgwrh.commit_rollout('backup')")
     target.execute((ROOT / "docs/recovery-quarantine.sql").read_text())
     assert target.execute("SELECT count(*) FROM pgwrh.shard_host WHERE online") == [(0,)]
+
+    assert target.execute("SELECT count(*) FROM pgwrh.replication_group_member WHERE credential_generation IS NOT NULL") == [(0,)]
+    if phase.startswith('credentials_'):
+        assert target.execute("SELECT count(*) FROM pgwrh.credential_generation") == [(2,)]
