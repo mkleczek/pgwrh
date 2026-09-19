@@ -4,6 +4,7 @@ MODULE_big = pgwrh_fdw
 OBJS = \
 	$(WIN32RES) \
 	connection.o \
+	credentials.o \
 	deparse.o \
 	join.o \
 	option.o \

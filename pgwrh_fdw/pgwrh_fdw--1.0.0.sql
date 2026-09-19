@@ -43,3 +43,9 @@ CREATE FUNCTION pgwrh_fdw_set_members(server_name text, members text[])
 RETURNS void
 AS 'MODULE_PATHNAME'
 LANGUAGE C VOLATILE PARALLEL UNSAFE;
+
+-- Use the server's SCRAM iteration policy and a fresh cryptographic salt.
+CREATE FUNCTION pgwrh_fdw_scram_verifier(password text)
+RETURNS text
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT VOLATILE PARALLEL RESTRICTED;
