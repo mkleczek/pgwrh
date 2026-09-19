@@ -40,6 +40,12 @@ new files alone does not update extensions already enabled in a database.
 
 ## Configuration
 
+The SQL helper `pgwrh_fdw_scram_verifier(password text)` returns a freshly salted
+SCRAM verifier using PostgreSQL's native implementation and `scram_iterations`
+setting. pgwrh uses it to provision [managed source identities](../docs/credentials.md).
+Persist its result when the same verifier must be installed again; each call
+generates a new salt.
+
 The example assumes a remote `public.items` table and a remote
 `application_user` role permitted to read it. Choose a local schema without a
 conflicting `items` table. `app.request_id` is an example application setting;

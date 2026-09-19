@@ -21,7 +21,7 @@ trusted and able to invoke privileged core management APIs. Fresh sessions
 without temporary namespaces prevent direct SQL callers from shadowing relations
 used by those APIs.
 
-Management forms carry a fingerprint of configuration, membership, lock seeds
+Management forms carry a fingerprint of configuration, membership, configuration locks
 and the source partition tree. Mutations serialize on the replication-group
 row, validate the fingerprint, and invoke the core API. Stale forms return HTTP
 409. Replica reports do not invalidate the fingerprint. Core readiness checks

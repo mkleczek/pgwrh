@@ -7,12 +7,10 @@ queries over the complete table without storing a full copy.
 
 Applications write to the **controller**, the PostgreSQL database that holds the
 source data and manages shard placement. **Replicas** receive their assigned
-shards through logical replication. Replication is asynchronous: a replica may
-not immediately see a write made on the controller.
-
-The controller and each replica can use different database names. See
-[database connections](docs/overview.md#database-connections) for registration
-and replica setup.
+shards through asynchronous logical replication. For reads that must observe a
+known committed write, [`pgwrh_wait`](docs/lsn-wait.md) can wait until the relevant
+subscription has applied changes through a specified **log sequence number
+(LSN)** before the read takes its snapshot.
 
 Start with the [local quickstart](#quickstart), then read [cluster concepts and
 rollouts](docs/overview.md).
@@ -114,6 +112,9 @@ This checks the full bundle, including the optional wait API, without changing
 configuration. It does not verify cluster membership or shard placement.
 
 ## Operations and limitations
+
+Remote reads use [per-source SCRAM credentials](docs/credentials.md), with
+credential rotation managed independently of placement rollouts.
 
 Writes go to the controller. Use [replication visibility
 barriers](docs/lsn-wait.md) when a read must observe a known write. Queries

@@ -21,8 +21,9 @@ nix-shell --run 'pgwrh-test test/pgwrh -q'
 
 `test/pgwrh/test_backup_restore.py` performs real `pg_dump`, `pg_dumpall` and
 `pg_restore` operations into fresh PostgreSQL clusters for committed, pending
-and in-flight configurations. It compares every extension configuration table,
-AZ policies, assignment seeds, application data, publications, role membership
+and in-flight configurations, plus preparing and switching credential rotations.
+It compares every extension configuration table, AZ policies, credential
+generations and verifiers, application data, publications, role membership
 and UI grants, and checks that lock and rollout protections still apply. It also
 executes the quarantine script. The tests do not claim automatic failover or
 reuse of existing replication slots after a logical restore.
