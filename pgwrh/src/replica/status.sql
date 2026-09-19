@@ -151,6 +151,32 @@ BEGIN
     IF NOT pg_try_advisory_xact_lock(2895359559) THEN RETURN; END IF;
     UPDATE "@extschema@".fdw_replica_state
         SET
+            credential_generation = (
+                SELECT c.generation FROM "@extschema@".fdw_credential_state c
+                WHERE NOT EXISTS (
+                    -- Include reachable aggregate routes and prepared leaf
+                    -- replacements that this configuration may expose. Detached
+                    -- obsolete tables are reconfigured before future attachment.
+                    SELECT 1 FROM (
+                        SELECT n.srvname FROM "@extschema@".remote_node n
+                        JOIN "@extschema@".reachable_shard r USING (reg_class)
+                        UNION
+                        SELECT r.srvname FROM "@extschema@".shard_assignment_r a
+                        JOIN "@extschema@".remote_shard r ON r.rel_id = a.remote_rel_id
+                        WHERE a.connect_remote AND EXISTS (
+                            SELECT 1 FROM "@extschema@".connected_local_shard l WHERE l.rel_id = a.rel_id
+                        ) AND (
+                            EXISTS (SELECT 1 FROM pg_statistic WHERE starelid = r.reg_class)
+                            OR EXISTS (SELECT 1 FROM "@extschema@".analyzed_remote_pg_class WHERE oid = r.reg_class)
+                        )
+                    ) required
+                    LEFT JOIN "@extschema@".remote_server_route route USING (srvname)
+                    WHERE route.shard_server_targets IS NULL OR EXISTS (
+                        SELECT 1 FROM jsonb_each_text(route.shard_server_targets) u
+                        WHERE u.value IS DISTINCT FROM c.username
+                    )
+                )
+            ),
             serving_subtrees = (SELECT coalesce(json_agg(rel_id), '[]') FROM "@extschema@".ready_serving_subtree),
             subscribed_local_shards = (SELECT coalesce((SELECT json_agg(rel_id) FROM "@extschema@".subscribed_local_shard), '[]')),
             connected_local_shards = (SELECT coalesce((SELECT json_agg(rel_id) FROM "@extschema@".connected_local_shard), '[]')),

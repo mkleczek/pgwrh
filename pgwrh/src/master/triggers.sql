@@ -314,7 +314,8 @@ COMMENT ON FUNCTION make_sure_daemon_started_on_ping_trigger() IS
 'Starts sync daemon if it is not running.';
 
 -- Rollback has the same acknowledgement requirement as commit: only then can
--- serving replicas release copies and credentials used by the abandoned routes.
+-- serving replicas release copies used by the abandoned routes. Credentials
+-- have an independent generation and acknowledgement cycle.
 CREATE FUNCTION finish_rollback_trigger() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS
 $$

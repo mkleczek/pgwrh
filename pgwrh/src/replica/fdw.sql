@@ -71,7 +71,8 @@ CREATE FOREIGN TABLE fdw_replica_state (
     connected_remote_shards json,
     users json,
     prepared_remote_shards json,
-    serving_subtrees json
+    serving_subtrees json,
+    credential_generation uuid
 ) SERVER replica_controller
 OPTIONS (table_name 'replica_state');
 
@@ -90,3 +91,6 @@ OPTIONS (table_name 'remote_credentials');
 
 CREATE FOREIGN TABLE fdw_serving_subtree (member_role text, schema_name text, table_name text)
 SERVER replica_controller OPTIONS (table_name 'serving_subtree');
+
+CREATE FOREIGN TABLE fdw_credential_state (generation uuid, username text)
+SERVER replica_controller OPTIONS (table_name 'credential_state');

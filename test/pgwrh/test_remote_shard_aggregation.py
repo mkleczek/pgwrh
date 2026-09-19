@@ -310,10 +310,11 @@ def test_selection_quotes_relation_identifiers(selection):
     ]
 
 
-def test_unchanged_destinations_wait_for_credential_rotation(aggregated_cluster):
+def test_unchanged_destinations_commit_without_rotating_credentials(aggregated_cluster):
     cluster = aggregated_cluster
     reader = cluster.replicas[-1]
     old_nodes = remote_nodes(reader)
+    credentials = cluster.master.execute('SELECT * FROM pgwrh.source_credential ORDER BY source_role')
     with reader.node.connect() as pause:
         pause.execute('SELECT pg_advisory_lock(2895359559)')
         cluster.master.execute("""INSERT INTO pgwrh.sharded_table
@@ -324,16 +325,15 @@ def test_unchanged_destinations_wait_for_credential_rotation(aggregated_cluster)
             ON CONFLICT (replication_group_id, sharded_table_schema, sharded_table_name, version)
             DO UPDATE SET sharding_key_expression = EXCLUDED.sharding_key_expression""")
         cluster.master.start_rollout()
-        assert cluster.master.rollout_gap_counts()['connected_remote'] > 0
-        with pytest.raises(Exception, match='Not all hosts confirmed'):
-            cluster.master.commit_rollout()
+        # The route and its credentials did not change. Existing reports remain
+        # sufficient even while the reader is paused; this is not a rotation.
+        assert cluster.master.rollout_gap_counts()['connected_remote'] == 0
+        cluster.master.commit_rollout()
         assert remote_nodes(reader) == old_nodes
+        assert cluster.master.execute('SELECT * FROM pgwrh.source_credential ORDER BY source_role') == credentials
         assert_all_rows(cluster)
         pause.execute('SELECT pg_advisory_unlock(2895359559)')
-    cluster.master.wait_for_rollout_ready(expected_replicas=3, timeout=60)
-    cluster.master.commit_rollout()
-    wait_until(lambda: remote_nodes(reader) == old_nodes, timeout=60,
-               message='credential rotation did not restore aggregates after commit')
+    assert remote_nodes(reader) == old_nodes
     assert_all_rows(cluster)
 
 

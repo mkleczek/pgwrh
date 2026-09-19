@@ -231,7 +231,8 @@ CREATE VIEW replica_state AS
         connected_remote_shards,
         users,
         prepared_remote_shards,
-        serving_subtrees
+        serving_subtrees,
+        credential_generation
     FROM replication_group_member
     WHERE
         member_role = CURRENT_ROLE
@@ -263,19 +264,26 @@ FROM replication_group_member reader
 WHERE reader.member_role = CURRENT_ROLE;
 GRANT SELECT ON serving_subtree TO PUBLIC;
 
-CREATE VIEW local_credentials AS
-SELECT
-    creds.username,
-    creds.password
-FROM
-    replica_credentials creds
-WHERE
-    creds.member_role = CURRENT_ROLE;
+-- Only verifiers belonging to this destination leave the controller here.
+CREATE VIEW local_credentials WITH (security_barrier = true) AS
+SELECT creds.username, creds.verifier AS password
+FROM replica_credentials creds
+WHERE creds.member_role = CURRENT_ROLE;
 GRANT SELECT ON local_credentials TO PUBLIC;
+COMMENT ON VIEW local_credentials IS
+'Incoming logins for CURRENT_ROLE. The password column contains a target-specific SCRAM verifier, never a source password.';
 
-CREATE VIEW remote_credentials AS
+-- Only this source's reusable secret leaves the controller here.
+CREATE VIEW remote_credentials WITH (security_barrier = true) AS
 SELECT creds.member_role, creds.username, creds.password
-FROM replication_group_member reader
-    JOIN replica_credentials creds USING (replication_group_id)
-WHERE reader.member_role = CURRENT_ROLE AND creds.member_role <> CURRENT_ROLE;
+FROM replica_credentials creds
+WHERE creds.source_role = CURRENT_ROLE;
 GRANT SELECT ON remote_credentials TO PUBLIC;
+COMMENT ON VIEW remote_credentials IS
+'Only CURRENT_ROLE source passwords, paired with their destination member for outbound mappings.';
+
+CREATE VIEW credential_state WITH (security_barrier = true) AS
+SELECT c.generation, c.username
+FROM source_credential c JOIN credential_generation g USING (replication_group_id, generation)
+WHERE c.source_role = CURRENT_ROLE AND g.state = 'active';
+GRANT SELECT ON credential_state TO PUBLIC;

@@ -95,9 +95,6 @@ CREATE TABLE replication_group_config_clone (
 CREATE TABLE  replication_group_config_lock (
     replication_group_id text NOT NULL,
     version config_version NOT NULL,
-    -- most probably it should be separate
-    -- but for now it is simpler here
-    seed uuid NOT NULL DEFAULT gen_random_uuid(),
     -- NULL normally; during rollback, retain this snapshot until every replica
     -- has restored current routes, then unlock it if requested.
     rollback_unlock boolean,
@@ -128,6 +125,7 @@ CREATE TABLE  replication_group_member (
     prepared_remote_shards json NOT NULL DEFAULT '[]',
     serving_subtrees json NOT NULL DEFAULT '[]',
     users json NOT NULL DEFAULT '[]',
+    credential_generation uuid,
 
     PRIMARY KEY (replication_group_id, availability_zone, host_id)
 );
@@ -165,6 +163,43 @@ It is still replicating shards assigned to it.
 
 This flag is supposed to be used in situation when a particular node must be
 temporarily disconnected from a cluster for maintenance purposes.';
+
+-- Credentials have their own lifecycle, independent of FLIP/FLOP snapshots.
+CREATE TABLE credential_generation (
+    replication_group_id text NOT NULL REFERENCES replication_group ON DELETE CASCADE,
+    generation uuid NOT NULL DEFAULT gen_random_uuid(),
+    state text NOT NULL CHECK (state IN ('preparing', 'active', 'retiring')),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (replication_group_id, generation),
+    UNIQUE (replication_group_id, state)
+);
+
+CREATE TABLE source_credential (
+    replication_group_id text NOT NULL,
+    generation uuid NOT NULL,
+    source_role text NOT NULL REFERENCES replication_group_member(member_role) ON DELETE CASCADE,
+    username text NOT NULL UNIQUE,
+    -- Two independent random UUIDs supply 244 random bits. These secrets are
+    -- unrelated to the public generation identifier and are persisted on creation.
+    password text NOT NULL DEFAULT replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', ''),
+    PRIMARY KEY (replication_group_id, generation, source_role),
+    FOREIGN KEY (replication_group_id, generation)
+        REFERENCES credential_generation ON DELETE CASCADE
+);
+
+CREATE TABLE target_credential_verifier (
+    replication_group_id text NOT NULL,
+    generation uuid NOT NULL,
+    source_role text NOT NULL,
+    -- PostgreSQL roles span databases: sibling replica databases must use the
+    -- same verifier. Register a physical server with one canonical host/port.
+    host_name text NOT NULL,
+    port int NOT NULL,
+    verifier text NOT NULL,
+    PRIMARY KEY (replication_group_id, generation, source_role, host_name, port),
+    FOREIGN KEY (replication_group_id, generation, source_role)
+        REFERENCES source_credential ON DELETE CASCADE
+);
 
 CREATE TABLE  shard_host_weight (
     replication_group_id text NOT NULL,

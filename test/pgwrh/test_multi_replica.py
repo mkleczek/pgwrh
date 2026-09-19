@@ -201,12 +201,10 @@ def _mark_target_hosts_ready_except_indexes(master, assignment: RemoteAssignment
             SELECT
                 creds.username
             FROM
-                pgwrh.replication_group g
-                    JOIN pgwrh.replication_group_credentials creds
-                        ON creds.replication_group_id = g.replication_group_id
-                       AND creds.version = g.target_version
-            WHERE
-                g.replication_group_id = {group_id}
+                pgwrh.source_credential creds
+                    JOIN pgwrh.credential_generation cg USING (replication_group_id, generation)
+            WHERE cg.state = 'active'
+                AND creds.replication_group_id = {group_id}
         )
         UPDATE pgwrh.replication_group_member m
         SET
@@ -225,7 +223,7 @@ def _mark_target_hosts_ready_except_indexes(master, assignment: RemoteAssignment
             users =
                 (
                     m.users::jsonb
-                    || jsonb_build_array((SELECT username FROM target_user))
+                    || (SELECT jsonb_agg(username) FROM target_user)
                 )::json
         WHERE
             (m.replication_group_id, m.availability_zone, m.host_id) IN (

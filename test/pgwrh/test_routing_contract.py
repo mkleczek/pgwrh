@@ -45,12 +45,12 @@ def test_readiness_requires_nonempty_allowed_actual_targets(postgres_node_factor
             CREATE TEMP TABLE shard_assigned_host (replication_group_id text, version text,
                 availability_zone text, host_id text, schema_name text, table_name text);
             CREATE TEMP TABLE replication_group_member (replication_group_id text,
-                availability_zone text, host_id text, connected_remote_shards json,
+                availability_zone text, host_id text, member_role text, connected_remote_shards json,
                 prepared_remote_shards json, connected_local_shards json);
-            INSERT INTO replication_group_member VALUES ('g', 'az', 'reader', '[]', '[]', '[]');
-            CREATE TEMP TABLE shard_destinations (replication_group_id text, version text,
+            INSERT INTO replication_group_member VALUES ('g', 'az', 'reader', 'reader', '[]', '[]', '[]');
+            CREATE TEMP TABLE shard_destinations (replication_group_id text, version text, member_role text,
                 schema_name text, table_name text, target_mappings jsonb);
-            INSERT INTO shard_destinations VALUES ('g', 'FLIP', 'data', 'leaf', '{"a":"user_a","b":"user_b"}');
+            INSERT INTO shard_destinations VALUES ('g', 'FLIP', 'reader', 'data', 'leaf', '{"a":"user_a","b":"user_b"}');
         """)
         conn.execute(definitions)
         for targets, ready in (

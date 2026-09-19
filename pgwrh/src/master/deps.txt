@@ -2,6 +2,8 @@ implementation-views    api-replica
 tables                  ext-config-dump
 tables                  helpers
 helpers                 implementation-views
+helpers                 credentials
+credentials             implementation-views
 helpers                 publication-sync
 publication-sync        triggers
 snapshot                triggers
