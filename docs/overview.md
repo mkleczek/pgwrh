@@ -65,6 +65,10 @@ databases on one PostgreSQL server. Those replicas share server resources and a
 failure domain. In the console, the **Database** field defaults to the controller
 database name and the replica list displays each registered database.
 
+Remote reads use automatically generated [per-source credentials](credentials.md).
+Destinations require SCRAM authentication for these logins. Credential rotation
+has its own lifecycle and does not change topology configuration versions.
+
 ## Replication groups and placement
 
 A **replication group** associates replicas with the tables and placement

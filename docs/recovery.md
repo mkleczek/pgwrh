@@ -11,7 +11,7 @@ matching 1.0.0 extension packages alongside your database recovery plan.
 Use PostgreSQL physical backups and write-ahead log (WAL) archiving for
 point-in-time recovery where required. Test restores on an isolated host. Record
 the replication group, current and target versions, replica endpoints and any
-rollout in progress. Schedule logical backups as an additional portability and
+rollout or credential rotation in progress. Schedule logical backups as an additional portability and
 configuration check:
 
 ```sh
@@ -28,7 +28,9 @@ can include connection credentials. Do not use `--no-owner` or `--no-acl` if you
 intend to preserve ownership and grants.
 
 `pg_dump` includes pgwrh configuration and placement state, including
-availability-zone policies, pending/current configurations and replica reports.
+availability-zone policies, pending/current configurations, replica reports,
+credential generations, source passwords and target SCRAM verifiers. Preserve
+these records together; rebuilding verifiers would change their salts.
 The dump does **not** preserve usable replication slots, live workers,
 replication origins or continuity with existing replica data.
 
@@ -79,7 +81,9 @@ not blindly restore pgwrh-managed entries.
 
 The quarantine script marks saved hosts offline and clears saved readiness
 reports. A report from before the backup is not evidence that a replica is ready
-for the restored controller. Do not commit an interrupted rollout on that basis.
+for the restored controller. Do not commit an interrupted rollout or retire old credentials on that basis.
+The script also clears credential-generation acknowledgements; a restored
+rotation resumes only from fresh installation and route reports.
 
 ## Recover service
 
