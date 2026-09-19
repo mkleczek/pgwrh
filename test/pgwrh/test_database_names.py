@@ -12,6 +12,7 @@ def test_database_names_survive_replication_routing_and_handoff(handoff_cluster)
     cluster = handoff_cluster
     source, destination, reader = cluster.replicas
     controller_db = cluster.master.query_scalar('SELECT current_database()')
+    credentials = cluster.master.execute('SELECT * FROM pgwrh.source_credential ORDER BY source_role')
     for replica in cluster.replicas:
         assert replica.query_scalar("""SELECT value FROM pg_foreign_server,
             LATERAL pgwrh.opts(srvoptions)
@@ -47,10 +48,10 @@ def test_database_names_survive_replication_routing_and_handoff(handoff_cluster)
     wait_until(lambda: source.query_scalar('SELECT count(*) FROM pgwrh.connected_local_shard') == 0,
                timeout=60, message='source did not hand off to the other database')
     cluster.assert_query_results_match('SELECT * FROM data.root ORDER BY id')
-    # Old credentials can be retired in one database while a sibling still uses
-    # them. Every database must eventually report only the current credential.
-    wait_until(lambda: cluster.master.query_scalar("""SELECT bool_and(json_array_length(users) = 1)
-        FROM pgwrh.replication_group_member"""), timeout=60, message='credential rotation did not finish')
+    # Topology rollouts leave credentials unchanged in every database.
+    assert cluster.master.execute('SELECT * FROM pgwrh.source_credential ORDER BY source_role') == credentials
+    wait_until(lambda: cluster.master.query_scalar("""SELECT bool_and(json_array_length(users) = 2)
+        FROM pgwrh.replication_group_member"""), timeout=60, message='incoming source logins were not reported')
 
 
 def test_database_registration_defaults_and_endpoint_uniqueness(postgres_node_factory):

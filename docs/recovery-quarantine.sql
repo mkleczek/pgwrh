@@ -9,5 +9,6 @@ UPDATE pgwrh.replication_group_member SET
     connected_remote_shards = '[]',
     prepared_remote_shards = '[]',
     serving_subtrees = '[]',
-    users = '[]';
+    users = '[]',
+    credential_generation = NULL;
 COMMIT;

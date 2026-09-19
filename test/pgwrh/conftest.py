@@ -106,6 +106,11 @@ def postgres_node_factory():
             node = get_new_node(name, bin_dir=os.environ.get(POSTGRES_BIN_DIR_ENV))
             stack.enter_context(node)
             node.init(allow_logical=True)
+            # Managed source identities always authenticate using SCRAM. Keep
+            # test administration and replication transport on the fixture's
+            # normal rules, but exercise real authentication on every FDW route.
+            hba = Path(node.data_dir) / 'pg_hba.conf'
+            hba.write_text('host all /^pgwrh_[0-9a-f]{32}$ all scram-sha-256\n' + hba.read_text())
             # Distribution builds may default to /run/postgresql, which is not
             # writable by the unprivileged test runner.
             node.append_conf("unix_socket_directories = " + _quote_conf_value(node.base_dir))

@@ -373,7 +373,7 @@ attachment_command AS (
         WHERE (d.parent_rel_id, d.rel_id, d.bound) = (c.parent_rel_id, c.rel_id, c.bound)
     )
 ),
-roles AS (
+roles AS MATERIALIZED (
     SELECT * FROM fdw_local_credentials
 ),
 remote_credentials AS MATERIALIZED (
@@ -578,6 +578,14 @@ scripts (async, transactional, description, commands) AS (
     GROUP BY 1, 2
 
     UNION ALL
+    -- Reconcile the persisted verifier too, including after a replica restore.
+    SELECT FALSE, TRUE, 'Installing current credential verifiers',
+        array_agg(format('ALTER ROLE %I PASSWORD %L', username, password))
+    FROM roles JOIN pg_authid u ON u.rolname = username
+    WHERE u.rolpassword IS DISTINCT FROM password
+    GROUP BY 1, 2
+
+    UNION ALL
     -- Clean up
     SELECT
         FALSE,
@@ -749,7 +757,7 @@ scripts (async, transactional, description, commands) AS (
     SELECT FALSE, TRUE,
         format('Creating target servers [%s]', string_agg(server_name, ', ')),
         array_agg(format('CREATE SERVER %I FOREIGN DATA WRAPPER pgwrh_fdw OPTIONS
-            (host %L, port %L, dbname %L, load_balance_weight %L)',
+            (host %L, port %L, dbname %L, load_balance_weight %L, require_auth ''scram-sha-256'')',
             server_name, host, port, dbname, weight::text))
         || array_agg(format('CREATE USER MAPPING FOR PUBLIC SERVER %I OPTIONS (user %L, password %L)',
             server_name, username, password))
@@ -939,7 +947,8 @@ FROM
     scripts
 ;
 -- FIXME should it be PUBLIC?
-GRANT SELECT ON sync TO PUBLIC;
+-- The administrator's sync plan can contain outbound source passwords. Do not
+-- expose it to application roles or incoming replica logins through a public view.
 
 CREATE FUNCTION cleanup_analyzed_pg_class() RETURNS void LANGUAGE sql AS
 $$
