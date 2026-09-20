@@ -103,6 +103,11 @@ def test_shard_structure_exposes_structured_partition_metadata(
     assert "PRIMARY KEY (col1)" in leaf["local_constraint_clause"]
     assert leaf["root_schema_name"] == "test"
     assert leaf["root_table_name"] == "my_data"
+    # Transporting the definition is insufficient: the physical replica leaf
+    # must retain the key that logical replication uses for UPDATE and DELETE.
+    assert replica.execute("""SELECT pg_get_constraintdef(oid) FROM pg_constraint
+        WHERE conrelid = 'test_shards.my_data_2022_0'::regclass AND contype = 'p'
+    """) == [("PRIMARY KEY (col1)",)]
 
 
 def test_replica_bootstrap_uses_structured_slot_first_partition_tree(
