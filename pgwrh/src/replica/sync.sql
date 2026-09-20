@@ -79,7 +79,8 @@ missing_nonroot_rel AS (
         s.slot_rel_id,
         s.bound,
         s.node_partkeydef,
-        s.is_leaf
+        s.is_leaf,
+        s.local_constraint_clause
     FROM
         nonroot_shard_structure s
     WHERE
@@ -162,9 +163,14 @@ missing_nonroot_command AS (
         3 AS phase,
         schema_name,
         table_name,
-        format('CREATE TABLE %s PARTITION OF %s %s%s',
+        -- Physical leaves need their local constraints, particularly the primary
+        -- key used to apply UPDATE/DELETE from logical replication. Do not put
+        -- unique constraints on the partitioned routing nodes: they must also
+        -- accept foreign partitions during handoff.
+        format('CREATE TABLE %s PARTITION OF %s%s %s%s',
             fqn(rel_id),
             fqn(slot_rel_id),
+            CASE WHEN is_leaf THEN coalesce(' (' || local_constraint_clause || ')', '') ELSE '' END,
             bound,
             coalesce(' PARTITION BY ' || node_partkeydef, '')
         ) AS command
