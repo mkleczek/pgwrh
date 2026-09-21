@@ -115,6 +115,7 @@ test-ui: testgres-ext
 
 ifeq ($(WITH_FDW),1)
 test-fdw: pgwrh_fdw-all
+	PG_CONFIG="$(PG_CONFIG)" $(PYTHON) $(FDW_DIR)/test_limit_pushdown.py
 	PG_CONFIG="$(PG_CONFIG)" $(PYTHON) $(FDW_DIR)/test_context.py
 	PG_CONFIG="$(PG_CONFIG)" $(PYTHON) $(FDW_DIR)/run-upstream.py
 	$(PYTHON) $(FDW_DIR)/check-symbols.py

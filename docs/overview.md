@@ -137,4 +137,5 @@ waiting](lsn-wait.md) where a read must observe a known write.
 
 The controller needs its own backup and availability plan. pgwrh does not elect
 a replacement controller, and shard replicas do not replace a source backup. See
-[controller backup and recovery](recovery.md).
+[controller HA and failover](controller-ha.md) for physical standby configuration,
+and [controller backup and recovery](recovery.md) for restoring from a backup.
