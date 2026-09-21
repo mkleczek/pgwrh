@@ -25,6 +25,7 @@
 #include "commands/extension.h"
 #include "libpq/libpq-be.h"
 #include "postgres_fdw.h"
+#include "limit_pushdown.h"
 #include "utils/guc.h"
 #include "utils/varlena.h"
 
@@ -581,6 +582,8 @@ process_pgfdw_appname(const char *appname)
 void
 _PG_init(void)
 {
+	pgwrh_fdw_init_limit_pushdown();
+
 	/*
 	 * Unlike application_name GUC, don't set GUC_IS_NAME flag nor check_hook
 	 * to allow pgwrh_fdw.application_name to be any string more than

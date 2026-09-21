@@ -5,6 +5,7 @@ OBJS = \
 	$(WIN32RES) \
 	connection.o \
 	deparse.o \
+	limit_pushdown.o \
 	option.o \
 	postgres_fdw.o \
 	shippable.o
@@ -28,6 +29,7 @@ include $(PGXS)
 PG_CFLAGS += -fvisibility=hidden
 
 $(OBJS): postgres_fdw.h namespace.h
+limit_pushdown.o option.o postgres_fdw.o: limit_pushdown.h
 
 STAGE_DIR ?= $(abspath .build/testgres-ext)
 stage: all

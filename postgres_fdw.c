@@ -44,6 +44,7 @@
 #include "optimizer/tlist.h"
 #include "parser/parsetree.h"
 #include "postgres_fdw.h"
+#include "limit_pushdown.h"
 #include "storage/latch.h"
 #include "utils/builtins.h"
 #include "utils/float.h"
@@ -6747,6 +6748,38 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel,
 									 ofpinfo->relation_name);
 
 	return true;
+}
+
+/*
+ * Only our own simple foreign scans can consume an ancestor's tuple bound.
+ * A local qual would reject rows after the remote LIMIT and could underfill
+ * the result. Ordinary prepared-statement parameters are fine; parameterized
+ * join paths and foreign joins/upper paths are deliberately left alone.
+ */
+Path *
+pgwrh_fdw_limit_foreign_path(PlannerInfo *root, ForeignPath *path)
+{
+	RelOptInfo *rel = path->path.parent;
+	PgFdwRelationInfo *fpinfo;
+	ForeignPath *result;
+
+	if (!IS_SIMPLE_REL(rel) || !rel->fdwroutine ||
+		rel->fdwroutine->GetForeignPlan != postgresGetForeignPlan ||
+		path->path.param_info != NULL || path->fdw_outerpath != NULL ||
+		path->fdw_restrictinfo != NIL)
+		return &path->path;
+	fpinfo = (PgFdwRelationInfo *) rel->fdw_private;
+	if (!fpinfo || fpinfo->local_conds != NIL ||
+		!is_foreign_expr(root, rel, (Expr *) root->parse->limitCount))
+		return &path->path;
+	/* Existing final/ordered paths already carry their own pushdown state. */
+	if (path->fdw_private != NIL)
+		return &path->path;
+
+	result = makeNode(ForeignPath);
+	*result = *path;
+	result->fdw_private = list_make2(makeBoolean(false), makeBoolean(true));
+	return &result->path;
 }
 
 /*
