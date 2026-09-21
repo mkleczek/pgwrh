@@ -28,6 +28,8 @@ jobs:
       - name: Unpack the reviewed release source
         if: inputs.source_artifact != ''
         run: tar -xzf release-source/*.tar.gz --strip-components=1
+      - name: Verify the pristine upstream import workflow
+        run: python3 test/pgwrh_fdw/test_upstream_import.py
       - name: Fetch the pinned PostgreSQL release
         uses: actions/checkout@v4
         with:

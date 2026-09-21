@@ -42,7 +42,7 @@ checks = {
     'packaging/container/Dockerfile': f'org.opencontainers.image.version="{version}"',
     'examples/compose/compose.yaml': f'pgwrh:{version}-pg18',
     'test/packaging/installed.sql': f"extversion = '{version}'",
-    'pgwrh_fdw/pgwrh_fdw.c': f'.version = "{version}"',
+    'pgwrh_fdw/postgres_fdw.c': f'.version = "{version}"',
     'pgwrh_ui/Makefile': f'EXTVERSION = {version}',
     'pgwrh_wait/Makefile': f'DATA = pgwrh_wait--{version}.sql',
     'pgwrh_fdw/Makefile': f'DATA = pgwrh_fdw--{version}.sql',
