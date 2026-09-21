@@ -9,7 +9,7 @@ Rules-Requires-Root: no
 
 Package: postgresql-18-pgwrh
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, postgresql-18, postgresql-18-pg-background (>= 1.6)
+Depends: ${shlibs:Depends}, ${misc:Depends}, postgresql-18, postgresql-18-pg-background (>= 2.0.3)
 Description: sharding and replica read consistency for PostgreSQL 18
  Distributes PostgreSQL shards across logical replicas using weighted
  rendezvous hashing. Includes pgwrh, pgwrh_ui, pgwrh_fdw and pgwrh_wait.

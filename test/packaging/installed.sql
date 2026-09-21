@@ -18,8 +18,8 @@ DO $$
 DECLARE
     extension_name text;
 BEGIN
-    ASSERT current_setting('server_version_num')::int / 10000 = 18,
-        'The release requires PostgreSQL 18';
+    ASSERT current_setting('server_version_num')::int / 10000 IN (18, 19),
+        'The release requires PostgreSQL 18 or 19';
     ASSERT NOT EXISTS (SELECT FROM pg_extension WHERE extname = 'postgres_fdw'),
         'The bundle must not require the stock postgres_fdw extension';
     ASSERT (SELECT f.fdwname = 'pgwrh_fdw' FROM pg_foreign_server s

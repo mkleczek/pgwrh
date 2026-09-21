@@ -7,7 +7,7 @@ DECLARE
 BEGIN
     FOR check_result IN
         SELECT * FROM (VALUES
-            ('PostgreSQL 18', current_setting('server_version_num')::int / 10000 = 18),
+            ('PostgreSQL 18 or 19', current_setting('server_version_num')::int / 10000 IN (18, 19)),
             ('pgwrh 1.0.0-alpha1', EXISTS (SELECT FROM pg_extension WHERE extname = 'pgwrh' AND extversion = '1.0.0-alpha1')),
             ('pgwrh_fdw 1.0.0-alpha1', EXISTS (SELECT FROM pg_extension WHERE extname = 'pgwrh_fdw' AND extversion = '1.0.0-alpha1')),
             ('pgwrh_wait 1.0.0-alpha1', EXISTS (SELECT FROM pg_extension WHERE extname = 'pgwrh_wait' AND extversion = '1.0.0-alpha1')),

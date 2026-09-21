@@ -1,8 +1,8 @@
 # Waiting for logical apply visibility
 
 `pgwrh_wait` lets a read wait until a logical-replication subscriber has applied
-a known write from its publisher. It supports PostgreSQL **18** with the
-built-in `pgoutput` replication plugin and can be used independently of pgwrh.
+a known write from its publisher. It supports PostgreSQL **18** and **19 Beta 3**
+(preview) with the built-in `pgoutput` replication plugin and can be used independently of pgwrh.
 For publisher, subscriber and subscription terminology, see [cluster
 concepts](overview.md).
 

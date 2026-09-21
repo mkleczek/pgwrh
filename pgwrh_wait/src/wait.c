@@ -11,6 +11,7 @@
 #include "utils/snapmgr.h"
 #include "utils/wait_event.h"
 #include "monitor.h"
+#include "compat.h"
 
 PG_FUNCTION_INFO_V1(pgwrh_wait_for_lsn);
 
@@ -34,7 +35,7 @@ check_read_after_lsn(char **newval, void **extra, GucSource source)
 		GUC_check_errdetail("Use an explicit SET LOCAL pgwrh.read_after_lsn before the first query in a transaction.");
 		return false;
 	}
-	lsn = pg_lsn_in_internal(*newval, &invalid);
+	lsn = pgwrh_parse_lsn(*newval, &invalid);
 	if (invalid || XLogRecPtrIsInvalid(lsn))
 	{
 		GUC_check_errdetail("A nonzero PostgreSQL LSN is required.");
@@ -139,7 +140,7 @@ process_utility(PlannedStmt *pstmt, const char *query_string,
 	if (barrier && read_after_lsn[0])
 	{
 		bool invalid;
-		XLogRecPtr target = pg_lsn_in_internal(read_after_lsn, &invalid);
+		XLogRecPtr target = pgwrh_parse_lsn(read_after_lsn, &invalid);
 
 		/* Another utility hook must not have established a snapshot either. */
 		if (FirstSnapshotSet || ActiveSnapshotSet())

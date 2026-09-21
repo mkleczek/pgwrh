@@ -27,7 +27,7 @@ The release pipeline builds the same reviewed source archive for every target:
 
 - EL9 RPMs, including the optional LLVM package: x86_64 and aarch64.
 - Debian 13 and Ubuntu 24.04/26.04 DEBs: amd64 and arm64.
-- PostgreSQL 18 container: linux/amd64 and linux/arm64.
+- PostgreSQL 18 and 19 preview containers: linux/amd64 and linux/arm64.
 - Nix installation checks: Linux and macOS, both CPU architectures.
 
 Every native package is installed in a clean runtime container. Tests first create
@@ -148,3 +148,12 @@ Use the successful **Release packages** run for the exact release commit as the
 release record. Local checks and earlier runs do not replace the native matrix.
 [Historical packaging results](development/packaging-validation.md) are retained
 as development notes, separate from the release procedure.
+
+## Development preparation for PostgreSQL 19
+
+Current development builds include independent FDWs for 18 and 19 Beta 3 and
+use pg_background 2.0.3 on both. The expanded matrix produces DEBs, container
+images (`-pg18` and `-pg19`) and Nix bundles. PostgreSQL 19 RPM publication is
+waiting for PGDG's pg_background package; the corresponding spec is ready.
+Follow the [version checklist](development/postgres-versions.md) before targeting
+PostgreSQL 19 final. Published alpha1 artifacts are not replaced by these changes.
