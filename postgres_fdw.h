@@ -8,7 +8,7 @@
  * postgres_fdw.h
  *		  Foreign-data wrapper for remote PostgreSQL servers
  *
- * Portions Copyright (c) 2012-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 2012-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *		  contrib/postgres_fdw/postgres_fdw.h
@@ -20,13 +20,13 @@
 
 #include "namespace.h"
 
-#if PG_VERSION_NUM < 180000 || PG_VERSION_NUM >= 190000
-#error "pgwrh_fdw supports PostgreSQL 18 only"
+#if PG_VERSION_NUM < 190000 || PG_VERSION_NUM >= 200000
+#error "pgwrh_fdw supports PostgreSQL 19 only"
 #endif
 
 #include "foreign/foreign.h"
 #include "lib/stringinfo.h"
-#include "libpq-fe.h"
+#include "libpq/libpq-be-fe.h"
 #include "nodes/execnodes.h"
 #include "nodes/pathnodes.h"
 #include "utils/relcache.h"
@@ -92,11 +92,13 @@ typedef struct PgFdwRelationInfo
 	Cost		fdw_tuple_cost;
 	List	   *shippable_extensions;	/* OIDs of shippable extensions */
 	bool		async_capable;
+	bool		streaming_fetch; /* plain query with chunked results */
 
 	/* Cached catalog information. */
 	ForeignTable *table;
 	ForeignServer *server;
 	UserMapping *user;			/* only set in use_remote_estimate mode */
+	List	   *relation_serverids; /* all inputs of a remote scan/join */
 
 	int			fetch_size;		/* fetch size for this remote table */
 
@@ -187,13 +189,22 @@ extern void do_sql_command(PGconn *conn, const char *sql);
 extern PGresult *pgfdw_get_result(PGconn *conn);
 extern PGresult *pgfdw_exec_query(PGconn *conn, const char *query,
 								  PgFdwConnState *state);
-extern void pgfdw_report_error(int elevel, PGresult *res, PGconn *conn,
-							   bool clear, const char *sql);
+pg_noreturn extern void pgfdw_report_error(PGresult *res, PGconn *conn,
+										   const char *sql);
+extern void pgfdw_report(int elevel, PGresult *res, PGconn *conn,
+						 const char *sql);
 
 /* in pipeline.c: results are owned until taken by the submitting scan */
 extern PgFdwPendingOperation *pgfdw_pipeline_submit(PGconn *conn,
     PgFdwConnState *state, const char *sql, int nparams,
     const char *const *values, ExecStatusType expected, const char *error_sql);
+extern PgFdwPendingOperation *pgfdw_pipeline_stream_submit(PGconn *conn,
+	PgFdwConnState *state, const char *sql, int nparams,
+	const char *const *values, int chunk_size);
+extern bool pgfdw_pipeline_stream_has_room(PgFdwConnState *state);
+extern bool pgfdw_pipeline_stream_ready(PgFdwPendingOperation *op);
+extern PGresult *pgfdw_pipeline_stream_take(PgFdwPendingOperation *op);
+extern void pgfdw_pipeline_stream_release(PgFdwPendingOperation *op);
 extern void pgfdw_pipeline_sync(PGconn *conn, PgFdwConnState *state);
 extern void pgfdw_pipeline_process(PgFdwConnState *state);
 extern bool pgfdw_pipeline_has_room(PgFdwConnState *state);

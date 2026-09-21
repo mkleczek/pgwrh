@@ -18,7 +18,7 @@
  * functions or functions using nonportable collations.  Those considerations
  * need not be accounted for here.
  *
- * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  contrib/postgres_fdw/shippable.c
@@ -67,7 +67,8 @@ typedef struct
  * made for them, however.
  */
 static void
-InvalidateShippableCacheCallback(Datum arg, int cacheid, uint32 hashvalue)
+InvalidateShippableCacheCallback(Datum arg, SysCacheIdentifier cacheid,
+								 uint32 hashvalue)
 {
 	HASH_SEQ_STATUS status;
 	ShippableCacheEntry *entry;

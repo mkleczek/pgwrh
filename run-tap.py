@@ -10,7 +10,7 @@ from support import BIN, Cluster, ROOT, config
 
 source = os.environ.get("PG_SOURCE")
 if not source or not (Path(source) / "src/test/perl/PostgreSQL/Test/Cluster.pm").exists():
-    sys.exit("Set PG_SOURCE to matching PostgreSQL 18 source (for src/test/perl).")
+    sys.exit("Set PG_SOURCE to matching PostgreSQL 19 source (for src/test/perl).")
 cluster = Cluster()
 try:
     cluster.setup()

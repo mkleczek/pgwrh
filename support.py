@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Dependency-free libpq client and temporary PostgreSQL 18 test cluster."""
+"""Dependency-free libpq client and temporary PostgreSQL 19 test cluster."""
 import ctypes as C
 import os
 from pathlib import Path

@@ -7,14 +7,20 @@
  * different scan is using the connection; only its owner may take it.
  */
 #include "postgres.h"
+#include "varatt.h"
 
 #include "access/xact.h"
+#include "catalog/pg_type_d.h"
+#include "executor/tuptable.h"
 #include "lib/ilist.h"
 #include "libpq/libpq-be-fe-helpers.h"
 #include "miscadmin.h"
 #include "postgres_fdw.h"
 #include "storage/latch.h"
 #include "utils/memutils.h"
+#include "utils/builtins.h"
+#include "utils/resowner.h"
+#include "utils/tuplestore.h"
 #include "utils/timestamp.h"
 #include "utils/wait_event.h"
 
@@ -29,6 +35,17 @@ struct PgFdwPendingOperation
 	int			nestlevel;
 	bool		done;
 	bool		failed;
+	int			chunk_size; /* zero for ordinary operations */
+	bool		row_mode_set;
+	bool		discard_rows;
+	PGresult   *chunk;
+	PGresult   *row_description;
+	Tuplestorestate *store;
+	MemoryContext store_context;
+	ResourceOwner store_owner;
+	TupleDesc	store_desc;
+	TupleTableSlot *store_slot;
+	uint64		stored_rows;
 };
 
 struct PgFdwPipeline
@@ -52,16 +69,7 @@ static void
 pipeline_cleanup(void *arg)
 {
 	PgFdwPipeline *pipeline = arg;
-	dlist_iter iter;
-
-	dlist_foreach(iter, &pipeline->operations)
-	{
-		PgFdwPendingOperation *op =
-			dlist_container(PgFdwPendingOperation, all_node, iter.cur);
-
-		PQclear(op->result);
-		op->result = NULL;
-	}
+	/* PG19 result wrappers register their own reset callbacks. */
 	/* A disconnected/replaced cache entry may already own another queue. */
 	if (pipeline->state->pipeline == pipeline)
 		pipeline->state->pipeline = NULL;
@@ -99,7 +107,7 @@ pipeline_get(PGconn *conn, PgFdwConnState *state)
 static void
 pipeline_error(PgFdwPipeline *pipeline)
 {
-	pgfdw_report_error(ERROR, NULL, pipeline->conn, false, NULL);
+	pgfdw_report_error(NULL, pipeline->conn, NULL);
 }
 
 static void
@@ -133,11 +141,115 @@ pipeline_operation(PgFdwPipeline *pipeline, const char *sql,
 	return op;
 }
 
+/* No user-defined input functions or executor callbacks run in this layer. */
+static void
+pipeline_clear_stream(PgFdwPendingOperation *op)
+{
+	PQclear(op->chunk);
+	op->chunk = NULL;
+	PQclear(op->row_description);
+	op->row_description = NULL;
+	/*
+	 * BufFileClose flushes dirty buffers, which can fail again after a spill
+	 * error (notably temp_file_limit).  Release the file resource directly,
+	 * then its private memory, without trying to write discarded rows.
+	 */
+	if (op->store_owner)
+	{
+		ResourceOwnerRelease(op->store_owner, RESOURCE_RELEASE_BEFORE_LOCKS, false, false);
+		ResourceOwnerRelease(op->store_owner, RESOURCE_RELEASE_LOCKS, false, false);
+		ResourceOwnerRelease(op->store_owner, RESOURCE_RELEASE_AFTER_LOCKS, false, false);
+		ResourceOwnerDelete(op->store_owner);
+		op->store_owner = NULL;
+	}
+	if (op->store_context)
+		MemoryContextDelete(op->store_context);
+	op->store_context = NULL;
+	op->store = NULL;
+	op->store_slot = NULL;
+	op->store_desc = NULL;
+	op->stored_rows = 0;
+}
+
+/*
+ * Save wire-format text, not locally converted Datums.  Spilling must belong
+ * to the top-level transaction: a nested query can drain an outer scan, then
+ * roll back its savepoint while the outer scan still needs these rows.
+ */
+static void
+pipeline_store_chunk(PgFdwPendingOperation *op)
+{
+	MemoryContext oldcontext = MemoryContextSwitchTo(op->pipeline->context);
+	ResourceOwner oldowner = CurrentResourceOwner;
+	PGresult   *res = op->chunk;
+	int			nfields = PQnfields(res);
+	Datum	   *values;
+	bool	   *nulls;
+	bool		was_failed = op->failed;
+
+	/* A partial write must never be mistaken for a complete result. */
+	op->failed = true;
+	if (!op->store_context)
+		op->store_context = AllocSetContextCreate(op->pipeline->context,
+												   "postgres_fdw stream buffer", ALLOCSET_DEFAULT_SIZES);
+	if (!op->store_owner)
+		op->store_owner = ResourceOwnerCreate(TopTransactionResourceOwner,
+												 "postgres_fdw stream buffer");
+	CurrentResourceOwner = op->store_owner;
+	MemoryContextSwitchTo(op->store_context);
+	PG_TRY();
+	{
+		if (!op->store)
+		{
+			op->row_description = libpqsrv_PQwrap(PQcopyResult(res->res, PG_COPYRES_ATTRS));
+			if (!op->row_description)
+				ereport(ERROR, (errcode(ERRCODE_OUT_OF_MEMORY), errmsg("out of memory")));
+			op->store_desc = CreateTemplateTupleDesc(nfields);
+			for (int col = 0; col < nfields; col++)
+				TupleDescInitEntry(op->store_desc, col + 1, NULL, TEXTOID, -1, 0);
+			TupleDescFinalize(op->store_desc);
+			op->store = tuplestore_begin_heap(false, false, work_mem);
+			tuplestore_set_eflags(op->store, 0);
+			op->store_slot = MakeSingleTupleTableSlot(op->store_desc, &TTSOpsMinimalTuple);
+		}
+		values = palloc(sizeof(Datum) * nfields);
+		nulls = palloc(sizeof(bool) * nfields);
+		for (int row = 0; row < PQntuples(res); row++)
+		{
+			CHECK_FOR_INTERRUPTS();
+			for (int col = 0; col < nfields; col++)
+			{
+				nulls[col] = PQgetisnull(res, row, col);
+				values[col] = nulls[col] ? (Datum) 0 :
+					PointerGetDatum(cstring_to_text_with_len(PQgetvalue(res, row, col),
+													 PQgetlength(res, row, col)));
+			}
+			tuplestore_putvalues(op->store, op->store_desc, values, nulls);
+			for (int col = 0; col < nfields; col++)
+				if (!nulls[col])
+					pfree(DatumGetPointer(values[col]));
+			op->stored_rows++;
+		}
+		pfree(values);
+		pfree(nulls);
+		PQclear(op->chunk);
+		op->chunk = NULL;
+		op->failed = was_failed;
+	}
+	PG_FINALLY();
+	{
+		CurrentResourceOwner = oldowner;
+		MemoryContextSwitchTo(oldcontext);
+	}
+	PG_END_TRY();
+}
+
 static void
 pipeline_free_operation(PgFdwPendingOperation *op)
 {
 	Assert(op->done);
 	dlist_delete(&op->all_node);
+	pipeline_clear_stream(op);
 	PQclear(op->result);
 	if (op->sql)
 		pfree(op->sql);
@@ -164,6 +276,28 @@ pgfdw_pipeline_submit(PGconn *conn, PgFdwConnState *state, const char *sql,
 	return op;
 }
 
+/* Chunk mode is selected when this operation reaches the wire head. */
+PgFdwPendingOperation *
+pgfdw_pipeline_stream_submit(PGconn *conn, PgFdwConnState *state,
+							 const char *sql, int nparams,
+							 const char *const *values, int chunk_size)
+{
+	PgFdwPendingOperation *op = pgfdw_pipeline_submit(conn, state, sql,
+															 nparams, values, PGRES_TUPLES_OK, sql);
+
+	Assert(chunk_size > 0);
+	op->chunk_size = chunk_size;
+	pgfdw_pipeline_sync(conn, state);
+	return op;
+}
+
+bool
+pgfdw_pipeline_stream_has_room(PgFdwConnState *state)
+{
+	/* Depth zero still permits streaming, but never queues a second query. */
+	return !state->pipeline || state->pipeline->fetches < Max(1, state->pipeline_depth);
+}
+
 void
 pgfdw_pipeline_sync(PGconn *conn, PgFdwConnState *state)
 {
@@ -185,7 +319,8 @@ pgfdw_pipeline_sync(PGconn *conn, PgFdwConnState *state)
  * During abort, discard results without reporting secondary remote errors.
  */
 static bool
-pipeline_process(PgFdwPipeline *pipeline, bool discard)
+pipeline_process(PgFdwPipeline *pipeline, bool discard,
+				 PgFdwPendingOperation *wanted)
 {
 	PGconn	   *conn = pipeline->conn;
 	int			flush;
@@ -194,11 +329,23 @@ pipeline_process(PgFdwPipeline *pipeline, bool discard)
 		return true;
 	if (pipeline->broken)
 		return false;
+	/* Select row mode before any libpq call that might parse this query. */
+	if (!dlist_is_empty(&pipeline->wire))
+	{
+		PgFdwPendingOperation *head =
+			dlist_head_element(PgFdwPendingOperation, wire_node, &pipeline->wire);
+		if (head->chunk_size && !head->row_mode_set)
+		{
+			if (!PQsetChunkedRowsMode(conn, head->chunk_size))
+				return false;
+			head->row_mode_set = true;
+		}
+	}
 	flush = PQflush(conn);
 	if (flush < 0 || !PQconsumeInput(conn))
 		return false;
 	pipeline->flush_pending = (flush != 0);
-	while (!dlist_is_empty(&pipeline->wire) && !PQisBusy(conn))
+	while (!dlist_is_empty(&pipeline->wire))
 	{
 		PgFdwPendingOperation *op =
 			dlist_head_element(PgFdwPendingOperation, wire_node, &pipeline->wire);
@@ -207,10 +354,47 @@ pipeline_process(PgFdwPipeline *pipeline, bool discard)
 
 		if (!discard)
 			CHECK_FOR_INTERRUPTS();
+		if (op->chunk_size && !op->row_mode_set)
+		{
+			if (!PQsetChunkedRowsMode(conn, op->chunk_size))
+				return false;
+			op->row_mode_set = true;
+		}
+		if (op->chunk)
+		{
+			if (discard || op->discard_rows)
+			{
+				PQclear(op->chunk);
+				op->chunk = NULL;
+			}
+			else if (op == wanted)
+				return true;
+			else
+				pipeline_store_chunk(op);
+		}
+		if (PQisBusy(conn))
+			break;
 		/* PG19's result wrappers must outlive the current subtransaction. */
 		oldcontext = MemoryContextSwitchTo(pipeline->context);
 		res = PQgetResult(conn);
 		MemoryContextSwitchTo(oldcontext);
+		if (res && op->chunk_size && PQresultStatus(res) == PGRES_TUPLES_CHUNK)
+		{
+			op->chunk = res;
+			if (discard || op->discard_rows)
+			{
+				PQclear(op->chunk);
+				op->chunk = NULL;
+			}
+			else if (op == wanted)
+			{
+				SetLatch(MyLatch);
+				return true;
+			}
+			else
+				pipeline_store_chunk(op);
+			continue;
+		}
 		if (res && op->expected != PGRES_PIPELINE_SYNC)
 		{
 			if (op->result != NULL)
@@ -251,13 +435,14 @@ pipeline_process(PgFdwPipeline *pipeline, bool discard)
 		if (discard)
 		{
 			op->failed = true;
+			pipeline_clear_stream(op);
 			PQclear(op->result);
 			op->result = NULL;
 		}
 		if (op->expected == PGRES_PIPELINE_SYNC)
 			pipeline_free_operation(op);
 		else if (op->failed && !discard)
-			pgfdw_report_error(ERROR, op->result, conn, false, op->sql);
+			pgfdw_report_error(op->result, conn, op->sql);
 	}
 	return PQstatus(conn) == CONNECTION_OK;
 }
@@ -265,7 +450,7 @@ pipeline_process(PgFdwPipeline *pipeline, bool discard)
 void
 pgfdw_pipeline_process(PgFdwConnState *state)
 {
-	if (state->pipeline && !pipeline_process(state->pipeline, false))
+	if (state->pipeline && !pipeline_process(state->pipeline, false, NULL))
 		pipeline_error(state->pipeline);
 }
 
@@ -310,6 +495,93 @@ pipeline_wait(PgFdwPipeline *pipeline, long timeout)
 	}
 }
 
+static void
+pipeline_check_stream(PgFdwPendingOperation *op)
+{
+	if (op->failed)
+		ereport(ERROR,
+				(errcode(ERRCODE_FDW_ERROR),
+				 errmsg("remote streaming operation was aborted"),
+				 errcontext("remote SQL command: %s", op->sql)));
+}
+
+bool
+pgfdw_pipeline_stream_ready(PgFdwPendingOperation *op)
+{
+	pipeline_check_stream(op);
+	if (op->chunk || op->stored_rows || op->done)
+		return true;
+	if (!pipeline_process(op->pipeline, false, op))
+		pipeline_error(op->pipeline);
+	pipeline_check_stream(op);
+	return op->chunk || op->stored_rows || op->done;
+}
+
+/* Returns one chunk, or NULL only after successful protocol completion. */
+PGresult *
+pgfdw_pipeline_stream_take(PgFdwPendingOperation *op)
+{
+	PGresult   *res;
+
+	while (!pgfdw_pipeline_stream_ready(op))
+		pipeline_wait(op->pipeline, 1000);
+	if (op->stored_rows)
+	{
+		MemoryContext oldcontext = MemoryContextSwitchTo(op->pipeline->context);
+		bool was_failed = op->failed;
+
+		/* A failed replay cannot leave a silently shortened outer scan. */
+		op->failed = true;
+		Assert(op->chunk == NULL);
+		op->chunk = libpqsrv_PQwrap(PQcopyResult(op->row_description->res, PG_COPYRES_ATTRS));
+		if (!op->chunk)
+			ereport(ERROR, (errcode(ERRCODE_OUT_OF_MEMORY), errmsg("out of memory")));
+		for (int row = 0; row < op->chunk_size && op->stored_rows; row++)
+		{
+			TupleTableSlot *slot = op->store_slot;
+
+			CHECK_FOR_INTERRUPTS();
+			if (!tuplestore_gettupleslot(op->store, true, false, slot))
+				elog(ERROR, "missing buffered remote row");
+			slot_getallattrs(slot);
+			for (int col = 0; col < slot->tts_tupleDescriptor->natts; col++)
+			{
+				text *value = slot->tts_isnull[col] ? NULL : DatumGetTextPP(slot->tts_values[col]);
+				if (!PQsetvalue(op->chunk->res, row, col,
+								value ? VARDATA_ANY(value) : NULL,
+								value ? VARSIZE_ANY_EXHDR(value) : -1))
+					ereport(ERROR, (errcode(ERRCODE_OUT_OF_MEMORY), errmsg("out of memory")));
+			}
+			ExecClearTuple(slot);
+			op->stored_rows--;
+		}
+		tuplestore_trim(op->store);
+		op->failed = was_failed;
+		MemoryContextSwitchTo(oldcontext);
+	}
+	res = op->chunk;
+	op->chunk = NULL;
+	return res;
+}
+
+/* Early stop drains without cancelling the shared remote transaction. */
+void
+pgfdw_pipeline_stream_release(PgFdwPendingOperation *op)
+{
+	pipeline_check_stream(op);
+	op->discard_rows = true;
+	pipeline_clear_stream(op);
+	while (!op->done)
+	{
+		if (!pipeline_process(op->pipeline, false, NULL))
+			pipeline_error(op->pipeline);
+		if (!op->done)
+			pipeline_wait(op->pipeline, 1000);
+	}
+	pipeline_check_stream(op);
+	pipeline_free_operation(op);
+}
+
 PGresult *
 pgfdw_pipeline_take(PgFdwPendingOperation *op)
 {
@@ -327,6 +599,7 @@ pgfdw_pipeline_take(PgFdwPendingOperation *op)
 				 errmsg("remote pipeline operation was aborted"),
 				 errcontext("remote SQL command: %s", op->sql)));
 	result = op->result;
+	result = libpqsrv_PGresultSetParent(result, CurrentMemoryContext);
 	op->result = NULL;
 	pipeline_free_operation(op);
 	return result;
@@ -375,7 +648,7 @@ pgfdw_pipeline_abort(PgFdwConnState *state)
 	if (pipeline->active)
 	{
 		/* Consume query terminators before appending to an aborted pipeline. */
-		if (!pipeline_process(pipeline, true))
+		if (!pipeline_process(pipeline, true, NULL))
 			return false;
 		/* An interrupt may have occurred before the submitter sent its Sync. */
 		pipeline_operation(pipeline, NULL, PGRES_PIPELINE_SYNC);
@@ -396,7 +669,7 @@ pgfdw_pipeline_abort(PgFdwConnState *state)
 					return false;
 				next_cancel = TimestampTzPlusMilliseconds(now, 1000);
 			}
-			if (!pipeline_process(pipeline, true))
+			if (!pipeline_process(pipeline, true, NULL))
 				return false;
 			if (!dlist_is_empty(&pipeline->wire))
 				pipeline_wait(pipeline, 100);
@@ -414,6 +687,7 @@ pgfdw_pipeline_abort(PgFdwConnState *state)
 		if (op->nestlevel >= level)
 		{
 			op->failed = true;
+			pipeline_clear_stream(op);
 			PQclear(op->result);
 			op->result = NULL;
 		}
@@ -455,6 +729,7 @@ pgfdw_pipeline_disconnect(PgFdwConnState *state)
 			dlist_container(PgFdwPendingOperation, all_node, iter.cur);
 
 		op->failed = true;
+		pipeline_clear_stream(op);
 		PQclear(op->result);
 		op->result = NULL;
 	}

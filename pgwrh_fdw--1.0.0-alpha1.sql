@@ -39,3 +39,21 @@ RETURNS bool
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT PARALLEL RESTRICTED;
 
+CREATE FUNCTION pgwrh_fdw_set_members(server_name text, members text[])
+RETURNS void
+AS 'MODULE_PATHNAME'
+LANGUAGE C VOLATILE PARALLEL UNSAFE;
+
+-- Use the server's SCRAM iteration policy and a fresh cryptographic salt.
+CREATE FUNCTION pgwrh_fdw_scram_verifier(password text)
+RETURNS text
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT VOLATILE PARALLEL RESTRICTED;
+
+-- PostgreSQL 19 subscription connections use the FDW connection callback.
+CREATE FUNCTION pgwrh_fdw_connection(oid, oid, internal)
+RETURNS text
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT PARALLEL RESTRICTED;
+
+ALTER FOREIGN DATA WRAPPER pgwrh_fdw CONNECTION pgwrh_fdw_connection;

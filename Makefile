@@ -4,8 +4,14 @@ MODULE_big = pgwrh_fdw
 OBJS = \
 	$(WIN32RES) \
 	connection.o \
+	credentials.o \
 	deparse.o \
+	join.o \
+	lookup_join.o \
+	limit_pushdown.o \
 	option.o \
+	transaction_context.o \
+	virtual.o \
 	pipeline.o \
 	postgres_fdw.o \
 	shippable.o
@@ -19,6 +25,8 @@ DATA = pgwrh_fdw--1.0.0-alpha1.sql
 
 MODULES = context_probe
 REGRESS = pgwrh_fdw query_cancel
+ISOLATION = eval_plan_qual
+ISOLATION_OPTS = --load-extension=pgwrh_fdw
 TAP_TESTS = 1
 
 PG_CONFIG ?= pg_config
@@ -28,7 +36,10 @@ include $(PGXS)
 # Export only PostgreSQL loader/SQL entry points; helpers also have unique names.
 PG_CFLAGS += -fvisibility=hidden
 
+connection.o join.o option.o virtual.o postgres_fdw.o: virtual.h
+join.o postgres_fdw.o: join.h
 $(OBJS): postgres_fdw.h namespace.h
+limit_pushdown.o option.o postgres_fdw.o: limit_pushdown.h
 
 STAGE_DIR ?= $(abspath .build/testgres-ext)
 stage: all
@@ -38,3 +49,5 @@ stage: all
 	cp $(shlib) "$(STAGE_DIR)/"
 
 .PHONY: stage
+
+lookup_join.o deparse.o postgres_fdw.o: lookup_join.h

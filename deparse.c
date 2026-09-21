@@ -29,7 +29,7 @@
  * with collations that match the remote table's columns, which we can
  * consider to be user error.
  *
- * Portions Copyright (c) 2012-2025, PostgreSQL Global Development Group
+ * Portions Copyright (c) 2012-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *		  contrib/postgres_fdw/deparse.c
@@ -44,6 +44,7 @@
 #include "catalog/pg_aggregate.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_database.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_opfamily.h"
@@ -59,7 +60,11 @@
 #include "optimizer/tlist.h"
 #include "parser/parsetree.h"
 #include "postgres_fdw.h"
+#include "lookup_join.h"
+#include "nodes/makefuncs.h"
+#include "optimizer/restrictinfo.h"
 #include "utils/builtins.h"
+#include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
@@ -108,6 +113,7 @@ typedef struct deparse_expr_cxt
 								 * a base relation. */
 	StringInfo	buf;			/* output buffer to append to */
 	List	  **params_list;	/* exprs that will become remote Params */
+	Index lookupid;             /* zero outside a lookup join */
 } deparse_expr_cxt;
 
 #define REL_ALIAS_PREFIX	"r"
@@ -165,6 +171,7 @@ static void deparseDistinctExpr(DistinctExpr *node, deparse_expr_cxt *context);
 static void deparseScalarArrayOpExpr(ScalarArrayOpExpr *node,
 									 deparse_expr_cxt *context);
 static void deparseRelabelType(RelabelType *node, deparse_expr_cxt *context);
+static void deparseArrayCoerceExpr(ArrayCoerceExpr *node, deparse_expr_cxt *context);
 static void deparseBoolExpr(BoolExpr *node, deparse_expr_cxt *context);
 static void deparseNullTest(NullTest *node, deparse_expr_cxt *context);
 static void deparseCaseExpr(CaseExpr *node, deparse_expr_cxt *context);
@@ -210,6 +217,105 @@ static bool is_subquery_var(Var *node, RelOptInfo *foreignrel,
 static void get_relation_column_alias_ids(Var *node, RelOptInfo *foreignrel,
 										  int *relno, int *colno);
 
+
+/*
+ * An ordinary remote result may stand in for a partial transition state only
+ * for these built-in signatures.  Names (even in pg_catalog) are not identities.
+ * Integer avg is the one synthesized state: an int8 array of count and sum.
+ * sum(int8/numeric/interval) and other avg signatures need different states.
+ * Polymorphic min/max are deliberately outside this initial subset.
+ */
+static bool
+partial_aggregate_ok(Aggref *agg)
+{
+	HeapTuple	tuple;
+	Form_pg_aggregate form;
+	bool		result;
+	bool		integer_avg = (agg->aggfnoid == F_AVG_INT2 ||
+							   agg->aggfnoid == F_AVG_INT4);
+
+	if (agg->aggsplit != AGGSPLIT_INITIAL_SERIAL ||
+		agg->aggkind != AGGKIND_NORMAL || agg->aggdistinct != NIL ||
+		agg->aggorder != NIL || agg->aggdirectargs != NIL || agg->aggvariadic)
+		return false;
+
+	switch (agg->aggfnoid)
+	{
+		case F_AVG_INT2:
+		case F_AVG_INT4:
+		case F_COUNT_:
+		case F_COUNT_ANY:
+		case F_SUM_INT2:
+		case F_SUM_INT4:
+		case F_SUM_FLOAT4:
+		case F_SUM_FLOAT8:
+		case F_SUM_MONEY:
+		case F_MIN_INT2:
+		case F_MIN_INT4:
+		case F_MIN_INT8:
+		case F_MIN_FLOAT4:
+		case F_MIN_FLOAT8:
+		case F_MIN_NUMERIC:
+		case F_MIN_TEXT:
+		case F_MIN_BPCHAR:
+		case F_MIN_DATE:
+		case F_MIN_TIME:
+		case F_MIN_TIMETZ:
+		case F_MIN_TIMESTAMP:
+		case F_MIN_TIMESTAMPTZ:
+		case F_MIN_INTERVAL:
+		case F_MIN_MONEY:
+		case F_MAX_INT2:
+		case F_MAX_INT4:
+		case F_MAX_INT8:
+		case F_MAX_FLOAT4:
+		case F_MAX_FLOAT8:
+		case F_MAX_NUMERIC:
+		case F_MAX_TEXT:
+		case F_MAX_BPCHAR:
+		case F_MAX_DATE:
+		case F_MAX_TIME:
+		case F_MAX_TIMETZ:
+		case F_MAX_TIMESTAMP:
+		case F_MAX_TIMESTAMPTZ:
+		case F_MAX_INTERVAL:
+		case F_MAX_MONEY:
+			break;
+		default:
+			return false;
+	}
+
+	/*
+	 * aggtype is already the partial output type.  Check that it matches the
+	 * state returned by our deparser, with no serialization.  Scalar states
+	 * must also be the normal result type with no finalization.  Integer avg
+	 * instead uses the exact built-in array transition/combine/final functions.
+	 */
+	tuple = SearchSysCache1(AGGFNOID, ObjectIdGetDatum(agg->aggfnoid));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for aggregate %u", agg->aggfnoid);
+	form = (Form_pg_aggregate) GETSTRUCT(tuple);
+	result = form->aggkind == AGGKIND_NORMAL &&
+		OidIsValid(form->aggcombinefn) &&
+		!OidIsValid(form->aggserialfn) &&
+		!OidIsValid(form->aggdeserialfn) &&
+		form->aggtranstype != INTERNALOID &&
+		form->aggtranstype == agg->aggtranstype &&
+		form->aggtranstype == agg->aggtype;
+	if (integer_avg)
+		result = result &&
+			form->aggtranstype == INT8ARRAYOID &&
+			form->aggtransfn == (agg->aggfnoid == F_AVG_INT2 ?
+								F_INT2_AVG_ACCUM : F_INT4_AVG_ACCUM) &&
+			form->aggcombinefn == F_INT4_AVG_COMBINE &&
+			form->aggfinalfn == F_INT8_AVG &&
+			get_func_rettype(agg->aggfnoid) == NUMERICOID;
+	else
+		result = result && !OidIsValid(form->aggfinalfn) &&
+			form->aggtranstype == get_func_rettype(agg->aggfnoid);
+	ReleaseSysCache(tuple);
+	return result;
+}
 
 /*
  * Examine each qual clause in input_conds, and classify them into two groups,
@@ -460,6 +566,11 @@ foreign_expr_walker(Node *node,
 											  AuthIdRelationId, fpinfo))
 								return false;
 							break;
+						case REGDATABASEOID:
+							if (!is_shippable(DatumGetObjectId(c->constvalue),
+											  DatabaseRelationId, fpinfo))
+								return false;
+							break;
 					}
 				}
 
@@ -701,6 +812,54 @@ foreign_expr_walker(Node *node,
 					state = FDW_COLLATE_UNSAFE;
 			}
 			break;
+		case T_ArrayCoerceExpr:
+			{
+				ArrayCoerceExpr *e = (ArrayCoerceExpr *) node;
+
+				/*
+				 * Push down only when the per-element coercion is a plain
+				 * relabeling, that is, elemexpr is a RelabelType or a bare
+				 * CaseTestExpr.  Any other element coercion -- a cast
+				 * function, an I/O conversion (CoerceViaIO), or a domain
+				 * coercion -- is kept local.  We ship only a bare
+				 * "arg::resulttype" cast (nothing at all for an
+				 * implicit-format coercion), so a non-relabeling conversion
+				 * would be re-resolved against the remote server's catalogs
+				 * and session state and could silently change the result.
+				 * This matches the handling of the scalar coercions for the
+				 * I/O and domain cases (never shipped); an element cast
+				 * function is kept local too, which is more conservative than
+				 * the scalar case (a scalar cast function is shipped when it
+				 * is shippable).
+				 */
+				if (!IsA(e->elemexpr, RelabelType) &&
+					!IsA(e->elemexpr, CaseTestExpr))
+					return false;
+
+				/*
+				 * Recurse to input subexpression.
+				 */
+				if (!foreign_expr_walker((Node *) e->arg,
+										 glob_cxt, &inner_cxt, case_arg_cxt))
+					return false;
+
+				/*
+				 * T_ArrayCoerceExpr must not introduce a collation not
+				 * derived from an input foreign Var (same logic as for a
+				 * function).
+				 */
+				collation = e->resultcollid;
+				if (collation == InvalidOid)
+					state = FDW_COLLATE_NONE;
+				else if (inner_cxt.state == FDW_COLLATE_SAFE &&
+						 collation == inner_cxt.collation)
+					state = FDW_COLLATE_SAFE;
+				else if (collation == DEFAULT_COLLATION_OID)
+					state = FDW_COLLATE_NONE;
+				else
+					state = FDW_COLLATE_UNSAFE;
+			}
+			break;
 		case T_BoolExpr:
 			{
 				BoolExpr   *b = (BoolExpr *) node;
@@ -914,8 +1073,10 @@ foreign_expr_walker(Node *node,
 				if (!IS_UPPER_REL(glob_cxt->foreignrel))
 					return false;
 
-				/* Only non-split aggregates are pushable. */
-				if (agg->aggsplit != AGGSPLIT_SIMPLE)
+				/* Partial states need an ordinary SQL representation. */
+				if (agg->aggsplit != AGGSPLIT_SIMPLE &&
+					(fpinfo->stage != UPPERREL_PARTIAL_GROUP_AGG ||
+					 !partial_aggregate_ok(agg)))
 					return false;
 
 				/* As usual, it must be shippable. */
@@ -1159,7 +1320,7 @@ is_foreign_pathkey(PlannerInfo *root,
 static char *
 deparse_type_name(Oid type_oid, int32 typemod)
 {
-	bits16		flags = FORMAT_TYPE_TYPEMOD_GIVEN;
+	uint16		flags = FORMAT_TYPE_TYPEMOD_GIVEN;
 
 	if (!is_builtin(type_oid))
 		flags |= FORMAT_TYPE_FORCE_QUALIFY;
@@ -1238,7 +1399,7 @@ deparseSelectStmtForRel(StringInfo buf, PlannerInfo *root, RelOptInfo *rel,
 						bool has_final_sort, bool has_limit, bool is_subquery,
 						List **retrieved_attrs, List **params_list)
 {
-	deparse_expr_cxt context;
+	deparse_expr_cxt context = {0};
 	PgFdwRelationInfo *fpinfo = (PgFdwRelationInfo *) rel->fdw_private;
 	List	   *quals;
 
@@ -1428,10 +1589,8 @@ deparseTargetList(StringInfo buf,
 	first = true;
 	for (i = 1; i <= tupdesc->natts; i++)
 	{
-		Form_pg_attribute attr = TupleDescAttr(tupdesc, i - 1);
-
 		/* Ignore dropped attributes. */
-		if (attr->attisdropped)
+		if (TupleDescCompactAttr(tupdesc, i - 1)->attisdropped)
 			continue;
 
 		if (have_wholerow ||
@@ -1859,7 +2018,7 @@ deparseFromExprForRel(StringInfo buf, PlannerInfo *root, RelOptInfo *foreignrel,
 			 */
 			if (fpinfo->jointype == JOIN_SEMI)
 			{
-				deparse_expr_cxt context;
+				deparse_expr_cxt context = {0};
 				StringInfoData str;
 
 				/* Construct deparsed condition from this SEMI-JOIN */
@@ -1940,7 +2099,7 @@ deparseFromExprForRel(StringInfo buf, PlannerInfo *root, RelOptInfo *foreignrel,
 			/* Append join clause; (TRUE) if no join clause */
 			if (fpinfo->joinclauses)
 			{
-				deparse_expr_cxt context;
+				deparse_expr_cxt context = {0};
 
 				context.buf = buf;
 				context.foreignrel = foreignrel;
@@ -2120,7 +2279,7 @@ deparseInsertSql(StringInfo buf, RangeTblEntry *rte,
 		foreach(lc, targetAttrs)
 		{
 			int			attnum = lfirst_int(lc);
-			Form_pg_attribute attr = TupleDescAttr(tupdesc, attnum - 1);
+			CompactAttribute *attr = TupleDescCompactAttr(tupdesc, attnum - 1);
 
 			if (!first)
 				appendStringInfoString(buf, ", ");
@@ -2186,7 +2345,7 @@ rebuildInsertSql(StringInfo buf, Relation rel,
 		foreach(lc, target_attrs)
 		{
 			int			attnum = lfirst_int(lc);
-			Form_pg_attribute attr = TupleDescAttr(tupdesc, attnum - 1);
+			CompactAttribute *attr = TupleDescCompactAttr(tupdesc, attnum - 1);
 
 			if (!first)
 				appendStringInfoString(buf, ", ");
@@ -2236,7 +2395,7 @@ deparseUpdateSql(StringInfo buf, RangeTblEntry *rte,
 	foreach(lc, targetAttrs)
 	{
 		int			attnum = lfirst_int(lc);
-		Form_pg_attribute attr = TupleDescAttr(tupdesc, attnum - 1);
+		CompactAttribute *attr = TupleDescCompactAttr(tupdesc, attnum - 1);
 
 		if (!first)
 			appendStringInfoString(buf, ", ");
@@ -2286,7 +2445,7 @@ deparseDirectUpdateSql(StringInfo buf, PlannerInfo *root,
 					   List *returningList,
 					   List **retrieved_attrs)
 {
-	deparse_expr_cxt context;
+	deparse_expr_cxt context = {0};
 	int			nestlevel;
 	bool		first;
 	RangeTblEntry *rte = planner_rt_fetch(rtindex, root);
@@ -2399,7 +2558,7 @@ deparseDirectDeleteSql(StringInfo buf, PlannerInfo *root,
 					   List *returningList,
 					   List **retrieved_attrs)
 {
-	deparse_expr_cxt context;
+	deparse_expr_cxt context = {0};
 	List	   *additional_conds = NIL;
 
 	/* Set up context struct for recursion */
@@ -2513,8 +2672,8 @@ deparseAnalyzeSizeSql(StringInfo buf, Relation rel)
 }
 
 /*
- * Construct SELECT statement to acquire the number of rows and the relkind of
- * a relation.
+ * Construct SELECT statement to acquire the number of pages, the number of
+ * rows, and the relkind of a relation.
  *
  * Note: we just return the remote server's reltuples value, which might
  * be off a good deal, but it doesn't seem worth working harder.  See
@@ -2529,7 +2688,7 @@ deparseAnalyzeInfoSql(StringInfo buf, Relation rel)
 	initStringInfo(&relname);
 	deparseRelation(&relname, rel);
 
-	appendStringInfoString(buf, "SELECT reltuples, relkind FROM pg_catalog.pg_class WHERE oid = ");
+	appendStringInfoString(buf, "SELECT relpages, reltuples, relkind FROM pg_catalog.pg_class WHERE oid = ");
 	deparseStringLiteral(buf, relname.data);
 	appendStringInfoString(buf, "::pg_catalog.regclass");
 }
@@ -2918,6 +3077,9 @@ deparseExpr(Expr *node, deparse_expr_cxt *context)
 		case T_RelabelType:
 			deparseRelabelType((RelabelType *) node, context);
 			break;
+		case T_ArrayCoerceExpr:
+			deparseArrayCoerceExpr((ArrayCoerceExpr *) node, context);
+			break;
 		case T_BoolExpr:
 			deparseBoolExpr((BoolExpr *) node, context);
 			break;
@@ -2956,7 +3118,19 @@ deparseVar(Var *node, deparse_expr_cxt *context)
 	int			colno;
 
 	/* Qualify columns when multiple relations are involved. */
-	bool		qualify_col = (bms_membership(relids) == BMS_MULTIPLE);
+	bool		qualify_col = (context->lookupid != 0 ||
+							   bms_membership(relids) == BMS_MULTIPLE);
+
+	if (context->lookupid && node->varno == context->lookupid &&
+		node->varlevelsup == 0)
+	{
+		if (get_element_type(pgwrh_fdw_lookup_array_type(node->vartype)) != node->vartype)
+			appendStringInfo(context->buf, "(l.c%d::%s)", node->varattno,
+						 deparse_type_name(node->vartype, -1));
+		else
+			appendStringInfo(context->buf, "l.c%d", node->varattno);
+		return;
+	}
 
 	/*
 	 * If the Var belongs to the foreign relation that is deparsed as a
@@ -3507,6 +3681,24 @@ deparseRelabelType(RelabelType *node, deparse_expr_cxt *context)
 }
 
 /*
+ * Deparse an ArrayCoerceExpr (array-type conversion) node.
+ */
+static void
+deparseArrayCoerceExpr(ArrayCoerceExpr *node, deparse_expr_cxt *context)
+{
+	deparseExpr(node->arg, context);
+
+	/*
+	 * No difference how to deparse explicit cast, but if we omit implicit
+	 * cast in the query, it'll be more user-friendly
+	 */
+	if (node->coerceformat != COERCE_IMPLICIT_CAST)
+		appendStringInfo(context->buf, "::%s",
+						 deparse_type_name(node->resulttype,
+										   node->resulttypmod));
+}
+
+/*
  * Deparse a BoolExpr node.
  */
 static void
@@ -3662,8 +3854,35 @@ deparseAggref(Aggref *node, deparse_expr_cxt *context)
 	StringInfo	buf = context->buf;
 	bool		use_variadic;
 
-	/* Only basic, non-split aggregation accepted. */
-	Assert(node->aggsplit == AGGSPLIT_SIMPLE);
+	/* Eligible partial states use the ordinary remote aggregate syntax. */
+	Assert(node->aggsplit == AGGSPLIT_SIMPLE || partial_aggregate_ok(node));
+
+	/*
+	 * avg(int2/int4) uses int8[count, sum], not its numeric final result.
+	 * Emit one array column so the foreign tuple already has the type and
+	 * layout expected by core's partial target and int4_avg_combine.  Reuse
+	 * normal aggregate deparsing to retain the argument and FILTER on both
+	 * components, without mutating the planner's Aggref.  An empty/all-NULL
+	 * input must produce {0,0}, never an array containing a NULL sum.
+	 */
+	if (node->aggsplit == AGGSPLIT_INITIAL_SERIAL &&
+		(node->aggfnoid == F_AVG_INT2 || node->aggfnoid == F_AVG_INT4))
+	{
+		Aggref		component = *node;
+
+		component.aggsplit = AGGSPLIT_SIMPLE;
+		component.aggtype = INT8OID;
+		component.aggtranstype = INT8OID;
+		component.aggfnoid = F_COUNT_ANY;
+		appendStringInfoString(buf, "ARRAY[");
+		deparseAggref(&component, context);
+		appendStringInfoString(buf, ", COALESCE(");
+		component.aggfnoid = node->aggfnoid == F_AVG_INT2 ?
+			F_SUM_INT2 : F_SUM_INT4;
+		deparseAggref(&component, context);
+		appendStringInfoString(buf, ", 0::bigint)]");
+		return;
+	}
 
 	/* Check if need to print VARIADIC (cf. ruleutils.c) */
 	use_variadic = node->aggvariadic;
@@ -4208,4 +4427,92 @@ get_relation_column_alias_ids(Var *node, RelOptInfo *foreignrel,
 
 	/* Shouldn't get here */
 	elog(ERROR, "unexpected expression in subquery output");
+}
+
+/*
+ * Parallel, typed arrays describe a relation without a remotely installed
+ * composite type. Only condition columns appear here; retained output belongs
+ * to the coordinator. Stable row numbers survive per-partition filtering.
+ */
+void
+pgwrh_fdw_deparse_lookup(StringInfo buf, PlannerInfo *root, RelOptInfo *rel,
+                        Index lookupid, List *shipvars, List *tlist,
+                        List *quals, bool semi, List **params)
+{
+    deparse_expr_cxt context = {0};
+    PgFdwRelationInfo *fpinfo = rel->fdw_private;
+    List *basequals = extract_actual_clauses(fpinfo->remote_conds, false);
+    Relation table;
+    ListCell *lc;
+    int i = 0;
+
+    context.root = root;
+    context.foreignrel = context.scanrel = rel;
+    context.buf = buf;
+    context.params_list = params;
+    context.lookupid = lookupid;
+    *params = NIL;
+    foreach(lc, shipvars)
+        *params = lappend(*params, makeNullConst(
+            pgwrh_fdw_lookup_array_type(((Var *) lfirst(lc))->vartype), -1, InvalidOid));
+    if (!semi)
+        *params = lappend(*params, makeNullConst(INT8ARRAYOID, -1, InvalidOid));
+
+    appendStringInfoString(buf, "SELECT ");
+    foreach(lc, tlist)
+    {
+        if (lc != list_head(tlist))
+            appendStringInfoString(buf, ", ");
+        deparseExpr(((TargetEntry *) lfirst(lc))->expr, &context);
+    }
+    if (tlist == NIL)
+        appendStringInfoString(buf, "NULL");
+    if (!semi)
+        appendStringInfoString(buf, ", l.lookup_rowno");
+    appendStringInfoString(buf, " FROM ");
+    table = table_open(planner_rt_fetch(rel->relid, root)->relid, NoLock);
+    deparseRelation(buf, table);
+    table_close(table, NoLock);
+    appendStringInfo(buf, " r%d", rel->relid);
+    if (semi)
+    {
+        appendStringInfoString(buf, " WHERE ");
+        if (basequals)
+        {
+            appendConditions(basequals, &context);
+            appendStringInfoString(buf, " AND ");
+        }
+        appendStringInfoString(buf, "EXISTS (SELECT 1 FROM ");
+    }
+    else
+        appendStringInfoString(buf, " JOIN ");
+    appendStringInfoString(buf, "ROWS FROM (");
+    foreach(lc, shipvars)
+    {
+        Var *var = lfirst(lc);
+        if (i++)
+            appendStringInfoString(buf, ", ");
+        appendStringInfo(buf, "pg_catalog.unnest($%d::%s)", i,
+                         deparse_type_name(pgwrh_fdw_lookup_array_type(var->vartype), -1));
+    }
+    if (!semi)
+        appendStringInfo(buf, ", pg_catalog.unnest($%d::bigint[])", ++i);
+    appendStringInfoString(buf, ") AS l(");
+    foreach(lc, shipvars)
+    {
+        if (lc != list_head(shipvars))
+            appendStringInfoString(buf, ", ");
+        appendStringInfo(buf, "c%d", ((Var *) lfirst(lc))->varattno);
+    }
+    if (!semi)
+        appendStringInfoString(buf, ", lookup_rowno");
+    appendStringInfoString(buf, semi ? ") WHERE " : ") ON ");
+    appendConditions(quals, &context);
+    if (semi)
+        appendStringInfoChar(buf, ')');
+    else if (basequals)
+    {
+        appendStringInfoString(buf, " WHERE ");
+        appendConditions(basequals, &context);
+    }
 }
