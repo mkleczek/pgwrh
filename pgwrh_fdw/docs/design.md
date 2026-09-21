@@ -83,11 +83,12 @@ entry point `pgwrh_fdw_get_connections_1_2` retains its upstream API suffix;
 that suffix is not a pgwrh_fdw release version. Future upstream SQL changes
 must be adapted to pgwrh_fdw's installation script.
 
-`upstream/postgres_fdw` retains the unmodified filtered PostgreSQL history.
-Functional jj changes keep that standalone layout. `fdw_base_18` bookmarks one
-aggregate with all functional changes as its parents. Git subtree imports the
-patched aggregate under `pgwrh_fdw/`; test relocation and repository build
-adaptations follow in a separate change.
+`upstream/postgres_fdw` and `upstream/postgres_fdw_19` retain unmodified filtered
+PostgreSQL history for their respective majors. Functional jj changes keep that
+standalone layout. Each `fdw_base_MAJOR` bookmarks one aggregate with all
+functional changes as its parents. Git subtree imports each exact aggregate,
+including its tests, under `pgwrh_fdw/MAJOR/`. A common build wrapper selects the
+matching directory using `PG_CONFIG`.
 
 The import helper advances only the pristine upstream bookmark and its
 provenance tag. Duplicate the functional changes and aggregate onto the new
@@ -103,4 +104,4 @@ release merge, audit connection initialization and
 retry, snapshot-taking callers, transaction/subtransaction callbacks, exported
 symbols, new GUCs/SQL objects, and transfer settings. Port upstream fixes before
 claiming the new release tested. Run integration, upstream SQL/isolation, TAP,
-and export checks on PostgreSQL 18, including Linux for ELF coexistence.
+and export checks on each supported PostgreSQL major, including Linux for ELF coexistence.

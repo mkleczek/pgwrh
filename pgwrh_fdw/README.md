@@ -1,6 +1,6 @@
 # pgwrh_fdw
 
-`pgwrh_fdw` is a PostgreSQL 18 **foreign data wrapper (FDW)**: it lets local
+`pgwrh_fdw` is a PostgreSQL 18/19 **foreign data wrapper (FDW)**: it lets local
 foreign tables access tables in other PostgreSQL databases. It can pass selected
 transaction settings to remote databases and choose among several eligible
 servers. It is included in [pgwrh](../README.md#components) and can also be used
@@ -24,7 +24,7 @@ preserved. See [LICENSING.md](LICENSING.md).
 Install the [pgwrh bundle](../README.md#installation), or run the commands below
 from the repository root to build and install just this extension.
 
-You need PostgreSQL 18 server development headers, PGXS, libpq, a C compiler,
+You need PostgreSQL 18 or 19 server development headers, PGXS, libpq, a C compiler,
 and Make. Select the installation explicitly if you have several versions:
 
 ```sh
@@ -33,7 +33,8 @@ make -C pgwrh_fdw PG_CONFIG=/path/to/postgresql-18/bin/pg_config install
 ```
 
 The install command needs write access to that PostgreSQL installation. Only
-PostgreSQL 18 is supported. Version 1.0.0-alpha1 supports fresh installation; there are
+PostgreSQL 18 and PostgreSQL 19 Beta 3 (preview) are supported by this checkout.
+`PG_CONFIG` selects the matching source tree under `18/` or `19/`. Version 1.0.0-alpha1 supports fresh installation; there are
 no migration or upgrade scripts. Existing experimental installations need a
 planned recreation of the extension and dependent foreign objects. Installing
 new files alone does not update extensions already enabled in a database.
@@ -183,8 +184,8 @@ Upstream `postgres_fdw` does not provide parallel-aware foreign scans; async
 execution is supported and tested. Compatibility with other PostgreSQL major
 versions or untested minors is not claimed.
 
-The fork and our modifications use [AGPL-3.0-only](LICENSE); inherited
-PostgreSQL material retains its [original license](COPYRIGHT). See
+The fork and our modifications use [AGPL-3.0-only](18/LICENSE); inherited
+PostgreSQL material retains its [original license](18/COPYRIGHT) (also [PostgreSQL 19](19/COPYRIGHT)). See
 [LICENSING.md](LICENSING.md) for attribution and source-offer details.
 
 ## Contributor documentation

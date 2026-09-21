@@ -2,7 +2,7 @@
 
 The pgwrh_fdw fork, including its original additions and modifications, is
 licensed under the **GNU Affero General Public License, version 3 only**
-(`AGPL-3.0-only`). See [LICENSE](LICENSE) for the full terms. The references to
+(`AGPL-3.0-only`). See [LICENSE](18/LICENSE) for the full terms. The references to
 “or any later version” in the license document's example application notice do
 not grant a later-version option for this project.
 
@@ -16,7 +16,7 @@ FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License for details.
 
 The fork contains PostgreSQL's `contrib/postgres_fdw` code, installation SQL,
 tests and history. That upstream material retains its original copyrights and
-PostgreSQL License permissions, reproduced verbatim in [COPYRIGHT](COPYRIGHT)
+PostgreSQL License permissions, reproduced verbatim in [18/COPYRIGHT](18/COPYRIGHT) and [19/COPYRIGHT](19/COPYRIGHT)
 and preserved in the source files. This project does not revoke those permissions
 or claim ownership of the original PostgreSQL code.
 

@@ -56,22 +56,29 @@ class UpstreamImportTests(unittest.TestCase):
         self.base = self.git(self.filtered, 'commit-tree', 'HEAD^{tree}', '-p', self.old_upstream,
                              '-p', patched, '-m', 'Collect the functional patches')
         self.git(self.filtered, 'branch', 'fdw_base_18', self.base)
+        self.git(self.filtered, 'switch', '-c', 'pg19-patches', self.base)
+        (self.filtered / 'pg19-only.c').write_text('/* other major must stay unchanged */\n')
+        self.base19 = self.commit(self.filtered, 'PostgreSQL 19 compatibility')
+        self.git(self.filtered, 'branch', 'fdw_base_19', self.base19)
+        self.git(self.filtered, 'switch', 'main')
         self.init(self.repo)
         (self.repo / 'README').write_text('unrelated project data\n')
         self.commit(self.repo, 'Project base')
-        self.git(self.repo, 'fetch', str(self.filtered), 'fdw_base_18:refs/heads/fdw_base_18')
+        self.git(self.repo, 'fetch', str(self.filtered), 'fdw_base_18:refs/heads/fdw_base_18',
+                 'fdw_base_19:refs/heads/fdw_base_19')
         self.git(self.repo, 'branch', 'upstream/postgres_fdw', self.old_upstream)
-        self.git(self.repo, 'subtree', 'add', '--prefix=pgwrh_fdw', 'fdw_base_18')
+        self.git(self.repo, 'subtree', 'add', '--prefix=pgwrh_fdw/18', 'fdw_base_18')
+        self.git(self.repo, 'subtree', 'add', '--prefix=pgwrh_fdw/19', 'fdw_base_19')
         self.script = self.repo / 'pgwrh_fdw/tools/import-upstream.py'
-        self.script.parent.mkdir()
+        self.script.parent.mkdir(parents=True)
         shutil.copyfile(IMPORTER, self.script)
         self.integrated = self.commit(self.repo, 'Project maintenance tooling')
         (fdw / 'connection.c').write_text('/* new upstream connection fix */\n')
         self.new_source = self.commit(self.pg, 'Upstream fix')
         self.git(self.pg, 'tag', 'REL_18_4')
 
-    def run_import(self, source=None):
-        return subprocess.run([sys.executable, str(self.script), str(source or self.pg), 'REL_18_4'],
+    def run_import(self, source=None, tag="REL_18_4"):
+        return subprocess.run([sys.executable, str(self.script), str(source or self.pg), tag],
                               text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     def test_updates_only_upstream_then_patches_and_subtree_reapply(self):
@@ -82,7 +89,7 @@ class UpstreamImportTests(unittest.TestCase):
         self.assertEqual(self.git(self.repo, 'rev-parse', 'HEAD'), self.integrated)
         self.assertEqual(self.git(self.repo, 'rev-parse', 'fdw_base_18'), self.base)
         self.assertEqual(self.git(self.repo, 'status', '--porcelain'), before_status)
-        self.assertEqual(self.git(self.repo, 'show', 'HEAD:pgwrh_fdw/postgres_fdw.c'),
+        self.assertEqual(self.git(self.repo, 'show', 'HEAD:pgwrh_fdw/18/postgres_fdw.c'),
                          '/* upstream baseline */\n/* local patch */')
         self.assertEqual(self.git(self.repo, 'rev-parse', 'upstream/postgres_fdw^{tree}'),
                          self.git(self.pg, 'rev-parse', 'REL_18_4:contrib/postgres_fdw'))
@@ -94,13 +101,27 @@ class UpstreamImportTests(unittest.TestCase):
         self.git(self.filtered, 'branch', 'next-fdw', next_base)
         self.git(self.repo, 'fetch', str(self.filtered), 'next-fdw:refs/heads/next-fdw')
         self.git(self.repo, 'restore', 'README')
-        self.git(self.repo, 'subtree', 'merge', '--prefix=pgwrh_fdw', 'next-fdw')
-        self.assertTrue((self.repo / 'pgwrh_fdw/connection.c').exists())
-        self.assertIn('local patch', (self.repo / 'pgwrh_fdw/postgres_fdw.c').read_text())
+        self.git(self.repo, 'subtree', 'merge', '--prefix=pgwrh_fdw/18', 'next-fdw')
+        self.assertTrue((self.repo / 'pgwrh_fdw/18/connection.c').exists())
+        self.assertIn('local patch', (self.repo / 'pgwrh_fdw/18/postgres_fdw.c').read_text())
         self.assertTrue(self.script.exists())
+        self.assertEqual(self.git(self.repo, 'rev-parse', 'HEAD:pgwrh_fdw/19'),
+                         self.git(self.filtered, 'rev-parse', 'fdw_base_19^{tree}'))
+        self.assertEqual(self.git(self.repo, 'rev-parse', 'fdw_base_19'), self.base19)
         repeated = self.run_import()
         self.assertNotEqual(repeated.returncode, 0)
         self.assertIn('already exists', repeated.stderr)
+
+    def test_first_pg19_import_preserves_pg18_and_main(self):
+        self.git(self.pg, 'tag', 'REL_19_BETA3')
+        before = self.git(self.repo, 'rev-parse', 'HEAD', 'upstream/postgres_fdw', 'fdw_base_18', 'fdw_base_19')
+        result = self.run_import(tag='REL_19_BETA3')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.git(self.repo, 'rev-parse', 'HEAD', 'upstream/postgres_fdw', 'fdw_base_18', 'fdw_base_19'), before)
+        self.assertEqual(self.git(self.repo, 'rev-parse', 'upstream/postgres_fdw_19^{tree}'),
+                         self.git(self.pg, 'rev-parse', 'REL_19_BETA3:contrib/postgres_fdw'))
+        self.assertIn(self.new_source, self.git(self.repo, 'cat-file', '-p', 'upstream/REL_19_BETA3'))
+        self.assertNotEqual(self.run_import(tag='REL_19_BETA3').returncode, 0)
 
     def test_rejects_unrelated_upstream_without_moving_refs(self):
         other = self.root / 'unrelated-postgres'

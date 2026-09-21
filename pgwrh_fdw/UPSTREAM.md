@@ -2,121 +2,99 @@
 
 Source: https://github.com/postgres/postgres
 
-Current imported release: PostgreSQL 18.3, tag `REL_18_3`.
-Original commit: `62d6c7d3df6287f1bd83199c1a746e50d31571a0`.
-Filtered commit: `6ba739cca5fb00282732191c46a61d3408836284`.
+| PostgreSQL | Source tag | Original commit | Pristine bookmark | Patched aggregate | Directory in main |
+| --- | --- | --- | --- | --- | --- |
+| 18.3 | `REL_18_3` | `62d6c7d3df6287f1bd83199c1a746e50d31571a0` | `upstream/postgres_fdw` | `fdw_base_18` | `pgwrh_fdw/18/` |
+| 19 Beta 3 (preview) | `REL_19_BETA3` | `3638289fb57bdabec00deda98ee9624a35f5d66a` | `upstream/postgres_fdw_19` | `fdw_base_19` | `pgwrh_fdw/19/` |
+
+Each pristine bookmark contains unmodified PostgreSQL history filtered to
+`contrib/postgres_fdw`. The annotated `upstream/REL_*` tags record the original
+full-repository commit and the filtered path. Each directory's `COPYRIGHT`
+comes from its matching PostgreSQL release.
 
 ## History layout
 
-`upstream/postgres_fdw` contains unmodified PostgreSQL 18 history filtered to
-`contrib/postgres_fdw`. Its files are at the repository root.
+The functional patches apply to the filtered tree at the repository root,
+retaining upstream C/header filenames and regression-test paths. Each change
+contains its implementation and tests. Dependencies remain explicit; the SCRAM
+verifier change is independent of the routing changes.
 
-The local functional changes build on that filtered history, retaining upstream
-C/header filenames and regression-test paths. Each change contains its related
-implementation and tests. Dependencies remain explicit; the SCRAM verifier
-change is independent of the routing changes.
+Each `fdw_base_MAJOR` bookmarks one aggregate with all 13 functional changes as
+direct parents. The aggregate resolves the shared build, SQL and export lists.
+It contains no pgwrh directory moves or import tooling. The PostgreSQL 19 graph
+was copied from the 18 graph and adapted within the affected patches.
 
-`fdw_base_18` bookmarks one integration change with **all 13 functional changes
-as direct parents**. It represents the complete patched upstream tree, still at
-the repository root. The aggregate resolves the shared build, SQL and symbol
-lists. It contains no pgwrh repository directory moves or import tooling.
+Non-squashed Git subtree imports place these exact aggregates under
+`pgwrh_fdw/18/` and `pgwrh_fdw/19/`. Tests stay inside each imported tree.
+The common `pgwrh_fdw/Makefile` selects the directory using `PG_CONFIG` and
+excludes the test-only `context_probe` module from installed packages.
 
-A non-squashed Git subtree import places that exact aggregate under
-`pgwrh_fdw/`. A following change moves the tests to `test/pgwrh_fdw/` and adapts
-the build paths and project documentation. `main` includes these integration
-changes and preserves the released `v1.0.0-alpha1` and all its existing parents.
-The earlier standalone release `v0.1.0` also remains in history.
-
-The installed extension, SQL API, GUCs and linker namespace remain `pgwrh_fdw`.
-This reorganization keeps the PostgreSQL source at 18.3.
-`pgwrh_fdw/COPYRIGHT` comes from that upstream release.
-
-Inspect the functional changes and their aggregate:
+There is one `main` and one pgwrh release version. SQL, UI and `pgwrh_wait`
+remain shared; the wait extension isolates PostgreSQL API differences in
+`pgwrh_wait/src/compat.h`. Existing release ancestry remains intact.
 
 ```sh
 jj log -r 'upstream/postgres_fdw..fdw_base_18'
-jj log -r 'parents(fdw_base_18)'
+jj log -r 'upstream/postgres_fdw_19..fdw_base_19'
+jj log -r 'parents(fdw_base_19)'
 ```
 
-The functional changes can be reviewed or exported without stripping the
-`pgwrh_fdw/` repository prefix. Proposals for PostgreSQL itself still need to
-select the relevant changes and adapt the extension-specific API and tests.
+Functional patches can be reviewed or exported without removing a directory
+prefix. Proposals for PostgreSQL itself still need to select relevant changes
+and adapt the extension-specific API and tests.
 
-## Importing a later PostgreSQL 18 release
+## Updating one major
 
-Record the current upstream commit ID before importing. Fetch the selected
-release into a separate PostgreSQL Git checkout, then run from the pgwrh root:
+Record that major's current pristine commit before importing. Fetch the selected
+release into a separate PostgreSQL checkout, then run from the pgwrh root:
 
 ```sh
-jj log -r upstream/postgres_fdw --no-graph -T 'commit_id ++ "\n"'
-python3 pgwrh_fdw/tools/import-upstream.py /path/to/postgres REL_18_N
+jj log -r upstream/postgres_fdw_19 --no-graph -T 'commit_id ++ "\n"'
+python3 pgwrh_fdw/tools/import-upstream.py /path/to/postgres REL_19_BETA3
 ```
 
-Replace `REL_18_N` with the selected tag. The helper uses
-`git filter-branch --subdirectory-filter contrib/postgres_fdw` in a disposable
-clone. Keep this extraction method so the filtered history retains compatible
-ancestry. It atomically advances only `upstream/postgres_fdw` and creates an
-annotated `upstream/REL_18_N` tag recording the original full-repository commit.
-It rejects unrelated history and existing tags. It leaves `fdw_base_18`, the
-functional changes, `main` and working files untouched.
+Use a **new** selected release tag; the example above is already imported.
+The helper accepts `REL_18_N`, `REL_19_N`, beta and RC tags. It filters history in
+a disposable clone and atomically updates only that major's pristine bookmark
+and new annotated tag. Existing tags and unrelated histories are rejected.
+Patched aggregates, `main` and working files remain untouched.
 
-Duplicate the functional changes **and their aggregate** onto the new upstream
-base. This preserves the versions already imported into pgwrh and any releases
-that include them:
+Keep `git filter-branch --subdirectory-filter contrib/postgres_fdw` as the
+extraction method so filtered history retains compatible ancestry. The first
+import of a major creates its pristine bookmark; subsequent imports must be
+fast-forwards.
+
+Copy the functional changes **and their aggregate** onto the new pristine base:
 
 ```sh
-jj duplicate 'OLD_UPSTREAM_ID..fdw_base_18' -o upstream/postgres_fdw
+jj duplicate 'OLD_UPSTREAM_ID..fdw_base_19' -o upstream/postgres_fdw_19
 ```
 
-Replace `OLD_UPSTREAM_ID` with the ID recorded before the import. Resolve
-conflicts in the copied changes, including the aggregate, and verify them before
-moving the bookmark to the new aggregate ID printed by jj:
+Resolve conflicts in the copied changes where they originate, including the
+aggregate. Verify the standalone build and tests, then advance the aggregate:
 
 ```sh
-jj bookmark set fdw_base_18 -r NEW_AGGREGATE_ID
+jj bookmark set fdw_base_19 -r NEW_AGGREGATE_ID
 ```
 
-Use a disposable Git checkout based on `main` for the repository integration.
-There, import the reviewed aggregate with:
+Use a disposable Git checkout of `main` to integrate the reviewed aggregate:
 
 ```sh
-git subtree merge --prefix=pgwrh_fdw NEW_AGGREGATE_COMMIT_ID
+git subtree merge --prefix=pgwrh_fdw/19 NEW_AGGREGATE_COMMIT_ID
 ```
 
-Use the aggregate's Git commit ID, available through `jj log -r fdw_base_18`.
-Fetch the resulting integration commit back into this repository, inspect it
-with jj, and advance `main` after validation. Do not perform a Git checkout or
-merge over the active jj working copy. Do not ordinarily jj-merge the rooted FDW
-aggregate into `main`: the source trees have different layouts.
+Fetch the resulting commit back into the jj repository and advance `main` after
+validation. Do not Git-checkout over an active jj working copy or ordinarily
+jj-merge the root-level FDW tree into `main`; the layouts differ. For PostgreSQL
+18, use `fdw_base_18`, `upstream/postgres_fdw` and `pgwrh_fdw/18` throughout.
 
-Review upstream SQL and test changes alongside C changes. Relocated tests may
-need conflict resolution under `test/pgwrh_fdw/`; new upstream test files may
-need moving there. Keep these layout adaptations after the functional patches.
-Update the provenance above, `COPYRIGHT` if needed, and the PostgreSQL source
-pin in `.github/workflows/fdw.yml`.
+Review upstream SQL and tests alongside C changes. Refresh the provenance table,
+`COPYRIGHT` and matching source pins in the FDW CI and Nix preview definition.
+The imported directory must match the aggregate exactly.
 
-## Porting the patches to another PostgreSQL major
+## Validation and release
 
-Import that major's unmodified history with the same filtering method into a
-separate bookmark, for example `upstream/postgres_fdw_17`. Keep the PostgreSQL 18
-bookmark and aggregate intact. Copy the same graph onto the other baseline:
-
-```sh
-jj duplicate 'upstream/postgres_fdw..fdw_base_18' -o upstream/postgres_fdw_17
-jj bookmark create fdw_base_17 -r NEW_AGGREGATE_ID
-```
-
-This preserves patch dependencies and the single aggregate. Apply PostgreSQL
-API compatibility fixes to the copied changes and test against that major.
-The functional patches carry no subtree paths or import-tool configuration;
-the repository layout is applied only when importing the resulting aggregate.
-Portability of the patch history does not imply binary or source compatibility
-without those checks. The current import helper and CI target PostgreSQL 18.
-
-## Validation
-
-Run the standalone FDW build and its tests at the aggregate before importing it.
-After repository integration, run:
+Select a matching `PG_CONFIG` for each major and run:
 
 ```sh
 python3 test/pgwrh_fdw/test_upstream_import.py
@@ -125,10 +103,12 @@ PG_SOURCE=/path/to/matching/postgres/source make test-fdw-tap
 make test-packaging
 make test-wait
 make test-pgwrh
+make test-ui
 ```
 
-The importer tests use synthetic repositories to check that the patched
-aggregate stays unchanged and that refreshed patches can be subtree-merged.
-They do not update the project's real upstream baseline. Publish the filtered
-upstream and `fdw_base_18` bookmarks and annotated upstream tags together with
-the reviewed repository integration.
+CI runs the shared integration suites and independent FDW suites for both majors.
+The importer tests exercise preservation of the other major, dirty working files,
+immutable provenance tags, unrelated-history rejection and later subtree updates.
+Publish the pristine and aggregate bookmarks and annotated upstream tags together
+with the reviewed integration. See [PostgreSQL compatibility](../docs/development/postgres-versions.md)
+for the preview-to-release checklist.
