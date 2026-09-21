@@ -23,6 +23,7 @@ dependencies = {
     'pgwrh_fdw/18': set(),
     'pgwrh_fdw/19': set(),
     'pgwrh_wait': set(),
+    'pgwrh_gist_extra': {'btree_gist'},
 }
 for directory, expected_dependencies in dependencies.items():
     name = directory.split("/")[0]
@@ -46,6 +47,7 @@ checks = {
     'test/packaging/installed.sql': f"extversion = '{version}'",
     'pgwrh_ui/Makefile': f'EXTVERSION = {version}',
     'pgwrh_wait/Makefile': f'DATA = pgwrh_wait--{version}.sql',
+    'pgwrh_gist_extra/Makefile': f'DATA = pgwrh_gist_extra--{version}.sql',
 }
 for major in ('18', '19'):
     checks[f'pgwrh_fdw/{major}/postgres_fdw.c'] = f'.version = "{version}"'
@@ -54,7 +56,7 @@ for path, expected in checks.items():
     assert expected in (root / path).read_text(), f'{path} differs from VERSION'
 assert f'%global upstream_version {version}' in (root / 'packaging/rpm/pgwrh.spec').read_text()
 assert (root / f'docs/releases/{version}.md').is_file(), 'Missing release notes'
-for name in ('pgwrh', 'pgwrh_ui', 'pgwrh_fdw', 'pgwrh_wait'):
+for name in ('pgwrh', 'pgwrh_ui', 'pgwrh_fdw', 'pgwrh_wait', 'pgwrh_gist_extra'):
     assert f'{name}--{version}.sql' in (root / 'packaging/deb/debian/postgresql-18-pgwrh.install').read_text()
 for path, expected in {
     'packaging/deb/debian/postgresql-18-pgwrh.install': 'usr/share/postgresql/18/pgwrh_ui',

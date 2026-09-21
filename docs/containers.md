@@ -4,6 +4,10 @@ The image includes PostgreSQL 18, the four [pgwrh
 extensions](../README.md#components) at version 1.0.0-alpha1, and their `pg_background`
 dependency. It configures logical replication and preloads `pgwrh_wait`.
 
+Images built from the development branch additionally include the optional
+`pgwrh_gist_extra` extension. Enable it explicitly with
+`CREATE EXTENSION pgwrh_gist_extra CASCADE`; the image does not activate it.
+
 When initializing an empty volume, it enables `pgwrh` with its dependencies and
 `pgwrh_wait` in `POSTGRES_DB`. Existing volumes are not initialized again. The
 Compose quickstart adds a controller-only browser console served by PostgREST.

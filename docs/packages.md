@@ -5,6 +5,11 @@ version 1.0.0-alpha1, plus their documentation and console setup files. It insta
 files and dependencies; enabling extensions and configuring PostgreSQL are
 separate steps. Only fresh installation is supported.
 
+Development builds additionally include the optional
+[`pgwrh_gist_extra`](../pgwrh_gist_extra/README.md) extension. Enable it with
+`CREATE EXTENSION pgwrh_gist_extra CASCADE`; it depends on `btree_gist` and does
+not require the core pgwrh extension. Published alpha1 packages predate it.
+
 ## Install release assets
 
 After release publication, download the asset matching the operating system and

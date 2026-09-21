@@ -7,6 +7,27 @@ BEGIN
         FROM pg_extension WHERE extname <> 'plpgsql'),
         'Standalone pgwrh_wait installed other extensions';
 END $$;
+-- The GiST extension is independently installable and requires only btree_gist.
+CREATE EXTENSION pgwrh_gist_extra CASCADE;
+DO $$
+BEGIN
+    ASSERT (SELECT array_agg(extname ORDER BY extname) =
+        ARRAY['btree_gist','pgwrh_gist_extra','pgwrh_wait']::name[]
+        FROM pg_extension WHERE extname <> 'plpgsql'),
+        'Standalone GiST extension pulled in pgwrh';
+END $$;
+CREATE TABLE gist_probe(account text);
+INSERT INTO gist_probe VALUES ('one'), ('two'), ('three');
+CREATE INDEX gist_probe_idx ON gist_probe USING gist (account pgwrh_gist_text_ops);
+SET enable_seqscan = off;
+DO $$
+BEGIN
+    ASSERT (SELECT array_agg(account ORDER BY account) FROM gist_probe
+        WHERE account ||= ARRAY['one','three']) = ARRAY['one','three'],
+        'Packaged GiST operators or support functions did not load';
+END $$;
+RESET enable_seqscan;
+DROP TABLE gist_probe;
 CREATE SUBSCRIPTION packaging_probe CONNECTION 'host=localhost dbname=postgres'
     PUBLICATION packaging_probe WITH (connect = false);
 SELECT pgwrh.applied_lsn('packaging_probe');
@@ -26,7 +47,7 @@ BEGIN
         JOIN pg_foreign_data_wrapper f ON f.oid = s.srvfdw
         WHERE s.srvname = 'replica_controller'),
         'The controller connection must use the bundled FDW';
-    FOREACH extension_name IN ARRAY ARRAY['pgwrh', 'pgwrh_ui', 'pgwrh_fdw', 'pgwrh_wait'] LOOP
+    FOREACH extension_name IN ARRAY ARRAY['pgwrh', 'pgwrh_ui', 'pgwrh_fdw', 'pgwrh_wait', 'pgwrh_gist_extra'] LOOP
         ASSERT (SELECT extversion = '1.0.0-alpha1' FROM pg_extension WHERE extname = extension_name),
             'Installed extension version differs from the release';
         ASSERT (SELECT array_agg(version ORDER BY version) = ARRAY['1.0.0-alpha1']
@@ -50,12 +71,20 @@ SELECT * FROM pgwrh_fdw_get_connections();
 -- Removing the core must leave the independent wait API usable.
 DROP EXTENSION pgwrh CASCADE;
 SELECT pgwrh.applied_lsn('packaging_probe');
+SELECT 'one' ||= ARRAY['one'];
+DROP EXTENSION pgwrh_gist_extra;
+DROP EXTENSION btree_gist;
 DROP EXTENSION pgwrh_wait;
 
 -- Also cover the installation order used by the container and guides.
 CREATE EXTENSION pgwrh CASCADE;
 CREATE EXTENSION pgwrh_wait;
 CREATE EXTENSION pgwrh_ui;
+DO $$
+BEGIN
+    ASSERT NOT EXISTS (SELECT FROM pg_extension WHERE extname='pgwrh_gist_extra'),
+        'The core must not require pgwrh_gist_extra';
+END $$;
 SELECT * FROM pgwrh_fdw_get_connections();
 SELECT pgwrh.applied_lsn('packaging_probe');
 ALTER SUBSCRIPTION packaging_probe SET (slot_name = NONE);

@@ -6,10 +6,11 @@ packages and database activation, see [native installation](packages.md). The
 
 ## Build from source
 
-The root Makefile builds four PostgreSQL extensions by default: `pgwrh`,
-`pgwrh_ui`, `pgwrh_wait`, and `pgwrh_fdw`. It delegates to a separate Makefile
-in each extension directory: `pgwrh/`, `pgwrh_ui/`, `pgwrh_wait/`, and
-`pgwrh_fdw/`. Each owns its control file, SQL scripts, and any native sources.
+The root Makefile builds five PostgreSQL extensions by default: `pgwrh`,
+`pgwrh_ui`, `pgwrh_wait`, `pgwrh_fdw`, and `pgwrh_gist_extra`. It delegates to a
+separate Makefile in each extension directory. Each owns its control file, SQL
+scripts, and any native sources. Use `WITH_GIST_EXTRA=0` to omit the optional
+GiST extension. Enabling it in a database requires PostgreSQL's `btree_gist`.
 All tests live under `test/`. Building from a release archive never fetches Git
 history or other dependencies.
 
@@ -40,7 +41,7 @@ activation](packages.md#configure-postgresql-and-enable-extensions).
 ## Build package artifacts locally
 
 Docker BuildKit exports packages to a local directory. The Dockerfiles run
-packaging checks, install the resulting package, and exercise both native
+packaging checks, install the resulting package, and exercise all three native
 libraries against a temporary PostgreSQL cluster before exporting artifacts. Run
 from the repository root:
 
@@ -100,15 +101,16 @@ The spec builds the following architecture-specific packages:
 
 | Package | Contents |
 | --- | --- |
-| `pgwrh_18` | All four extensions, two shared libraries, installation SQL, licenses, and documentation |
-| `pgwrh_18-llvmjit` | LLVM bitcode and indexes for both shared libraries; requires exactly the same version/release of `pgwrh_18` |
+| `pgwrh_18` | All five extensions, three shared libraries, installation SQL, licenses, and documentation |
+| `pgwrh_18-llvmjit` | LLVM bitcode and indexes for all three shared libraries; requires exactly the same version/release of `pgwrh_18` |
 
 Standard RPM tooling also generates debug packages where enabled. The release
 uses the `1PGDG%{?dist}` convention. Extension files are installed below
 `/usr/pgsql-18`, independent of whether the architecture normally uses
 `/usr/lib64`. The main package requires `postgresql18-server`,
-`postgresql18-libs`, and `pg_background_18 >= 2.0.3`. The bundled FDW replaces the
-stock `postgres_fdw`, so `postgresql18-contrib` is not required.
+`postgresql18-libs`, `postgresql18-contrib` for `btree_gist`, and
+`pg_background_18 >= 2.0.3`. The bundled FDW does not require enabling the stock
+`postgres_fdw` extension.
 
 The spec accepts the macros used by PGDG's build system:
 
@@ -144,7 +146,7 @@ rpmbuild -ba --define 'pgmajorversion 18' packaging/rpm/pgwrh.spec
 With Jujutsu, replace `HEAD` with the commit ID of the intended change, obtained
 using `jj log -r @ --no-graph -T commit_id`; Git's `HEAD` may point at its
 parent. Use a distinct snapshot release number when distributing unreleased
-builds. The spec checks that its version matches all four extension control
+builds. The spec checks that its version matches all five extension control
 files before building. Each extension ships only its `1.0.0-alpha1` installation
 script; no upgrade scripts or earlier installable versions are included.
 
@@ -165,7 +167,8 @@ Earlier build results are retained in [historical packaging
 validation](development/packaging-validation.md).
 
 Shipping multiple extension control files does not activate all extensions in
-every database. `pgwrh_wait` and `pgwrh_fdw` can each be created independently.
+every database. `pgwrh_wait`, `pgwrh_fdw`, and `pgwrh_gist_extra` can each be
+created independently.
 pgwrh depends on `pgwrh_fdw` and `pg_background`. Both controller and shard
 connections use `pgwrh_fdw`; the stock `postgres_fdw` extension is not required.
 When building with `WITH_FDW=0`, provide `pgwrh_fdw` separately in the target
@@ -174,23 +177,23 @@ and library so integration tests use the implementation being developed.
 Preloading `pgwrh_wait` remains an explicit server configuration step; it must
 happen before relying on the wait API.
 
-Release archives must contain `pgwrh/`, `pgwrh_ui/`, `pgwrh_wait/`, and
-`pgwrh_fdw/`, together with the root Makefile. Include `test/` to run the
+Release archives must contain `pgwrh/`, `pgwrh_ui/`, `pgwrh_wait/`,
+`pgwrh_fdw/`, and `pgwrh_gist_extra/`, together with the root Makefile. Include `test/` to run the
 verification suites. No submodule initialization or separate pgwrh_fdw release
 download is required. Archive a reviewed release commit, including both FDW directories,
 rather than assembling sources from independent checkouts at package-build time.
 
 ## Build variants
 
-Both `WITH_FDW` and `WITH_LSN_WAIT` default to `1` in the PGXS build. Set either
+`WITH_FDW`, `WITH_LSN_WAIT`, and `WITH_GIST_EXTRA` default to `1` in the PGXS build. Set any
 to `0` to omit that component. To install only the SQL extensions, `pgwrh` and
 `pgwrh_ui` (provide the required PostgreSQL 18 FDW separately):
 
 ```sh
-make WITH_FDW=0 WITH_LSN_WAIT=0 install PG_CONFIG=/path/to/pg_config
+make WITH_FDW=0 WITH_LSN_WAIT=0 WITH_GIST_EXTRA=0 install PG_CONFIG=/path/to/pg_config
 ```
 
-`NO_PGXS=1` defaults both native components to `0` and supports staged SQL-only
+`NO_PGXS=1` defaults all native components to `0` and supports staged SQL-only
 installation and uninstallation. Explicitly requesting a native component with
 `NO_PGXS=1` fails. The [Nix package](nix.md) builds the complete PostgreSQL 18
 bundle. Use the same component options when building, installing, and
@@ -223,8 +226,8 @@ make test-fdw PG_CONFIG=/path/to/postgresql-18/bin/pg_config
 ```
 
 `test-packaging` requires only Python 3's standard library. It cleans build
-outputs, performs a parallel staged installation, checks all four extensions and
-both libraries, and verifies that uninstall removes the payload while leaving
+outputs, performs a parallel staged installation, checks all five extensions and
+all three libraries, and verifies that uninstall removes the payload while leaving
 unrelated files intact. It also checks each native component independently, both
 SQL-only installation paths, and standalone installation from each extension
 directory. Native LLVM installation uses paths without spaces because PGXS

@@ -6,6 +6,7 @@ on:
       - 'pgwrh_ui/**'
       - 'pgwrh_fdw/**'
       - 'pgwrh_wait/**'
+      - 'pgwrh_gist_extra/**'
       - 'Makefile'
       - 'packaging/**'
       - 'examples/compose/**'

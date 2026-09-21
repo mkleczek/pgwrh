@@ -6,7 +6,7 @@ dependencies for the chosen suite. These commands are for contributors; database
 operators can use the [installation check](../../README.md#installation).
 
 The root targets are `test-pgwrh`, `test-ui`, `test-wait`, `test-fdw`,
-`test-fdw-tap` and `test-packaging`. Build products and staged extensions live
+`test-fdw-tap`, `test-gist` and `test-packaging`. Build products and staged extensions live
 under `.build/`; PGXS object files and libraries remain beside their sources.
 Default pytest discovery covers `test/`. Run the selected FDW suite with
 `make test-fdw`; its two imported source trees contain identically named tests.
@@ -115,11 +115,23 @@ See [FDW validation](../../pgwrh_fdw/docs/validation.md) for versions and actual
 results; CI builds the pinned PostgreSQL release and runs the same checks on
 Linux.
 
+## GiST operators
+
+`make test-gist` builds and stages `pgwrh_gist_extra` and runs its standalone
+tests using pytest and testgres. Select the server with `PG_CONFIG` and set
+`PGWRH_TEST_BIN_DIR` to that server's binary directory, as in the Nix test shells.
+The suite checks installation without pgwrh, text-array operator results,
+GiST index scans, generic prepared queries, rescans, and hash partitions. The
+functional CI matrix runs it on PostgreSQL 18 and 19. See the
+[operator guide](../../pgwrh_gist_extra/README.md) for the imported functionality
+and the remaining work on the optional partition-filter cache.
+
 ## Packaging and Nix
 
 See [packaging verification](../packaging.md#verification) for staged install
 and uninstall checks. `nix flake check` runs the installed-package check in a
 temporary database. It covers standalone waiting, both extension installation
-orders, removal of the core while waiting remains usable, all four extension
-versions, and both native libraries. It also checks that the controller uses
+orders, removal of the core while waiting remains usable, all five extension
+versions, and all three native libraries. The optional GiST extension is also
+created independently, with its `btree_gist` prerequisite. It checks that the controller uses
 `pgwrh_fdw` without activating `postgres_fdw`.

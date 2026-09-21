@@ -27,9 +27,11 @@ TEST_STAGE_ROOT = $(abspath $(BUILD)/test-stage)
 ifdef NO_PGXS
 WITH_LSN_WAIT ?= 0
 WITH_FDW ?= 0
+WITH_GIST_EXTRA ?= 0
 else
 WITH_LSN_WAIT ?= 1
 WITH_FDW ?= 1
+WITH_GIST_EXTRA ?= 1
 endif
 
 EXTENSIONS = pgwrh pgwrh_ui
@@ -44,6 +46,12 @@ ifdef NO_PGXS
 $(error WITH_FDW=1 requires PGXS; omit NO_PGXS)
 endif
 EXTENSIONS += pgwrh_fdw
+endif
+ifeq ($(WITH_GIST_EXTRA),1)
+ifdef NO_PGXS
+$(error WITH_GIST_EXTRA=1 requires PGXS; omit NO_PGXS)
+endif
+EXTENSIONS += pgwrh_gist_extra
 endif
 
 ALL_TARGETS = $(addsuffix -all,$(EXTENSIONS))
@@ -88,6 +96,9 @@ test-stage: all
 ifeq ($(WITH_FDW),1)
 	$(MAKE) -C pgwrh_fdw stage PG_CONFIG="$(PG_CONFIG)" STAGE_DIR="$(TEST_STAGE_ROOT)"
 endif
+ifeq ($(WITH_GIST_EXTRA),1)
+	$(MAKE) -C pgwrh_gist_extra stage PG_CONFIG="$(PG_CONFIG)" STAGE_DIR="$(TEST_STAGE_ROOT)"
+endif
 
 test-wait: test-stage
 	$(PYTHON) -m pytest test/pgwrh_wait -v
@@ -118,6 +129,15 @@ endif
 test-packaging:
 	PG_CONFIG="$(PG_CONFIG)" $(PYTHON) test/check-install.py
 
+ifeq ($(WITH_GIST_EXTRA),1)
+test-gist: pgwrh_gist_extra-all
+	$(MAKE) -C pgwrh_gist_extra stage PG_CONFIG="$(PG_CONFIG)" STAGE_DIR="$(TEST_STAGE_ROOT)"
+	$(PYTHON) -m pytest test/pgwrh_gist_extra -v
+else
+test-gist:
+	$(error test-gist requires WITH_GIST_EXTRA=1)
+endif
+
 .PHONY: all install uninstall clean prepare testgres-ext test-stage \
-	test-pgwrh test-ui test-wait test-fdw test-fdw-tap test-packaging \
+	test-pgwrh test-ui test-wait test-fdw test-fdw-tap test-gist test-packaging \
 	$(ALL_TARGETS) $(INSTALL_TARGETS) $(CLEAN_TARGETS) $(UNINSTALL_TARGETS)

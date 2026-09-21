@@ -1,4 +1,4 @@
-name: Core, wait and UI integration tests
+name: Core, wait, GiST and UI integration tests
 on:
   workflow_call:
     inputs:
@@ -33,7 +33,7 @@ jobs:
       - name: Verify jj directory-move maintenance
         if: matrix.pg == 18
         run: nix develop .#tests-18 --command python3 test/pgwrh_fdw/test_jj_layout.py
-      - name: Test core, replication waits and the real PostgREST UI
+      - name: Test core, replication waits, GiST and the real PostgREST UI
         run: nix develop .#tests-${{ matrix.pg }} --command bash test/run-functional.sh
       - name: Preserve integration test results
         if: always()

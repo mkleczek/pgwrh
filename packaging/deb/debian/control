@@ -12,7 +12,8 @@ Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, postgresql-18, postgresql-18-pg-background (>= 2.0.3)
 Description: sharding and replica read consistency for PostgreSQL 18
  Distributes PostgreSQL shards across logical replicas using weighted
- rendezvous hashing. Includes pgwrh, pgwrh_ui, pgwrh_fdw and pgwrh_wait.
+ rendezvous hashing. Includes pgwrh, pgwrh_ui, pgwrh_fdw, pgwrh_wait and
+ pgwrh_gist_extra for optional GiST text-array searches.
  The optional controller console uses an external PostgREST server.
  .
  Extensions are activated explicitly with CREATE EXTENSION. Using the wait

@@ -10,6 +10,7 @@ make testgres-ext test-stage
 mkdir -p .build/test-results
 python3 -m pytest test/pgwrh test/pgwrh_ui -ra --junitxml=.build/test-results/core-ui.xml
 python3 -m pytest test/pgwrh_wait -ra --junitxml=.build/test-results/wait.xml
+python3 -m pytest test/pgwrh_gist_extra -ra --junitxml=.build/test-results/gist.xml
 python3 - <<'CHECK'
 from pathlib import Path
 import xml.etree.ElementTree as ET
