@@ -47,3 +47,9 @@ AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT PARALLEL RESTRICTED;
 
 ALTER FOREIGN DATA WRAPPER pgwrh_fdw CONNECTION pgwrh_fdw_connection;
+
+-- Use the server's SCRAM iteration policy and a fresh cryptographic salt.
+CREATE FUNCTION pgwrh_fdw_scram_verifier(password text)
+RETURNS text
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT VOLATILE PARALLEL RESTRICTED;
