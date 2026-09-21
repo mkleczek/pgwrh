@@ -1,3 +1,0 @@
-SELECT version() ~ 'cygwin' AS skip_test \gset
-\if :skip_test
-\quit
