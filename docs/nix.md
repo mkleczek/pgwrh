@@ -1,8 +1,12 @@
 # Nix and NixOS
 
-The default Nix package provides PostgreSQL 18, all four [pgwrh
+The development Nix package provides PostgreSQL 18, all five [pgwrh
 extensions](../README.md#components) at version 1.0.0-alpha1, and their `pg_background`
 dependency. Nix must have flakes enabled.
+
+The optional `pgwrh_gist_extra` files are included in development builds;
+enable the extension with `CREATE EXTENSION pgwrh_gist_extra CASCADE`.
+The tagged alpha1 package predates this addition.
 
 From a release checkout:
 

@@ -1,0 +1,6 @@
+comment = 'Additional GiST operators and operator classes'
+default_version = '1.0.0-alpha1'
+module_pathname = 'pgwrh_gist_extra'
+relocatable = true
+trusted = true
+requires = 'btree_gist'

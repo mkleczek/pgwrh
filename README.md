@@ -26,7 +26,8 @@ alpha1 artifacts remain PostgreSQL 18 builds.
 
 ## Components
 
-The pgwrh 1.0.0-alpha1 distribution contains four PostgreSQL 18 extensions:
+The development bundle contains five extensions for PostgreSQL 18 and the
+PostgreSQL 19 preview:
 
 | Extension | Purpose | Where to enable it |
 | --- | --- | --- |
@@ -34,6 +35,7 @@ The pgwrh 1.0.0-alpha1 distribution contains four PostgreSQL 18 extensions:
 | `pgwrh_fdw` | Foreign data wrapper (FDW) for queries and connections between databases | Enabled automatically by `CREATE EXTENSION pgwrh CASCADE` |
 | `pgwrh_wait` | Lets a read wait until a specified write has been replicated | Optional, on subscribers serving reads that need this guarantee |
 | `pgwrh_ui` | Browser console for monitoring and managing the cluster | Optional, controller only |
+| `pgwrh_gist_extra` | Additional GiST operators for text-array searches | Optional, on databases using these indexes or shipping these operators |
 
 The development bundle uses `pg_background` 2.0.3 to run background tasks on
 both PostgreSQL majors.
@@ -41,8 +43,12 @@ Packages install it as a dependency; the container and Nix bundle include it.
 The console uses **PostgREST**, a separate web service that connects to the
 controller database. See [console setup](pgwrh_ui/README.md).
 
-`pgwrh_fdw` and `pgwrh_wait` can also be used independently of the core.
+`pgwrh_fdw`, `pgwrh_wait` and `pgwrh_gist_extra` can also be used independently of the core.
 PostgreSQL's stock `postgres_fdw` extension is not required.
+The GiST extension requires PostgreSQL's `btree_gist`; see its
+[installation and operator guide](pgwrh_gist_extra/README.md).
+Published alpha1 packages contain the original four extensions and predate
+`pgwrh_gist_extra`.
 
 ## Quickstart
 

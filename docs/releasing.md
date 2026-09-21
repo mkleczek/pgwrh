@@ -34,7 +34,9 @@ Every native package is installed in a clean runtime container. Tests first crea
 `pgwrh_wait` alone and exercise its API without any other extension dependencies.
 They then explicitly create `pgwrh CASCADE`, verify version 1.0.0-alpha1 and absence of
 upgrade paths for each of `pgwrh`, `pgwrh_ui`, `pgwrh_fdw`, and `pgwrh_wait`, and call both
-native libraries. They render the UI and check its embedded htmx, JavaScript,
+native libraries. Development builds additionally create `pgwrh_gist_extra`
+independently, check its matching version and GiST index support, and verify
+that the core does not enable it. They render the UI and check its embedded htmx, JavaScript,
 and CSS assets. Staged installation tests verify the packaged UI setup guide,
 role scripts, PostgREST configuration, and htmx license. The UI remains an
 optional controller-only extension; packages do not start PostgREST.
@@ -54,7 +56,8 @@ build and test only when **prepare_draft** is left unchecked. Before tagging, ru
 The check requires VERSION, extension controls, installation scripts, Nix, RPM,
 DEB, container metadata and Compose references to agree. It also verifies that
 the core declares its dependencies and that `pgwrh_wait` and `pgwrh_fdw` declare
-none. It also verifies the UI dependency on `pgwrh` and its deployment files.
+none. It also verifies the UI dependency on `pgwrh`, its deployment files, and
+the optional `pgwrh_gist_extra` dependency on `btree_gist`.
 Only fresh 1.0.0-alpha1 installation scripts are produced; no earlier release or
 migration/upgrade scripts are included.
 

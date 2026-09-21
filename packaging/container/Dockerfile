@@ -13,7 +13,7 @@ FROM ${POSTGRES_IMAGE} AS runtime
 ARG PG_MAJOR=18
 LABEL org.opencontainers.image.source="https://github.com/mkleczek/pgwrh" \
       org.opencontainers.image.version="1.0.0-alpha1" \
-      org.opencontainers.image.description="PostgreSQL ${PG_MAJOR} with pgwrh, pgwrh_ui, pgwrh_fdw, pgwrh_wait and pg_background"
+      org.opencontainers.image.description="PostgreSQL ${PG_MAJOR} with pgwrh, pgwrh_ui, pgwrh_fdw, pgwrh_wait, pgwrh_gist_extra and pg_background"
 RUN apt-get update && apt-get install -y --no-install-recommends postgresql-${PG_MAJOR}-pg-background \
     && dpkg-query -W -f='${Version}\n' "postgresql-${PG_MAJOR}-pg-background" > /tmp/background-version \
     && dpkg --compare-versions "$(cat /tmp/background-version)" ge 2.0.3 \
@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends postgresql-${PG
 COPY --from=build /stage/ /
 COPY LICENSE /usr/share/doc/pgwrh/LICENSE
 COPY pgwrh_fdw/${PG_MAJOR}/COPYRIGHT /usr/share/doc/pgwrh/FDW-COPYRIGHT
+COPY pgwrh_gist_extra/LICENSE /usr/share/doc/pgwrh/GIST-EXTRA-LICENSE
 COPY packaging/container/init.sql /docker-entrypoint-initdb.d/10-pgwrh.sql
 COPY test/packaging /tmp/pgwrh-packaging-test
 RUN gosu postgres bash /tmp/pgwrh-packaging-test/installed.sh \
