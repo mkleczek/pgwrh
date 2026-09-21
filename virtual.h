@@ -22,6 +22,7 @@ struct PgFdwConnState;
 
 extern PgwrhFdwConnectionRank pgwrh_fdw_rank_cached_connection(Oid umid);
 extern bool pgwrh_fdw_is_virtual_server(Oid serverid);
+extern List *pgwrh_fdw_routing_members(Oid serverid, Oid userid);
 extern List *pgwrh_fdw_common_targets(List *serverids, Oid userid);
 extern PGconn *pgwrh_fdw_group_connection(List *serverids, Oid userid,
 										struct PgFdwConnState **state, bool bind);

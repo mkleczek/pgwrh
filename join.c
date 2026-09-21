@@ -20,6 +20,9 @@ static GetForeignJoinPaths_function foreign_join_callback;
 typedef struct ReferenceCount
 {
 	List *servers;
+	List *groups;                /* canonical member sets of participating groups */
+	Oid userid;
+	Oid fdwid;
 	int *remaining;              /* NULL when collecting statement references */
 } ReferenceCount;
 
@@ -34,27 +37,37 @@ typedef struct QueryReferences
 static QueryReferences *query_references;
 
 static bool
-count_reference(Oid relid, ReferenceCount *count)
+count_server(Oid serverid, ReferenceCount *count)
 {
 	ListCell *lc;
 	int index = 0;
-	Oid serverid;
+	List *members;
+	bool outside = false;
 
-	if (get_rel_relkind(relid) != RELKIND_FOREIGN_TABLE)
-		return false;
-	serverid = GetForeignTable(relid)->serverid;
 	if (!count->remaining)
 	{
 		count->servers = lappend_oid(count->servers, serverid);
 		return false;
 	}
-	foreach(lc, count->servers)
+	if (GetForeignServer(serverid)->fdwid != count->fdwid)
+		return false;
+	members = pgwrh_fdw_routing_members(serverid, count->userid);
+	foreach(lc, count->groups)
 	{
-		if (lfirst_oid(lc) == serverid && --count->remaining[index] < 0)
-			return true;
+		if (equal(lfirst(lc), members) && --count->remaining[index] < 0)
+			outside = true;
 		index++;
 	}
-	return false;
+	list_free(members);
+	return outside;
+}
+
+static bool
+count_reference(Oid relid, ReferenceCount *count)
+{
+	if (get_rel_relkind(relid) != RELKIND_FOREIGN_TABLE)
+		return false;
+	return count_server(GetForeignTable(relid)->serverid, count);
 }
 
 /* Count references in sibling subqueries too, including unexpanded partitions. */
@@ -131,7 +144,7 @@ static List *
 statement_references(PlannerInfo *root)
 {
 	QueryReferences *entry;
-	ReferenceCount count = {NIL, NULL};
+	ReferenceCount count = {0};
 	MemoryContext oldcontext;
 
 	while (root->parent_root)
@@ -155,24 +168,30 @@ statement_references(PlannerInfo *root)
 }
 
 /*
- * An independently executed scan of the same virtual server could bind it to a
- * member outside this join's intersection. Only offer the cross-server path if
- * it contains every reference to each virtual input in the statement. Ordinary
- * actual servers cannot move, so repeated references to them are harmless.
+ * Independently executed scans of ANY alias in an input's routing group could
+ * bind it outside this join's intersection. Count group references, including
+ * aliases not named by this join. Actual servers cannot move and are excluded.
  */
 bool
 pgwrh_fdw_join_isolated(PlannerInfo *root, RelOptInfo *joinrel, List *servers)
 {
-	ReferenceCount count;
+	ReferenceCount count = {0};
 	ListCell *lc;
 	int relid = -1;
 	bool outside = false;
 
-	count.servers = NIL;
+	count.userid = OidIsValid(joinrel->userid) ? joinrel->userid : GetUserId();
+	count.fdwid = GetForeignServer(linitial_oid(servers))->fdwid;
 	foreach(lc, servers)
-		if (pgwrh_fdw_is_virtual_server(lfirst_oid(lc)))
-			count.servers = lappend_oid(count.servers, lfirst_oid(lc));
-	count.remaining = palloc0(sizeof(int) * list_length(count.servers));
+	{
+		List *members = pgwrh_fdw_routing_members(lfirst_oid(lc), count.userid);
+
+		if (members && !list_member(count.groups, members))
+			count.groups = lappend(count.groups, members);
+		else
+			list_free(members);
+	}
+	count.remaining = palloc0(sizeof(int) * list_length(count.groups));
 	/* Counting downward from zero first computes the negative allowed counts. */
 	while ((relid = bms_next_member(joinrel->relids, relid)) >= 0)
 	{
@@ -184,23 +203,17 @@ pgwrh_fdw_join_isolated(PlannerInfo *root, RelOptInfo *joinrel, List *servers)
 		if (rte->rtekind == RTE_RELATION)
 			(void) count_reference(rte->relid, &count);
 	}
-	for (int i = 0; i < list_length(count.servers); i++)
+	for (int i = 0; i < list_length(count.groups); i++)
 		count.remaining[i] = -count.remaining[i];
 	foreach(lc, statement_references(root))
 	{
-		ListCell *input;
-		int index = 0;
-
-		foreach(input, count.servers)
-		{
-			if (lfirst_oid(input) == lfirst_oid(lc) && --count.remaining[index] < 0)
-				outside = true;
-			index++;
-		}
+		outside = count_server(lfirst_oid(lc), &count);
 		if (outside)
 			break;
 	}
-	list_free(count.servers);
+	foreach(lc, count.groups)
+		list_free(lfirst(lc));
+	list_free(count.groups);
 	pfree(count.remaining);
 	return !outside;
 }
