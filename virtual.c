@@ -10,6 +10,7 @@
 #include "catalog/pg_foreign_server.h"
 #include "commands/defrem.h"
 #include "common/pg_prng.h"
+#include "postgres_fdw.h"
 #include "utils/acl.h"
 #include "utils/hsearch.h"
 #include "utils/memutils.h"
@@ -309,4 +310,202 @@ pgwrh_fdw_virtual_connected(PgwrhFdwVirtualBinding *binding, PGconn *conn)
 		binding->backend_pid = PQbackendPID(conn);
 		binding->failed = false;
 	}
+}
+
+bool
+pgwrh_fdw_is_virtual_server(Oid serverid)
+{
+	return members_option(GetForeignServer(serverid)->options) != NULL;
+}
+
+static PgwrhFdwVirtualBinding *
+find_binding(Oid serverid, Oid userid)
+{
+	VirtualKey key = {serverid, userid};
+
+	return virtual_state ?
+		hash_search(virtual_state->bindings, &key, HASH_FIND, NULL) : NULL;
+}
+
+/* Inspect eligibility without selecting a target or opening a connection. */
+static List *
+server_targets(Oid serverid, Oid userid)
+{
+	ForeignServer *server = GetForeignServer(serverid);
+	const char *members = members_option(server->options);
+	PgwrhFdwVirtualBinding *binding = find_binding(serverid, userid);
+	UserMapping *user;
+	List *names;
+	List *targets = NIL;
+	ListCell *lc;
+
+	if (!members && !binding)
+		return list_make1_oid(serverid);
+	user = GetUserMapping(userid, serverid);
+	if (user->options != NIL)
+		ereport(ERROR,
+				(errcode(ERRCODE_FDW_INVALID_OPTION_NAME),
+				 errmsg("user mapping for virtual server \"%s\" must have no options",
+						server->servername)));
+	if (binding)
+	{
+		if (binding->failed)
+			ereport(ERROR,
+					(errcode(ERRCODE_CONNECTION_EXCEPTION),
+					 errmsg("previous connection acquisition for virtual server \"%s\" failed",
+							server->servername),
+					 errhint("Roll back the local transaction before retrying.")));
+		check_member(GetForeignServer(binding->serverid), server->fdwid);
+		if (!can_use_member(server->owner, userid, binding->serverid))
+			return NIL;
+		if (GetUserMapping(userid, binding->serverid)->umid != binding->umid)
+			ereport(ERROR,
+					(errcode(ERRCODE_CONNECTION_EXCEPTION),
+					 errmsg("selected user mapping for virtual server \"%s\" changed during the transaction",
+							server->servername)));
+		return list_make1_oid(binding->serverid);
+	}
+
+	names = parse_members(members);
+	foreach(lc, names)
+	{
+		ForeignServer *member = GetForeignServerByName(lfirst(lc), false);
+
+		check_member(member, server->fdwid);
+		if (can_use_member(server->owner, userid, member->serverid) &&
+			pgwrh_fdw_rank_cached_connection(GetUserMapping(userid, member->serverid)->umid) !=
+			PGWRH_FDW_CONNECTION_UNUSABLE)
+			targets = lappend_oid(targets, member->serverid);
+	}
+	list_free_deep(names);
+	return targets;
+}
+
+/* Intersect all inputs, including transaction bindings, not just pairs. */
+List *
+pgwrh_fdw_common_targets(List *serverids, Oid userid)
+{
+	List *common = NIL;
+	ListCell *lc;
+	bool first = true;
+
+	foreach(lc, serverids)
+	{
+		List *targets = server_targets(lfirst_oid(lc), userid);
+
+		if (first)
+			common = targets;
+		else
+		{
+			List *intersection = NIL;
+			ListCell *candidate;
+
+			foreach(candidate, common)
+			{
+				if (list_member_oid(targets, lfirst_oid(candidate)))
+					intersection = lappend_oid(intersection, lfirst_oid(candidate));
+			}
+
+			list_free(common);
+			list_free(targets);
+			common = intersection;
+		}
+		first = false;
+	}
+	return common;
+}
+
+/*
+ * Acquire one physical connection for a whole remote expression. Estimation
+ * uses bind=false: EXPLAIN must not commit individual shards to replicas before
+ * join planning has found their intersection. Actual sessions still use the
+ * ordinary cache and transaction setup, including transaction_parameters.
+ */
+PGconn *
+pgwrh_fdw_group_connection(List *serverids, Oid userid,
+						   PgFdwConnState **state, bool bind)
+{
+	List *targets = pgwrh_fdw_common_targets(serverids, userid);
+	List *best = NIL;
+	List *bindings = NIL;
+	ListCell *lc;
+	PgwrhFdwConnectionRank best_rank = PGWRH_FDW_CONNECTION_UNUSABLE;
+	UserMapping *target;
+	PGconn *conn = NULL;
+
+	foreach(lc, targets)
+	{
+		Oid serverid = lfirst_oid(lc);
+		PgwrhFdwConnectionRank rank = pgwrh_fdw_rank_cached_connection(
+			GetUserMapping(userid, serverid)->umid);
+
+		/* A bound, invalidated transaction may finish on its old connection. */
+		if (rank > best_rank)
+		{
+			list_free(best);
+			best = NIL;
+			best_rank = rank;
+		}
+		if (rank == best_rank)
+			best = lappend_oid(best, serverid);
+	}
+	if (best == NIL)
+		ereport(ERROR,
+				(errcode(ERRCODE_CONNECTION_EXCEPTION),
+				 errmsg("no common target for virtual foreign servers"),
+				 errhint("Replan the query with compatible transaction bindings and server membership.")));
+	target = GetUserMapping(userid, list_nth_oid(best,
+		pg_prng_uint64_range(&pg_global_prng_state, 0, list_length(best) - 1)));
+	list_free(best);
+	list_free(targets);
+
+	if (!bind)
+		return GetConnection(target, false, state);
+
+	/* Reserve every virtual input before any connection or transaction work. */
+	foreach(lc, serverids)
+	{
+		Oid serverid = lfirst_oid(lc);
+		PgwrhFdwVirtualBinding *binding = find_binding(serverid, userid);
+
+		if (!binding && pgwrh_fdw_is_virtual_server(serverid))
+		{
+			VirtualKey key = {serverid, userid};
+			bool found;
+
+			if (!virtual_state)
+				init_virtual_state();
+			binding = hash_search(virtual_state->bindings, &key, HASH_ENTER, &found);
+			Assert(!found);
+			binding->serverid = target->serverid;
+			binding->umid = target->umid;
+			binding->failed = false;
+			binding->conn = NULL;
+			binding->backend_pid = 0;
+		}
+		if (binding)
+			bindings = lappend(bindings, binding);
+	}
+
+	PG_TRY();
+	{
+		foreach(lc, serverids)
+		{
+			PGconn *next = GetConnection(GetUserMapping(userid, lfirst_oid(lc)),
+										false, state);
+
+			Assert(conn == NULL || conn == next);
+			conn = next;
+		}
+	}
+	PG_CATCH();
+	{
+		/* A caught acquisition error must not let any input change replicas. */
+		foreach(lc, bindings)
+			((PgwrhFdwVirtualBinding *) lfirst(lc))->failed = true;
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
+	list_free(bindings);
+	return conn;
 }

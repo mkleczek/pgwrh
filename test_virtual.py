@@ -281,6 +281,14 @@ class VirtualServerTests(unittest.TestCase):
         self.assertEqual(self.c.scalar("SELECT count(*) FROM pgwrh_fdw_get_connections()"), "1")
         self.c.sql("COMMIT")
 
+    def test_remote_estimates_do_not_pin_virtual_server(self):
+        self.virtual(options=", use_remote_estimate 'true'")
+        self.c.sql("BEGIN")
+        self.c.sql("EXPLAIN SELECT * FROM v")
+        self.c.sql("ALTER SERVER v OPTIONS (SET members 's_b')")
+        self.assertEqual(self.c.scalar("SELECT member FROM v"), "virtual_remote_b")
+        self.c.sql("COMMIT")
+
     def test_modification_call_sites_and_savepoints(self):
         self.virtual()
         self.c.sql("""CREATE FOREIGN TABLE writes(id int, value text) SERVER v
