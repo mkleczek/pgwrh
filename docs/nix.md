@@ -54,3 +54,17 @@ This is a fresh installation release; it does not upgrade an existing pgwrh
 database. For custom PostgreSQL environments, use
 `postgresql_18.pkgs.callPackage ./nix/pgwrh.nix { }` and include the result
 together with `pg_background` in `postgresql_18.withPackages`.
+
+## PostgreSQL 19 preview
+
+The development checkout provides `postgresql-18`, `postgresql-19`, `pgwrh-18`
+and `pgwrh-19`. Default aliases and the NixOS module continue to select 18.
+Both bundles pin `pg_background` 2.0.3. The 19 bundle pins PostgreSQL 19 Beta 3.
+
+```sh
+nix build .#postgresql-19
+nix develop .#tests-19 --command bash test/run-functional.sh
+```
+
+The PostgreSQL major must match the data directory and compiled extensions.
+These outputs do not upgrade a PostgreSQL cluster.

@@ -13,7 +13,7 @@ in each extension directory: `pgwrh/`, `pgwrh_ui/`, `pgwrh_wait/`, and
 All tests live under `test/`. Building from a release archive never fetches Git
 history or other dependencies.
 
-The combined build currently requires PostgreSQL 18 development files, PGXS,
+The combined build requires matching PostgreSQL 18 or 19 development files, PGXS,
 libpq, a C compiler, GNU Make, a POSIX shell, `sha384sum` (coreutils) or
 `shasum`, and the standard text utilities used to assemble the pgwrh SQL script,
 plus the TLS/GSSAPI development libraries used by the selected PostgreSQL
@@ -107,14 +107,14 @@ Standard RPM tooling also generates debug packages where enabled. The release
 uses the `1PGDG%{?dist}` convention. Extension files are installed below
 `/usr/pgsql-18`, independent of whether the architecture normally uses
 `/usr/lib64`. The main package requires `postgresql18-server`,
-`postgresql18-libs`, and `pg_background_18 >= 1.6`. The bundled FDW replaces the
+`postgresql18-libs`, and `pg_background_18 >= 2.0.3`. The bundled FDW replaces the
 stock `postgres_fdw`, so `postgresql18-contrib` is not required.
 
 The spec accepts the macros used by PGDG's build system:
 
 | Macro | Default | Purpose |
 | --- | --- | --- |
-| `pgmajorversion` | `18` | PostgreSQL major version; other majors are rejected because the bundled native code targets PostgreSQL 18 |
+| `pgmajorversion` | `18` | PostgreSQL major version: `18` or `19`; other majors are rejected |
 | `pginstdir` | `/usr/pgsql-18` | Versioned PostgreSQL installation prefix |
 | `llvm` | `1` | Set to `0` to omit the LLVM subpackage and pass `with_llvm=no` to every build/install/check invocation |
 
@@ -196,6 +196,24 @@ installation and uninstallation. Explicitly requesting a native component with
 bundle. Use the same component options when building, installing, and
 uninstalling. Run `make clean` before changing the PostgreSQL installation used
 for compilation.
+
+## PostgreSQL 19 preview packages
+
+From this development checkout, select the major explicitly:
+
+```sh
+docker build -f packaging/deb/Dockerfile --build-arg PG_MAJOR=19 \
+  --build-arg 'PGDG_COMPONENTS=main 19' --output type=local,dest=dist .
+docker build -f packaging/container/Dockerfile --build-arg PG_MAJOR=19 \
+  --build-arg POSTGRES_IMAGE=postgres:19beta3-trixie -t pgwrh:pg19-preview .
+```
+
+For a direct Debian build, copy `packaging/deb/debian` to `debian`, then run
+`python3 packaging/deb/select-major.py 19 debian` before installing build
+dependencies. The RPM spec accepts `--define 'pgmajorversion 19'`; its container
+accepts `PG_MAJOR=19` and `PGDG_TESTING=1`. RPM publication for 19 is waiting for
+PGDG's `pg_background_19 >= 2.0.3` package. Both majors require `pg_background`
+2.0.3 or newer. See the [release checklist](development/postgres-versions.md).
 
 ## Verification
 

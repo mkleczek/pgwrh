@@ -20,6 +20,10 @@ data and share feedback before 1.0.0. APIs and configuration may change, and an
 in-place upgrade to later releases is not promised. See the [alpha release
 notes](docs/releases/1.0.0-alpha1.md) for limitations and useful test scenarios.
 
+The development branch also prepares **PostgreSQL 19 Beta 3** support. See the
+[version and preview guide](docs/development/postgres-versions.md); published
+alpha1 artifacts remain PostgreSQL 18 builds.
+
 ## Components
 
 The pgwrh 1.0.0-alpha1 distribution contains four PostgreSQL 18 extensions:
@@ -31,7 +35,8 @@ The pgwrh 1.0.0-alpha1 distribution contains four PostgreSQL 18 extensions:
 | `pgwrh_wait` | Lets a read wait until a specified write has been replicated | Optional, on subscribers serving reads that need this guarantee |
 | `pgwrh_ui` | Browser console for monitoring and managing the cluster | Optional, controller only |
 
-The core also requires `pg_background` 1.6 or newer to run background tasks.
+The development bundle uses `pg_background` 2.0.3 to run background tasks on
+both PostgreSQL majors.
 Packages install it as a dependency; the container and Nix bundle include it.
 The console uses **PostgREST**, a separate web service that connects to the
 controller database. See [console setup](pgwrh_ui/README.md).
