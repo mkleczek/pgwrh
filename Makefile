@@ -4,8 +4,12 @@ MODULE_big = pgwrh_fdw
 OBJS = \
 	$(WIN32RES) \
 	connection.o \
+	credentials.o \
 	deparse.o \
+	join.o \
 	option.o \
+	transaction_context.o \
+	virtual.o \
 	postgres_fdw.o \
 	shippable.o
 PGFILEDESC = "pgwrh_fdw - foreign data wrapper for PostgreSQL"
@@ -29,6 +33,8 @@ include $(PGXS)
 # Export only PostgreSQL loader/SQL entry points; helpers also have unique names.
 PG_CFLAGS += -fvisibility=hidden
 
+connection.o join.o option.o virtual.o postgres_fdw.o: virtual.h
+join.o postgres_fdw.o: join.h
 $(OBJS): postgres_fdw.h namespace.h
 
 STAGE_DIR ?= $(abspath .build/testgres-ext)
