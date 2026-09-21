@@ -6654,7 +6654,8 @@ foreign_join_ok(PlannerInfo *root, RelOptInfo *joinrel, JoinType jointype,
 			/* Cross-server writes and EPQ require additional routing work. */
 			if (root->parse->commandType != CMD_SELECT || root->rowMarks ||
 				fpinfo_o->server->fdwid != fpinfo_i->server->fdwid ||
-				!equal(fpinfo_o->shippable_extensions, fpinfo_i->shippable_extensions))
+				!equal(fpinfo_o->shippable_extensions, fpinfo_i->shippable_extensions) ||
+				!pgwrh_fdw_join_isolated(root, joinrel, servers))
 				return false;
 			targets = pgwrh_fdw_common_targets(servers, userid);
 			if (targets == NIL)
