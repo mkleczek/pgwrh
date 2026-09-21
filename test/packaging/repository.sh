@@ -17,10 +17,12 @@ for release in /repository/apt/dists/*/InRelease; do
     echo "deb [signed-by=/usr/share/keyrings/pgwrh-test.gpg] file:/repository/apt $distro main" >> /etc/apt/sources.list.d/pgwrh-test.list
 done
 apt-get update
-apt-cache policy postgresql-18-pgwrh | tee /tmp/policy
-# APT must see a candidate from the signed local repository.
+# APT must expose both majors from the signed local repository.
 package_version=$(python3 /packaging/release_version.py --version "$version" --field package_version)
-grep -F "Candidate: $package_version-" /tmp/policy
+for major in 18 19; do
+    apt-cache policy "postgresql-$major-pgwrh" | tee /tmp/policy
+    grep -F "Candidate: $package_version-" /tmp/policy
+done
 # Alpha packages must upgrade to the final release without an epoch or downgrade.
 dpkg --compare-versions '1.0.0~alpha1-1' lt '1.0.0-1'
 python3 - <<'PY'

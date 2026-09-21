@@ -106,3 +106,9 @@ CREATE EXTENSION pgwrh_ui;
 
 Run PostgREST separately and follow the [console deployment
 guide](../pgwrh_ui/README.md) for access roles and web-service configuration.
+
+For PostgreSQL 19 preview packages from the development branch, see
+[building the preview](packaging.md#postgresql-19-preview-packages). Its DEB name
+is `postgresql-19-pgwrh`; the RPM spec selects `pgwrh_19`, whose runtime dependency
+is not yet published by PGDG. Both development targets require pg_background
+2.0.3 or newer. The published alpha1 artifacts above remain PostgreSQL 18 builds.

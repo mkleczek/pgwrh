@@ -7,7 +7,7 @@ PG_CONFIG ?= pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 
-$(OBJS): src/monitor.h
+$(OBJS): src/monitor.h src/compat.h
 
 STAGE_DIR ?= $(abspath ../.build/test-stage)
 stage: all

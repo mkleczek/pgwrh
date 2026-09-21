@@ -1,13 +1,19 @@
 # Testing pgwrh
 
 Run commands from the repository root. Tests use disposable PostgreSQL clusters
-and need permission to open local sockets. Select PostgreSQL 18 and install the
+and need permission to open local sockets. Select PostgreSQL 18 or 19 and install the
 dependencies for the chosen suite. These commands are for contributors; database
 operators can use the [installation check](../../README.md#installation).
 
 The root targets are `test-pgwrh`, `test-ui`, `test-wait`, `test-fdw`,
 `test-fdw-tap` and `test-packaging`. Build products and staged extensions live
 under `.build/`; PGXS object files and libraries remain beside their sources.
+Default pytest discovery covers `test/`. Run the selected FDW suite with
+`make test-fdw`; its two imported source trees contain identically named tests.
+
+Use `nix develop .#tests-18` or `nix develop .#tests-19` for a pinned environment.
+Both use `pg_background` 2.0.3. Run `bash test/run-functional.sh` inside it for
+all core, wait and HTTP UI tests with skipped tests treated as failures.
 
 ## Controller and replicas
 
@@ -34,7 +40,7 @@ nix develop .#tests --command python3 -m pytest test/pgwrh/test_backup_restore.p
 
 ## Replication visibility
 
-Install PostgreSQL 18 development files, `pg_background`, and the Python tools
+Install PostgreSQL 18 or 19 development files, `pg_background` 2.0.3, and the Python tools
 in `test/pgwrh_wait/requirements.txt`. Then:
 
 ```sh
@@ -42,7 +48,7 @@ make PG_CONFIG=/path/to/postgresql18/bin/pg_config test-stage
 PGWRH_TEST_BIN_DIR=/path/to/postgresql18/bin python3 -m pytest test/pgwrh_wait -v
 ```
 
-Tests use temporary real publisher/subscriber clusters and PostgreSQL 18's
+Tests use temporary real publisher/subscriber clusters and PostgreSQL's
 `extension_control_path`, so installing pgwrh into the system directories is
 unnecessary. `PGWRH_TEST_CONTROL_PATH` and `PGWRH_TEST_LIBRARY_PATH` optionally
 add directories for externally staged dependencies. Tests need permission to
@@ -56,7 +62,7 @@ nix-shell nix/ui-tests.nix --run 'make test-ui'
 
 Alternatively, stage extensions with `make testgres-ext`, provide the testgres
 and pytest Python dependencies, set `PGWRH_TEST_BIN_DIR`/`PG_BIN` to PostgreSQL
-18 with pg_background, and run `python3 -m pytest test/pgwrh_ui`. Set
+18 or 19 with pg_background 2.0.3, and run `python3 -m pytest test/pgwrh_ui`. Set
 `POSTGREST_BIN` or put `postgrest` on PATH to include the HTTP tests; they are
 skipped when no binary is available. All tests use disposable local databases.
 
@@ -76,7 +82,7 @@ export PG_CONFIG=/path/to/postgresql-18/bin/pg_config
 make test-fdw
 ```
 
-These commands build and stage the extension in `.build/pgwrh_fdw/stage`, start
+These commands build and stage the extension in `pgwrh_fdw/MAJOR/.build/pgwrh_fdw/stage`, start
 private temporary PostgreSQL clusters, and stop them on completion. They need
 permission to open local sockets. No installation into system PostgreSQL is
 required. The tests print the temporary cluster/log location and retain it for
@@ -89,7 +95,7 @@ failure recovery, and coexistence in both load orders. A test-only receiving
 utility hook raises an error if the propagated request ID arrives after the
 remote transaction acquires a snapshot.
 
-`test/pgwrh_fdw/run-upstream.py` runs the retained main FDW and
+`pgwrh_fdw/MAJOR/run-upstream.py` runs the retained main FDW and
 query-cancellation SQL tests plus the `eval_plan_qual` isolation tests. For the
 retained SCRAM TAP test, also provide matching PostgreSQL source test modules
 and Perl's `IPC::Run`:

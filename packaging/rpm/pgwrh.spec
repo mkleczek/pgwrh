@@ -6,9 +6,9 @@
 %{!?pginstdir:%global pginstdir /usr/pgsql-%{pgmajorversion}}
 %{!?llvm:%global llvm 1}
 
-# Both native extensions currently use PostgreSQL 18 server APIs.
-%if %{pgmajorversion} != 18
-%{error:pgwrh's bundled native extensions require PostgreSQL 18}
+# Select the matching bundled FDW and compile the shared wait extension.
+%if %{pgmajorversion} != 18 && %{pgmajorversion} != 19
+%{error:pgwrh requires PostgreSQL 18 or 19}
 %endif
 
 %if %llvm
@@ -30,7 +30,7 @@ BuildRequires:  postgresql%{pgmajorversion}-devel
 BuildRequires:  krb5-devel
 Requires:       postgresql%{pgmajorversion}-server
 Requires:       postgresql%{pgmajorversion}-libs
-Requires:       pg_background_%{pgmajorversion} >= 1.6
+Requires:       pg_background_%{pgmajorversion} >= 2.0.3
 
 %if 0%{?suse_version} >= 1500
 BuildRequires:  libopenssl-3-devel
@@ -77,9 +77,10 @@ just-in-time compiler.
 %prep
 %setup -q -n %{sname}-%{upstream_version}
 # A release archive must contain the matching extension and bundled sources.
-for extension in pgwrh pgwrh_ui pgwrh_wait pgwrh_fdw; do
+for extension in pgwrh pgwrh_ui pgwrh_wait; do
     grep -Eq "^default_version[[:space:]]*=[[:space:]]*'%{upstream_version}'" "$extension/$extension.control"
 done
+grep -Eq "^default_version[[:space:]]*=[[:space:]]*'%{upstream_version}'" pgwrh_fdw/%{pgmajorversion}/pgwrh_fdw.control
 
 %build
 PATH=%{pginstdir}/bin:$PATH %{__make} %{?_smp_mflags} \
@@ -102,7 +103,7 @@ PATH=%{pginstdir}/bin:$PATH %{__make} test-packaging \
 
 %files
 %defattr(-,root,root,-)
-%license LICENSE pgwrh_fdw/COPYRIGHT
+%license LICENSE pgwrh_fdw/%{pgmajorversion}/COPYRIGHT
 %doc docs pgwrh_fdw/LICENSING.md pgwrh_fdw/UPSTREAM.md
 %doc %{pginstdir}/doc/extension/README-%{sname}.md
 %doc %{pginstdir}/doc/extension/README-pgwrh_wait.md

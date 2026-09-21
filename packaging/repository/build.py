@@ -48,7 +48,7 @@ for package in sorted(source.rglob('*')):
         name, version, arch = run('dpkg-deb', '-f', str(package), 'Package', 'Version', 'Architecture').splitlines()
         # Multiple requested fields are returned with their field-name prefixes.
         name, version, arch = [value.split(': ', 1)[-1] for value in (name, version, arch)]
-        if name != 'postgresql-18-pgwrh':
+        if not re.fullmatch(r'postgresql-(18|19)-pgwrh', name):
             continue
         if not version.startswith(package_version + '-1+'):
             raise ValueError(f'Package version does not match {args.version}: {package.name}')
@@ -61,7 +61,7 @@ for package in sorted(source.rglob('*')):
         apt_targets.add((distro, arch))
     elif package.suffix == '.rpm' and not package.name.endswith('.src.rpm'):
         name, version, release, arch = run('rpm', '-qp', '--qf', '%{NAME}\n%{VERSION}\n%{RELEASE}\n%{ARCH}', str(package)).splitlines()
-        if name not in ('pgwrh_18', 'pgwrh_18-llvmjit'):
+        if not re.fullmatch(r'pgwrh_(18|19)(-llvmjit)?', name):
             continue
         if version != package_version:
             raise ValueError(f'Package version does not match {args.version}: {package.name}')
@@ -107,7 +107,7 @@ for target in sorted(rpm_targets):
 (output / 'pgwrh.asc').write_text(run('gpg', '--armor', '--export', args.key))
 (output / '.nojekyll').touch()
 (output / 'index.html').write_text('<!doctype html><title>pgwrh packages</title>'
-    '<h1>pgwrh PostgreSQL 18 packages</h1><p>Signed APT and YUM repositories.</p>'
+    '<h1>pgwrh PostgreSQL packages</h1><p>Signed APT and YUM repositories.</p>'
     '<p><a href="pgwrh.asc">Signing key</a> · '
     '<a href="https://github.com/mkleczek/pgwrh/blob/main/docs/packages.md">Installation instructions</a></p>')
 print(output)

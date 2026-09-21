@@ -20,3 +20,11 @@ result-*
 **/__pycache__
 **/.pytest_cache
 **/.DS_Store
+# Standalone FDW regressions now stage their files inside each imported tree.
+pgwrh_fdw/*/.build
+pgwrh_fdw/*/results
+pgwrh_fdw/*/output_iso
+pgwrh_fdw/*/tmp_check
+pgwrh_fdw/*/log
+pgwrh_fdw/*/regression.diffs
+pgwrh_fdw/*/regression.out

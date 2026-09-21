@@ -1,6 +1,6 @@
 { lib, postgresql, postgresqlBuildExtension, openssl, libkrb5 }:
 
-assert lib.versions.major postgresql.version == "18";
+assert builtins.elem (lib.versions.major postgresql.version) [ "18" "19" ];
 postgresqlBuildExtension {
   pname = "pgwrh";
   version = "1.0.0-alpha1";
@@ -18,10 +18,10 @@ postgresqlBuildExtension {
   enableParallelBuilding = true;
   postInstall = ''
     install -Dm644 LICENSE "$out/share/doc/pgwrh/LICENSE"
-    install -Dm644 pgwrh_fdw/COPYRIGHT "$out/share/doc/pgwrh/FDW-COPYRIGHT"
+    install -Dm644 pgwrh_fdw/${lib.versions.major postgresql.version}/COPYRIGHT "$out/share/doc/pgwrh/FDW-COPYRIGHT"
   '';
   meta = {
-    description = "Sharding and replica read consistency for PostgreSQL 18";
+    description = "Sharding and replica read consistency for PostgreSQL 18 and 19";
     homepage = "https://github.com/mkleczek/pgwrh";
     license = [ lib.licenses.agpl3Plus lib.licenses.agpl3Only lib.licenses.postgresql lib.licenses.bsd0 ];
     platforms = postgresql.meta.platforms;
