@@ -20,11 +20,13 @@ validate_release(metadata, args.tag,
 dependencies = {
     'pgwrh': {'pg_background', 'pgwrh_fdw'},
     'pgwrh_ui': {'pgwrh'},
-    'pgwrh_fdw': set(),
+    'pgwrh_fdw/18': set(),
+    'pgwrh_fdw/19': set(),
     'pgwrh_wait': set(),
 }
-for name, expected_dependencies in dependencies.items():
-    control = (root / name / f'{name}.control').read_text()
+for directory, expected_dependencies in dependencies.items():
+    name = directory.split("/")[0]
+    control = (root / directory / f'{name}.control').read_text()
     assert re.search(r"^default_version\s*=\s*'" + re.escape(version) + "'", control, re.M), name
     requires = re.search(r"^requires\s*=\s*'([^']*)'", control, re.M)
     actual_dependencies = (
@@ -32,7 +34,7 @@ for name, expected_dependencies in dependencies.items():
         if requires else set()
     )
     assert actual_dependencies == expected_dependencies, f'Unexpected extension dependencies: {name}'
-    scripts = sorted(p.name for p in (root / name).glob(f'{name}--*.sql'))
+    scripts = sorted(p.name for p in (root / directory).glob(f'{name}--*.sql'))
     expected = [] if name in ('pgwrh', 'pgwrh_ui') else [f'{name}--{version}.sql']
     assert scripts == expected, f'Unexpected install/upgrade scripts: {scripts}'
 checks = {
@@ -42,11 +44,12 @@ checks = {
     'packaging/container/Dockerfile': f'org.opencontainers.image.version="{version}"',
     'examples/compose/compose.yaml': f'pgwrh:{version}-pg18',
     'test/packaging/installed.sql': f"extversion = '{version}'",
-    'pgwrh_fdw/postgres_fdw.c': f'.version = "{version}"',
     'pgwrh_ui/Makefile': f'EXTVERSION = {version}',
     'pgwrh_wait/Makefile': f'DATA = pgwrh_wait--{version}.sql',
-    'pgwrh_fdw/Makefile': f'DATA = pgwrh_fdw--{version}.sql',
 }
+for major in ('18', '19'):
+    checks[f'pgwrh_fdw/{major}/postgres_fdw.c'] = f'.version = "{version}"'
+    checks[f'pgwrh_fdw/{major}/Makefile'] = f'DATA = pgwrh_fdw--{version}.sql'
 for path, expected in checks.items():
     assert expected in (root / path).read_text(), f'{path} differs from VERSION'
 assert f'%global upstream_version {version}' in (root / 'packaging/rpm/pgwrh.spec').read_text()
