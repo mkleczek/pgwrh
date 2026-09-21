@@ -14,14 +14,14 @@ comes from its matching PostgreSQL release.
 
 ## History layout
 
-The 13 functional changes form one shared graph rooted at `fdw_patch_base`,
+The 15 functional changes form one shared graph rooted at `fdw_patch_base`,
 the common upstream ancestor `f001c8a7943425e12cf4d0498a82837acf722eb6`.
 They apply to the filtered tree at the repository root, retaining upstream
 C/header filenames and regression-test paths. Each change contains its
 implementation and tests. Dependencies remain explicit; the SCRAM verifier
 change is independent of the routing changes.
 
-Each aggregate has 14 direct parents: the same 13 shared patch commits and
+Each aggregate has 16 direct parents: the same 15 shared patch commits and
 its major's pristine upstream tip. The aggregates resolve build, SQL and export
 lists, renamed regression files and version-specific APIs. PostgreSQL 19
 adaptations belong in `fdw_base_19-`; shared behavior belongs in the common
@@ -37,7 +37,7 @@ versioned FDW sources come exclusively from the move parents.
 ```mermaid
 graph TD
     B[fdw_patch_base] --> U18[Upstream 18]
-    B --> P[13 shared functional changes]
+    B --> P[15 shared functional changes]
     B --> U19[Upstream 19]
     U18 --> A18[Aggregate 18]
     P --> A18

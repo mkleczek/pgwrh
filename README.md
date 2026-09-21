@@ -97,7 +97,8 @@ or removing the demo.
 Adding replicas can move shard copies. Placement favors retaining existing
 copies, but changes to copy counts, zone preferences or available hosts can
 require additional copying. Replication redundancy does not replace controller
-backups or a PostgreSQL high-availability plan.
+backups or a PostgreSQL high-availability plan. See [controller HA and
+failover](docs/controller-ha.md) for standby configuration and promotion checks.
 
 ## Installation
 

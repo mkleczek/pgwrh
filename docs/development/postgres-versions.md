@@ -2,12 +2,14 @@
 
 pgwrh has one main branch and one extension version across PostgreSQL majors.
 Only `pgwrh_fdw` has a separate upstream and patched aggregate per major. Both
-aggregates share the same 13 functional patch changes, based on the common
-upstream ancestor; each aggregate holds its version-specific adaptations. Their
-exact patched trees are moved into `pgwrh_fdw/18/` and `pgwrh_fdw/19/` by separate
+aggregates share the same 15 functional patch changes, based on the latest common
+18/19 upstream ancestor recorded by `fdw_patch_base`; each aggregate holds its
+version-specific adaptations. Their exact patched trees are moved into
+`pgwrh_fdw/18/` and `pgwrh_fdw/19/` by separate
 jj changes bookmarked as `fdw_base_18` and `fdw_base_19`. Each move has its
 aggregate as its sole parent, and both moves are parents of `main`. `PG_CONFIG`
-selects the matching implementation. SQL, UI and the wait extension stay shared.
+selects the matching implementation. SQL, UI, wait and GiST extensions stay shared,
+with C API differences handled conditionally.
 See the [FDW workflow](../../pgwrh_fdw/UPSTREAM.md) for updating shared patches or one major.
 
 | Target | FDW source | Status |
@@ -30,8 +32,8 @@ nix develop .#tests-19 --command make test-fdw test-packaging
 nix build .#postgresql-19
 ```
 
-Use `18` for the other major. Both run the same core, logical-replication wait
-and real PostgREST UI tests. Each FDW also runs its own retained upstream tests,
+Use `18` for the other major. Both run the same core, logical-replication wait,
+GiST and real PostgREST UI tests. Each FDW also runs its own retained upstream tests,
 SCRAM TAP tests and symbol isolation check. Native binaries are rebuilt for each
 server major; one major's library cannot be reused with another.
 

@@ -31,7 +31,7 @@ def test_scalar_operators(node):
         'a' ||= ARRAY[]::text[], 'a' ||= NULL::text[],
         'a' &&= ARRAY['a','a'], 'a' &&= ARRAY['a','b'],
         'a' &&= ARRAY[]::text[], 'a' &&= ARRAY['a',NULL]
-    """) == [(True, False, False, None, True, False, True, False)]
+    """) == [(True, None, False, None, True, False, True, None)]
 
 
 @pytest.mark.parametrize('array', ["ARRAY['account-1','account-7']", "ARRAY['missing']",

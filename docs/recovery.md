@@ -103,11 +103,11 @@ any: remove a stale slot only after fencing its old consumer. If other replicas
 cannot serve the required shards, keep reads paused until the replacement is
 ready.
 
-For a **physical controller failover**, use a tested PostgreSQL
-high-availability procedure that preserves the needed logical slots and WAL
-continuity. pgwrh does not elect or fence controllers. If continuity cannot be
-established, follow the replica rebuild path above instead of trusting
-pre-failover reports.
+For a **physical controller failover**, follow the [controller HA
+guide](controller-ha.md) to configure a streaming standby, synchronize logical
+slots and check readiness before promotion. pgwrh does not elect or fence
+controllers. If slot and WAL continuity cannot be established, follow the
+replica rebuild path above instead of trusting pre-failover reports.
 
 For an **interrupted rollout**, use the [readiness
 checks](overview.md#configuration-and-rollouts). Inspect

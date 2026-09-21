@@ -23,4 +23,7 @@ statement_timeout = '15s'
         server.start()
         with server.connect(autocommit=True) as connection:
             connection.execute('CREATE EXTENSION pgwrh_gist_extra CASCADE')
-            yield connection
+            try:
+                yield connection
+            finally:
+                print(Path(server.pg_log_file).read_text())
