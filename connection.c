@@ -207,10 +207,11 @@ static bool pgfdw_conn_checkable(void);
 static bool pgfdw_has_required_scram_options(const char **keywords, const char **values);
 
 /* Inspect only: never connect to, initialize, or drain unselected members. */
-static PgwrhFdwConnectionRank
-rank_cached_connection(Oid umid)
+PgwrhFdwConnectionRank
+pgwrh_fdw_rank_cached_connection(Oid umid)
 {
-	ConnCacheEntry *entry = hash_search(ConnectionHash, &umid, HASH_FIND, NULL);
+	ConnCacheEntry *entry = ConnectionHash ?
+		hash_search(ConnectionHash, &umid, HASH_FIND, NULL) : NULL;
 
 	if (entry == NULL || entry->conn == NULL)
 		return PGWRH_FDW_CONNECTION_NEW;
@@ -278,7 +279,7 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 	xact_got_connection = true;
 
 	/* Resolve aliases before entering the unchanged physical connection cache. */
-	user = pgwrh_fdw_resolve_virtual_mapping(user, rank_cached_connection, &binding);
+	user = pgwrh_fdw_resolve_virtual_mapping(user, pgwrh_fdw_rank_cached_connection, &binding);
 
 	/* Create hash key for the entry.  Assume no pad bytes in key struct */
 	key = user->umid;

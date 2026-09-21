@@ -48,6 +48,7 @@
 #include "pgstat.h"
 #include "postgres_fdw.h"
 #include "statistics/statistics.h"
+#include "virtual.h"
 #include "storage/latch.h"
 #include "utils/builtins.h"
 #include "utils/float.h"
@@ -3256,7 +3257,11 @@ estimate_path_cost_size(PlannerInfo *root,
 								false, &retrieved_attrs, NULL);
 
 		/* Get the remote estimate */
-		conn = GetConnection(fpinfo->user, false, NULL);
+		if (pgwrh_fdw_is_virtual_server(fpinfo->server->serverid))
+			conn = pgwrh_fdw_group_connection(list_make1_oid(fpinfo->server->serverid),
+											fpinfo->user->userid, NULL, false);
+		else
+			conn = GetConnection(fpinfo->user, false, NULL);
 		get_remote_estimate(sql.data, conn, &rows, &width,
 							&startup_cost, &total_cost);
 		ReleaseConnection(conn);
