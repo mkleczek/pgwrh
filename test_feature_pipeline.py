@@ -27,6 +27,8 @@ class WireProxy:
         self.condition = threading.Condition()
         self.commands = []
         self.connections = 0
+        self.backend_rows = 0
+        self.backend_bytes = 0
         self.workers = []
         self.thread = threading.Thread(target=self.accept, daemon=True)
         self.thread.start()
@@ -48,6 +50,7 @@ class WireProxy:
         server = socket.socket(socket.AF_UNIX)
         server.connect(self.target)
         frontend = bytearray()
+        backend = bytearray()
         startup = True
         client.setblocking(False)
         server.setblocking(False)
@@ -62,13 +65,26 @@ class WireProxy:
                 deadlines = [release[dest] - now for dest in peer if buffers[dest] and release[dest] > now]
                 ready, writable, _ = select.select(readers, writers, [], min([.1] + deadlines))
                 for source in ready:
-                    data = source.recv(65536)
+                    try:
+                        data = source.recv(65536)
+                    except BlockingIOError:
+                        continue
                     if not data:
                         return
                     dest = peer[source]
                     if not buffers[dest]:
                         release[dest] = time.monotonic() + self.delay / 2
                     buffers[dest].extend(data)
+                    if source is server:
+                        self.backend_bytes += len(data)
+                        backend.extend(data)
+                        while len(backend) >= 5:
+                            size = 1 + struct.unpack('!I', backend[1:5])[0]
+                            if len(backend) < size:
+                                break
+                            if backend[:1] == b'D':
+                                self.backend_rows += 1
+                            del backend[:size]
                     if source is client:
                         frontend.extend(data)
                         while True:
@@ -88,7 +104,10 @@ class WireProxy:
                                     self.commands.append((number, message[:1], sql))
                                     self.condition.notify_all()
                 for dest in writable:
-                    sent = dest.send(buffers[dest])
+                    try:
+                        sent = dest.send(buffers[dest])
+                    except BlockingIOError:
+                        continue
                     del buffers[dest][:sent]
         except (OSError, ValueError):
             pass

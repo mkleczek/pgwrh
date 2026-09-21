@@ -44,6 +44,10 @@
 #include "optimizer/tlist.h"
 #include "parser/parsetree.h"
 #include "postgres_fdw.h"
+#include "virtual.h"
+#include "join.h"
+#include "lookup_join.h"
+#include "limit_pushdown.h"
 #include "storage/latch.h"
 #include "utils/builtins.h"
 #include "utils/float.h"
@@ -56,7 +60,7 @@
 
 PG_MODULE_MAGIC_EXT(
 					.name = "pgwrh_fdw",
-					.version = PG_VERSION
+					.version = "1.0.0-alpha1"
 );
 
 /* Default CPU cost to start up a foreign query. */
@@ -83,12 +87,16 @@ enum FdwScanPrivateIndex
 	FdwScanPrivateRetrievedAttrs,
 	/* Integer representing the desired fetch_size */
 	FdwScanPrivateFetchSize,
+	/* Boolean selecting plain queries with chunked results */
+	FdwScanPrivateStreamingFetch,
 
 	/*
 	 * String describing join i.e. names of relations being joined and types
 	 * of join, added when the scan is join
 	 */
 	FdwScanPrivateRelations,
+	/* OID list of all servers whose tables the remote query reads. */
+	FdwScanPrivateServers,
 };
 
 /*
@@ -156,11 +164,15 @@ typedef struct PgFdwScanState
 	PGconn	   *conn;			/* connection for the scan */
 	PgFdwConnState *conn_state; /* extra per-connection state */
 	unsigned int cursor_number; /* quasi-unique ID for my cursor */
-	bool		cursor_exists;	/* have we created the cursor? */
+	bool		cursor_exists;	/* have we started the remote scan? */
+	bool		streaming_fetch;
+	PgFdwPendingOperation *stream_operation;
 	int			numParams;		/* number of parameters passed to query */
 	FmgrInfo   *param_flinfo;	/* output conversion functions for them */
 	List	   *param_exprs;	/* executable expressions for param values */
 	const char **param_values;	/* textual values of query parameters */
+	int lookup_nparams;
+	const char **lookup_values;
 
 	/* for storing result tuples */
 	HeapTuple  *tuples;			/* array of currently-retrieved tuples */
@@ -566,6 +578,9 @@ pgwrh_fdw_handler(PG_FUNCTION_ARGS)
 {
 	FdwRoutine *routine = makeNode(FdwRoutine);
 
+	pgwrh_fdw_join_init(postgresGetForeignJoinPaths);
+	pgwrh_fdw_lookup_init(postgresGetForeignJoinPaths);
+
 	/* Functions for scanning foreign tables */
 	routine->GetForeignRelSize = postgresGetForeignRelSize;
 	routine->GetForeignPaths = postgresGetForeignPaths;
@@ -652,6 +667,7 @@ postgresGetForeignRelSize(PlannerInfo *root,
 	/* Look up foreign-table catalog info. */
 	fpinfo->table = GetForeignTable(foreigntableid);
 	fpinfo->server = GetForeignServer(fpinfo->table->serverid);
+	fpinfo->relation_serverids = list_make1_oid(fpinfo->table->serverid);
 
 	/*
 	 * Extract user-settable option values.  Note that per-table settings of
@@ -664,6 +680,7 @@ postgresGetForeignRelSize(PlannerInfo *root,
 	fpinfo->shippable_extensions = NIL;
 	fpinfo->fetch_size = 100;
 	fpinfo->async_capable = false;
+	fpinfo->streaming_fetch = false;
 
 	apply_server_options(fpinfo);
 	apply_table_options(fpinfo);
@@ -1426,12 +1443,16 @@ postgresGetForeignPlan(PlannerInfo *root,
 	 * Build the fdw_private list that will be available to the executor.
 	 * Items in the list must match order in enum FdwScanPrivateIndex.
 	 */
-	fdw_private = list_make3(makeString(sql.data),
+	fdw_private = list_make4(makeString(sql.data),
 							 retrieved_attrs,
-							 makeInteger(fpinfo->fetch_size));
+							 makeInteger(fpinfo->fetch_size),
+							 makeBoolean(fpinfo->streaming_fetch));
 	if (IS_JOIN_REL(foreignrel) || IS_UPPER_REL(foreignrel))
+	{
 		fdw_private = lappend(fdw_private,
 							  makeString(fpinfo->relation_name));
+		fdw_private = lappend(fdw_private, fpinfo->relation_serverids);
+	}
 
 	/*
 	 * Create the ForeignScan node for the given relation.
@@ -1549,7 +1570,13 @@ postgresBeginForeignScan(ForeignScanState *node, int eflags)
 	 * Get connection to the foreign server.  Connection manager will
 	 * establish new connection if necessary.
 	 */
-	fsstate->conn = GetConnection(user, false, &fsstate->conn_state);
+	if (list_length(fsplan->fdw_private) > FdwScanPrivateServers &&
+		list_length(list_nth(fsplan->fdw_private, FdwScanPrivateServers)) > 1)
+		fsstate->conn = pgwrh_fdw_group_connection(
+			list_nth(fsplan->fdw_private, FdwScanPrivateServers),
+			userid, &fsstate->conn_state, true);
+	else
+		fsstate->conn = GetConnection(user, false, &fsstate->conn_state);
 
 	/* Assign a unique ID for my cursor */
 	fsstate->cursor_number = GetCursorNumber(fsstate->conn);
@@ -1562,6 +1589,13 @@ postgresBeginForeignScan(ForeignScanState *node, int eflags)
 												 FdwScanPrivateRetrievedAttrs);
 	fsstate->fetch_size = intVal(list_nth(fsplan->fdw_private,
 										  FdwScanPrivateFetchSize));
+
+	/* Writes, modifying CTEs and row locks retain cursor semantics. */
+	fsstate->streaming_fetch = boolVal(list_nth(fsplan->fdw_private,
+												 FdwScanPrivateStreamingFetch)) &&
+		estate->es_plannedstmt->commandType == CMD_SELECT &&
+		!estate->es_plannedstmt->hasModifyingCTE &&
+		estate->es_plannedstmt->rowMarks == NIL;
 
 	/* Create contexts for batches of tuples and per-tuple temp workspace. */
 	fsstate->batch_cxt = AllocSetContextCreate(estate->es_query_cxt,
@@ -1662,6 +1696,27 @@ postgresReScanForeignScan(ForeignScanState *node)
 	char		sql[64];
 	PGresult   *res;
 
+	if (fsstate->streaming_fetch)
+	{
+		if (!fsstate->cursor_exists)
+			return;
+		/* The first batch can be replayed without restarting the query. */
+		if (node->ss.ps.chgParam == NULL && fsstate->fetch_ct_2 <= 1 &&
+			fsstate->num_tuples > 0)
+		{
+			fsstate->next_tuple = 0;
+			return;
+		}
+		if (fsstate->stream_operation)
+			pgfdw_pipeline_stream_release(fsstate->stream_operation);
+		fsstate->stream_operation = NULL;
+		fsstate->cursor_exists = false;
+		fsstate->tuples = NULL;
+		fsstate->num_tuples = fsstate->next_tuple = fsstate->fetch_ct_2 = 0;
+		fsstate->eof_reached = false;
+		return;
+	}
+
 	/* Settle this generation before reusing the cursor or its parameters. */
 	if (fsstate->fetch_operation)
 		fetch_more_data(node);
@@ -1746,6 +1801,12 @@ postgresEndForeignScan(ForeignScanState *node)
 	if (fsstate == NULL)
 		return;
 
+	if (fsstate->stream_operation)
+	{
+		pgfdw_pipeline_stream_release(fsstate->stream_operation);
+		fsstate->stream_operation = NULL;
+	}
+
 	/* Release queued results without calling tuple input functions at shutdown. */
 	if (fsstate->declare_operation)
 	{
@@ -1759,7 +1820,7 @@ postgresEndForeignScan(ForeignScanState *node)
 	}
 
 	/* Close the cursor if open, to prevent accumulation of cursors */
-	if (fsstate->cursor_exists)
+	if (fsstate->cursor_exists && !fsstate->streaming_fetch)
 		close_cursor(fsstate->conn, fsstate->cursor_number,
 					 fsstate->conn_state);
 
@@ -3209,7 +3270,11 @@ estimate_path_cost_size(PlannerInfo *root,
 								false, &retrieved_attrs, NULL);
 
 		/* Get the remote estimate */
-		conn = GetConnection(fpinfo->user, false, NULL);
+		if (pgwrh_fdw_is_virtual_server(fpinfo->server->serverid))
+			conn = pgwrh_fdw_group_connection(fpinfo->relation_serverids,
+											fpinfo->user->userid, NULL, false);
+		else
+			conn = GetConnection(fpinfo->user, false, NULL);
 		get_remote_estimate(sql.data, conn, &rows, &width,
 							&startup_cost, &total_cost);
 		ReleaseConnection(conn);
@@ -3767,17 +3832,23 @@ ec_member_matches_foreign(PlannerInfo *root, RelOptInfo *rel,
 	return true;
 }
 
-/* Only ordinary asynchronous reads participate; writes and row locks are barriers. */
+/*
+ * Cursor-free execution follows Rafia Sabih's streaming_fetch proposal (v18,
+ * September 2026), based on an idea by Bernd Helmle.  Our adaptation preserves
+ * async execution and uses connection-owned raw buffering.  See STREAMING.md.
+ * Writes and row locks retain the cursor path.
+ */
 static bool
 scan_uses_pipeline(ForeignScanState *node)
 {
 	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
 	PlannedStmt *stmt = node->ss.ps.state->es_plannedstmt;
 
-	return fsstate->async_capable && fsstate->conn_state &&
+	return fsstate->streaming_fetch ||
+		(fsstate->async_capable && fsstate->conn_state &&
 		fsstate->conn_state->pipeline_depth > 0 &&
 		stmt->commandType == CMD_SELECT && !stmt->hasModifyingCTE &&
-		stmt->rowMarks == NIL;
+		stmt->rowMarks == NIL);
 }
 
 /*
@@ -3815,6 +3886,22 @@ create_cursor(ForeignScanState *node)
 							 values);
 
 		MemoryContextSwitchTo(oldcontext);
+	}
+
+	/* Lookup arrays belong to the custom node, never to the cached plan. */
+	for (int i = 0; i < fsstate->lookup_nparams; i++)
+		values[i] = fsstate->lookup_values[i];
+
+	if (fsstate->streaming_fetch)
+	{
+		/* Parameter evaluation may itself have used this connection. */
+		if (!pgfdw_pipeline_stream_has_room(fsstate->conn_state))
+			pgfdw_pipeline_drain(fsstate->conn_state);
+		fsstate->stream_operation = pgfdw_pipeline_stream_submit(conn,
+			fsstate->conn_state, fsstate->query, numParams, values,
+			fsstate->fetch_size);
+		fsstate->cursor_exists = true;
+		return;
 	}
 
 	/* Construct the DECLARE CURSOR command */
@@ -3893,7 +3980,18 @@ fetch_more_data(ForeignScanState *node)
 		int			numrows;
 		int			i;
 
-		if (fsstate->fetch_operation)
+		if (fsstate->streaming_fetch)
+		{
+			res = pgfdw_pipeline_stream_take(fsstate->stream_operation);
+			if (res == NULL)
+			{
+				pgfdw_pipeline_stream_release(fsstate->stream_operation);
+				fsstate->stream_operation = NULL;
+				fsstate->num_tuples = fsstate->next_tuple = 0;
+				fsstate->eof_reached = true;
+			}
+		}
+		else if (fsstate->fetch_operation)
 		{
 			if (fsstate->declare_operation)
 			{
@@ -3957,7 +4055,8 @@ fetch_more_data(ForeignScanState *node)
 			fsstate->fetch_ct_2++;
 
 		/* Must be EOF if we didn't get as many tuples as we asked for. */
-		fsstate->eof_reached = (numrows < fsstate->fetch_size);
+		if (!fsstate->streaming_fetch)
+			fsstate->eof_reached = (numrows < fsstate->fetch_size);
 	}
 	PG_FINALLY();
 	{
@@ -5909,6 +6008,32 @@ foreign_join_ok(PlannerInfo *root, RelOptInfo *joinrel, JoinType jointype,
 	if (fpinfo_o->local_conds || fpinfo_i->local_conds)
 		return false;
 
+	/* Check the full intersection, also when core calls us for a larger join. */
+	{
+		List *servers = list_union_oid(fpinfo_o->relation_serverids,
+									  fpinfo_i->relation_serverids);
+
+		if (list_length(servers) > 1)
+		{
+			Oid userid = OidIsValid(joinrel->userid) ? joinrel->userid : GetUserId();
+			List *targets;
+
+			/* Cross-server writes and EPQ require additional routing work. */
+			if (root->parse->commandType != CMD_SELECT || root->rowMarks ||
+				fpinfo_o->server->fdwid != fpinfo_i->server->fdwid ||
+				!equal(fpinfo_o->shippable_extensions, fpinfo_i->shippable_extensions) ||
+				!pgwrh_fdw_join_isolated(root, joinrel, servers))
+				return false;
+			targets = pgwrh_fdw_common_targets(servers, userid);
+			if (targets == NIL)
+				return false;
+			list_free(targets);
+			/* Eligibility depends on the effective user's mappings and ACLs. */
+			root->glob->dependsOnRole = true;
+		}
+		list_free(servers);
+	}
+
 	/*
 	 * Merge FDW options.  We might be tempted to do this after we have deemed
 	 * the foreign join to be OK.  But we must do this beforehand so that we
@@ -6331,6 +6456,8 @@ apply_server_options(PgFdwRelationInfo *fpinfo)
 			(void) parse_int(defGetString(def), &fpinfo->fetch_size, 0, NULL);
 		else if (strcmp(def->defname, "async_capable") == 0)
 			fpinfo->async_capable = defGetBoolean(def);
+		else if (strcmp(def->defname, "streaming_fetch") == 0)
+			fpinfo->streaming_fetch = defGetBoolean(def);
 	}
 }
 
@@ -6354,6 +6481,8 @@ apply_table_options(PgFdwRelationInfo *fpinfo)
 			(void) parse_int(defGetString(def), &fpinfo->fetch_size, 0, NULL);
 		else if (strcmp(def->defname, "async_capable") == 0)
 			fpinfo->async_capable = defGetBoolean(def);
+		else if (strcmp(def->defname, "streaming_fetch") == 0)
+			fpinfo->streaming_fetch = defGetBoolean(def);
 	}
 }
 
@@ -6374,9 +6503,9 @@ merge_fdw_options(PgFdwRelationInfo *fpinfo,
 	/* We must always have fpinfo_o. */
 	Assert(fpinfo_o);
 
-	/* fpinfo_i may be NULL, but if present the servers must both match. */
+	/* Cross-server inputs have already passed the common-target safety check. */
 	Assert(!fpinfo_i ||
-		   fpinfo_i->server->serverid == fpinfo_o->server->serverid);
+		   fpinfo_i->server->fdwid == fpinfo_o->server->fdwid);
 
 	/*
 	 * Copy the server specific FDW options.  (For a join, both relations come
@@ -6389,10 +6518,16 @@ merge_fdw_options(PgFdwRelationInfo *fpinfo,
 	fpinfo->use_remote_estimate = fpinfo_o->use_remote_estimate;
 	fpinfo->fetch_size = fpinfo_o->fetch_size;
 	fpinfo->async_capable = fpinfo_o->async_capable;
+	fpinfo->streaming_fetch = fpinfo_o->streaming_fetch;
+	fpinfo->relation_serverids = fpinfo_i ?
+		list_union_oid(fpinfo_o->relation_serverids, fpinfo_i->relation_serverids) :
+		list_copy(fpinfo_o->relation_serverids);
 
 	/* Merge the table level options from either side of the join. */
 	if (fpinfo_i)
 	{
+		fpinfo->fdw_startup_cost = Max(fpinfo->fdw_startup_cost, fpinfo_i->fdw_startup_cost);
+		fpinfo->fdw_tuple_cost = Max(fpinfo->fdw_tuple_cost, fpinfo_i->fdw_tuple_cost);
 		/*
 		 * We'll prefer to use remote estimates for this join if any table
 		 * from either side of the join is using remote estimates.  This is
@@ -6420,6 +6555,8 @@ merge_fdw_options(PgFdwRelationInfo *fpinfo,
 		 */
 		fpinfo->async_capable = fpinfo_o->async_capable ||
 			fpinfo_i->async_capable;
+		fpinfo->streaming_fetch = fpinfo_o->streaming_fetch ||
+			fpinfo_i->streaming_fetch;
 	}
 }
 
@@ -6587,6 +6724,27 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel,
 	/* We currently don't support pushing Grouping Sets. */
 	if (query->groupingSets)
 		return false;
+
+	/*
+	 * The partial target can omit redundant GROUP BY entries.  Our deparser
+	 * emits the original clause (also preserving empty-input semantics for a
+	 * constant grouping key), so leave such shapes to local aggregation.
+	 */
+	if (fpinfo->stage == UPPERREL_PARTIAL_GROUP_AGG)
+	{
+		foreach(lc, query->groupClause)
+		{
+			SortGroupClause *grp = lfirst_node(SortGroupClause, lc);
+			bool		found = false;
+
+			for (i = 0; i < list_length(grouping_target->exprs); i++)
+				if (get_pathtarget_sortgroupref(grouping_target, i) ==
+					grp->tleSortGroupRef)
+					found = true;
+			if (!found)
+				return false;
+		}
+	}
 
 	/* Get the fpinfo of the underlying scan relation. */
 	ofpinfo = (PgFdwRelationInfo *) fpinfo->outerrel->fdw_private;
@@ -6808,6 +6966,38 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel,
 }
 
 /*
+ * Only our own simple foreign scans can consume an ancestor's tuple bound.
+ * A local qual would reject rows after the remote LIMIT and could underfill
+ * the result. Ordinary prepared-statement parameters are fine; parameterized
+ * join paths and foreign joins/upper paths are deliberately left alone.
+ */
+Path *
+pgwrh_fdw_limit_foreign_path(PlannerInfo *root, ForeignPath *path)
+{
+	RelOptInfo *rel = path->path.parent;
+	PgFdwRelationInfo *fpinfo;
+	ForeignPath *result;
+
+	if (!IS_SIMPLE_REL(rel) || !rel->fdwroutine ||
+		rel->fdwroutine->GetForeignPlan != postgresGetForeignPlan ||
+		path->path.param_info != NULL || path->fdw_outerpath != NULL ||
+		path->fdw_restrictinfo != NIL)
+		return &path->path;
+	fpinfo = (PgFdwRelationInfo *) rel->fdw_private;
+	if (!fpinfo || fpinfo->local_conds != NIL ||
+		!is_foreign_expr(root, rel, (Expr *) root->parse->limitCount))
+		return &path->path;
+	/* Existing final/ordered paths already carry their own pushdown state. */
+	if (path->fdw_private != NIL)
+		return &path->path;
+
+	result = makeNode(ForeignPath);
+	*result = *path;
+	result->fdw_private = list_make2(makeBoolean(false), makeBoolean(true));
+	return &result->path;
+}
+
+/*
  * postgresGetForeignUpperPaths
  *		Add paths for post-join operations like aggregation, grouping etc. if
  *		corresponding operations are safe to push down.
@@ -6829,6 +7019,7 @@ postgresGetForeignUpperPaths(PlannerInfo *root, UpperRelationKind stage,
 
 	/* Ignore stages we don't support; and skip any duplicate calls. */
 	if ((stage != UPPERREL_GROUP_AGG &&
+		 stage != UPPERREL_PARTIAL_GROUP_AGG &&
 		 stage != UPPERREL_ORDERED &&
 		 stage != UPPERREL_FINAL) ||
 		output_rel->fdw_private)
@@ -6842,6 +7033,7 @@ postgresGetForeignUpperPaths(PlannerInfo *root, UpperRelationKind stage,
 	switch (stage)
 	{
 		case UPPERREL_GROUP_AGG:
+		case UPPERREL_PARTIAL_GROUP_AGG:
 			add_foreign_grouping_paths(root, input_rel, output_rel,
 									   (GroupPathExtraData *) extra);
 			break;
@@ -6885,7 +7077,13 @@ add_foreign_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 		!root->hasHavingQual)
 		return;
 
-	Assert(extra->patype == PARTITIONWISE_AGGREGATE_NONE ||
+	/* Only core-requested partial partitionwise aggregation is supported. */
+	if (fpinfo->stage == UPPERREL_PARTIAL_GROUP_AGG &&
+		extra->patype != PARTITIONWISE_AGGREGATE_PARTIAL)
+		return;
+
+	Assert(fpinfo->stage == UPPERREL_PARTIAL_GROUP_AGG ||
+		   extra->patype == PARTITIONWISE_AGGREGATE_NONE ||
 		   extra->patype == PARTITIONWISE_AGGREGATE_FULL);
 
 	/* save the input_rel as outerrel in fpinfo */
@@ -6906,7 +7104,14 @@ add_foreign_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	 * Use HAVING qual from extra. In case of child partition, it will have
 	 * translated Vars.
 	 */
-	if (!foreign_grouping_ok(root, grouped_rel, extra->havingQual))
+	/*
+	 * Core's partial target already includes the partial Aggrefs needed by
+	 * HAVING.  Evaluate HAVING only after combining all partitions, never on
+	 * the remote results or as a local qual of this partial ForeignScan.
+	 */
+	if (!foreign_grouping_ok(root, grouped_rel,
+							 fpinfo->stage == UPPERREL_PARTIAL_GROUP_AGG ?
+							 NULL : extra->havingQual))
 		return;
 
 	/*
@@ -7622,6 +7827,18 @@ fetch_more_data_begin(AsyncRequest *areq)
 	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
 	char		sql[64];
 
+	if (fsstate->streaming_fetch)
+	{
+		if (fsstate->cursor_exists)
+			return;
+		if (fsstate->conn_state->pendingAreq)
+			process_pending_request(fsstate->conn_state->pendingAreq);
+		if (!pgfdw_pipeline_stream_has_room(fsstate->conn_state))
+			return;
+		create_cursor(node);
+		return;
+	}
+
 	if (scan_uses_pipeline(node))
 	{
 		if (fsstate->fetch_operation)
@@ -7665,6 +7882,27 @@ pipeline_fetch_ready(AsyncRequest *areq)
 {
 	ForeignScanState *node = (ForeignScanState *) areq->requestee;
 	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
+
+	if (fsstate->streaming_fetch)
+	{
+		if (fsstate->next_tuple < fsstate->num_tuples || fsstate->eof_reached)
+			return true;
+		if (!fsstate->cursor_exists)
+		{
+			fetch_more_data_begin(areq);
+			if (!fsstate->cursor_exists)
+			{
+				/* Advance predecessors to make admission possible. */
+				pgfdw_pipeline_process(fsstate->conn_state);
+				fetch_more_data_begin(areq);
+			}
+		}
+		if (!fsstate->stream_operation ||
+			!pgfdw_pipeline_stream_ready(fsstate->stream_operation))
+			return false;
+		fetch_more_data(node);
+		return true;
+	}
 
 	pgfdw_pipeline_process(fsstate->conn_state);
 	if (fsstate->next_tuple < fsstate->num_tuples || fsstate->eof_reached)
@@ -8147,4 +8385,43 @@ get_batch_size_option(Relation rel)
 	}
 
 	return batch_size;
+}
+
+/* Start only a selected lookup destination, through the normal FDW lifecycle. */
+void
+pgwrh_fdw_lookup_start(ForeignScanState *node, int nparams, const char **values)
+{
+    PgFdwScanState *state;
+
+    if (!node->fdw_state)
+        postgresBeginForeignScan(node, 0);
+    state = node->fdw_state;
+    Assert(nparams <= state->numParams);
+    state->lookup_nparams = nparams;
+    state->lookup_values = values;
+}
+
+/* A changed lookup invalidates a cursor even when its SQL parameters are Consts. */
+void
+pgwrh_fdw_lookup_reset(ForeignScanState *node)
+{
+    PgFdwScanState *state = node->fdw_state;
+
+    if (!state)
+        return;
+    if (state->stream_operation)
+    {
+        pgfdw_pipeline_stream_release(state->stream_operation);
+        state->stream_operation = NULL;
+    }
+    if (state->cursor_exists && !state->streaming_fetch)
+        close_cursor(state->conn, state->cursor_number, state->conn_state);
+    state->cursor_exists = false;
+    state->tuples = NULL;
+    state->num_tuples = state->next_tuple = state->fetch_ct_2 = 0;
+    state->eof_reached = false;
+    state->lookup_nparams = 0;
+    state->lookup_values = NULL;
+    ExecClearTuple(node->ss.ss_ScanTupleSlot);
+    MemoryContextReset(state->batch_cxt);
 }

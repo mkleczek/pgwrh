@@ -25,6 +25,10 @@
 #include "commands/extension.h"
 #include "libpq/libpq-be.h"
 #include "postgres_fdw.h"
+#include "lookup_join.h"
+#include "transaction_context.h"
+#include "virtual.h"
+#include "limit_pushdown.h"
 #include "utils/guc.h"
 #include "utils/varlena.h"
 
@@ -124,10 +128,12 @@ pgwrh_fdw_validator(PG_FUNCTION_ARGS)
 		/*
 		 * Validate option value, when we can do so without any context.
 		 */
-		if (strcmp(def->defname, "use_remote_estimate") == 0 ||
+		if (strcmp(def->defname, "lookup_join") == 0 ||
+			strcmp(def->defname, "use_remote_estimate") == 0 ||
 			strcmp(def->defname, "updatable") == 0 ||
 			strcmp(def->defname, "truncatable") == 0 ||
 			strcmp(def->defname, "async_capable") == 0 ||
+			strcmp(def->defname, "streaming_fetch") == 0 ||
 			strcmp(def->defname, "parallel_commit") == 0 ||
 			strcmp(def->defname, "parallel_abort") == 0 ||
 			strcmp(def->defname, "keep_connections") == 0)
@@ -161,10 +167,29 @@ pgwrh_fdw_validator(PG_FUNCTION_ARGS)
 						 errmsg("\"%s\" must be a floating point value greater than or equal to zero",
 								def->defname)));
 		}
+		else if (strcmp(def->defname, "transaction_parameters") == 0)
+		{
+			list_free_deep(pgwrh_fdw_parse_parameters(defGetString(def)));
+		}
 		else if (strcmp(def->defname, "extensions") == 0)
 		{
 			/* check list syntax, warn about uninstalled extensions */
 			(void) ExtractExtensionList(defGetString(def), true);
+		}
+		else if (strcmp(def->defname, "load_balance_weight") == 0)
+		{
+			char	   *value = defGetString(def);
+			char	   *end;
+			long		weight;
+
+			errno = 0;
+			weight = strtol(value, &end, 10);
+			if (errno != 0 || end == value || *end != '\0' ||
+				weight < 1 || weight > INT_MAX)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("\"%s\" must be an integer between 1 and %d",
+								def->defname, INT_MAX)));
 		}
 		else if (strcmp(def->defname, "pipeline_depth") == 0)
 		{
@@ -247,6 +272,7 @@ pgwrh_fdw_validator(PG_FUNCTION_ARGS)
 		}
 	}
 
+	pgwrh_fdw_validate_virtual_options(options_list, catalog);
 	PG_RETURN_VOID();
 }
 
@@ -262,8 +288,12 @@ InitPgFdwOptions(void)
 
 	/* non-libpq FDW-specific FDW options */
 	static const PgFdwOption non_libpq_options[] = {
+		{"members", ForeignServerRelationId, false},
+		{"load_balance_weight", ForeignServerRelationId, false},
+		{"transaction_parameters", ForeignServerRelationId, false},
 		{"schema_name", ForeignTableRelationId, false},
 		{"table_name", ForeignTableRelationId, false},
+		{"lookup_join", ForeignTableRelationId, false},
 		{"column_name", AttributeRelationId, false},
 		/* use_remote_estimate is available on both server and table */
 		{"use_remote_estimate", ForeignServerRelationId, false},
@@ -289,6 +319,8 @@ InitPgFdwOptions(void)
 		{"async_capable", ForeignServerRelationId, false},
 		{"pipeline_depth", ForeignServerRelationId, false},
 		{"async_capable", ForeignTableRelationId, false},
+		{"streaming_fetch", ForeignServerRelationId, false},
+		{"streaming_fetch", ForeignTableRelationId, false},
 		{"parallel_commit", ForeignServerRelationId, false},
 		{"parallel_abort", ForeignServerRelationId, false},
 		{"keep_connections", ForeignServerRelationId, false},
@@ -550,7 +582,7 @@ process_pgfdw_appname(const char *appname)
 				appendStringInfoString(&buf, application_name);
 				break;
 			case 'c':
-				appendStringInfo(&buf, INT64_HEX_FORMAT ".%x", MyStartTime, MyProcPid);
+				appendStringInfo(&buf, "%" PRIx64 ".%x", MyStartTime, MyProcPid);
 				break;
 			case 'C':
 				appendStringInfoString(&buf, cluster_name);
@@ -595,6 +627,9 @@ process_pgfdw_appname(const char *appname)
 void
 _PG_init(void)
 {
+	pgwrh_fdw_context_init();
+	pgwrh_fdw_init_limit_pushdown();
+
 	/*
 	 * Unlike application_name GUC, don't set GUC_IS_NAME flag nor check_hook
 	 * to allow pgwrh_fdw.application_name to be any string more than
@@ -614,5 +649,6 @@ _PG_init(void)
 							   NULL,
 							   NULL);
 
+	pgwrh_fdw_lookup_init(NULL);
 	MarkGUCPrefixReserved("pgwrh_fdw");
 }

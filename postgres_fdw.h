@@ -92,11 +92,13 @@ typedef struct PgFdwRelationInfo
 	Cost		fdw_tuple_cost;
 	List	   *shippable_extensions;	/* OIDs of shippable extensions */
 	bool		async_capable;
+	bool		streaming_fetch; /* plain query with chunked results */
 
 	/* Cached catalog information. */
 	ForeignTable *table;
 	ForeignServer *server;
 	UserMapping *user;			/* only set in use_remote_estimate mode */
+	List	   *relation_serverids; /* all inputs of a remote scan/join */
 
 	int			fetch_size;		/* fetch size for this remote table */
 
@@ -194,6 +196,13 @@ extern void pgfdw_report_error(int elevel, PGresult *res, PGconn *conn,
 extern PgFdwPendingOperation *pgfdw_pipeline_submit(PGconn *conn,
     PgFdwConnState *state, const char *sql, int nparams,
     const char *const *values, ExecStatusType expected, const char *error_sql);
+extern PgFdwPendingOperation *pgfdw_pipeline_stream_submit(PGconn *conn,
+	PgFdwConnState *state, const char *sql, int nparams,
+	const char *const *values, int chunk_size);
+extern bool pgfdw_pipeline_stream_has_room(PgFdwConnState *state);
+extern bool pgfdw_pipeline_stream_ready(PgFdwPendingOperation *op);
+extern PGresult *pgfdw_pipeline_stream_take(PgFdwPendingOperation *op);
+extern void pgfdw_pipeline_stream_release(PgFdwPendingOperation *op);
 extern void pgfdw_pipeline_sync(PGconn *conn, PgFdwConnState *state);
 extern void pgfdw_pipeline_process(PgFdwConnState *state);
 extern bool pgfdw_pipeline_has_room(PgFdwConnState *state);

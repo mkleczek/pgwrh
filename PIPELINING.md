@@ -31,8 +31,9 @@ Virtual pgwrh servers use the depth of the selected member server. Configure the
 option on ordinary member servers. Existing routing and transaction-context
 setup take place before any command is queued.
 
-This feature retains SQL cursors. Cursor-free result streaming and its remote
-parallel-plan benefits are separate work. All additions are AGPL-3.0-only.
+This feature retains SQL cursors. The optional [cursor-free streaming feature](STREAMING.md) builds on the same
+transport and enables remote parallel plans. With streaming enabled, the depth
+limits the combined number of in-flight FETCH and SELECT operations. All additions are AGPL-3.0-only.
 
 ## Validation and measurement
 
