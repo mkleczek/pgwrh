@@ -4,7 +4,8 @@ let
   xpg = callPackage ./nix/xpg.nix { inherit fetchFromGitHub; };
   testgres = callPackage ./nix/testgres.nix {};
 
-  postgresql = postgresql_18.withPackages (ps: [ ps.pg_background ]);
+  background = callPackage ./nix/pg-background.nix { postgresql = postgresql_18; };
+  postgresql = postgresql_18.withPackages (ps: [ background ]);
 
   pythonEnv = python3.withPackages (ps: [
     ps.pytest
