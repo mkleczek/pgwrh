@@ -39,3 +39,34 @@ GiST emits NULL ordering values last. A native-order adapter must therefore
 either request NULLS LAST or prove that a requested NULLS FIRST column cannot
 contain NULLs. Merely labeling an existing IndexPath with native pathkeys is
 incorrect: its child plan must retain its real `<#` ordering expressions.
+
+## Native ORDER BY
+
+Load the module in every backend that plans these scans, either with
+`LOAD 'pgwrh_gist_extra'` or through `session_preload_libraries` (or
+`shared_preload_libraries`). Installing the extension loads it in the current
+session only. Then ordinary column ordering can use these operator classes:
+
+```sql
+CREATE INDEX transactions_order ON transactions USING gist
+    (transaction_date pgwrh_gist_date_order_ops, id pgwrh_gist_int8_order_ops);
+SELECT * FROM transactions ORDER BY transaction_date DESC, id DESC LIMIT 50;
+```
+
+The adapter offers a costed `Custom Scan (pgwrh GiST ordered scan)` over a normal
+GiST Index Scan or Index Only Scan. It preserves the original ORDER BY pathkeys
+for partition planning, while the child keeps its real ordering expressions.
+Core PostgreSQL still selects index conditions, checks partial-index predicates,
+applies filters, checks heap visibility, and handles lossy index rechecks.
+No predicate is removed or rewritten.
+
+Plain columns of the six supported scalar types can appear in any index-key
+position and in mixed directions. A usable prefix can support a subsequent
+incremental sort. NULLS FIRST requires a NOT NULL column; NULLS LAST also works
+with nullable columns. Domains, ordering expressions, other types, row-locking
+queries, and TABLESAMPLE use the ordinary planner when no supported path exists.
+The custom path is serial and does not promise backward scanning or mark/restore;
+PostgreSQL adds the required materialization for callers needing those features.
+
+`SET pgwrh_gist_extra.enable_ordered_scan = off` disables the additional paths
+for newly planned queries. Existing cached plans keep their chosen executor.

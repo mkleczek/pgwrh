@@ -15,6 +15,8 @@
 #include <common/hashfn.h>
 #include <access/reloptions.h>
 
+#include "ordered_scan.h"
+
 PG_MODULE_MAGIC;
 
 PG_FUNCTION_INFO_V1(pgwrh_gist_text_any_eq_array);
@@ -33,6 +35,7 @@ _PG_init(void)
     /* Resolve the prerequisite module through PostgreSQL on every platform. */
     btree_text_consistent = load_external_function("$libdir/btree_gist",
                                                   "gbt_text_consistent", true, NULL);
+    pgwrh_gist_ordered_scan_init();
 }
 
 #define GbtExtraAnyEqStrategyNumber RTContainsStrategyNumber
