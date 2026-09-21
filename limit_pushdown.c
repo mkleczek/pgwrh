@@ -7,6 +7,7 @@
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/optimizer.h"
+#include "optimizer/paths.h"
 #include "optimizer/planner.h"
 #include "utils/guc.h"
 
@@ -42,13 +43,14 @@ limit_append_inputs(PlannerInfo *root, Path *path)
 		ListCell   *lc;
 		bool		changed = false;
 
-		if (path->pathkeys != NIL ||
-			append->first_partial_path < list_length(append->subpaths))
+		if (append->first_partial_path < list_length(append->subpaths))
 			return path;
 		foreach(lc, append->subpaths)
 		{
 			Path	   *child = lfirst(lc);
-			Path	   *limited = limit_append_inputs(root, child);
+			/* create_append_plan may insert a Sort above an unsorted child. */
+			Path	   *limited = pathkeys_contained_in(path->pathkeys, child->pathkeys)
+				? limit_append_inputs(root, child) : child;
 
 			children = lappend(children, limited);
 			changed |= limited != child;
@@ -57,6 +59,31 @@ limit_append_inputs(PlannerInfo *root, Path *path)
 			return path;
 		result = makeNode(AppendPath);
 		*result = *append;
+		result->subpaths = children;
+		return &result->path;
+	}
+	if (IsA(path, MergeAppendPath))
+	{
+		MergeAppendPath *merge = (MergeAppendPath *) path;
+		MergeAppendPath *result;
+		List	   *children = NIL;
+		ListCell   *lc;
+		bool		changed = false;
+
+		foreach(lc, merge->subpaths)
+		{
+			Path	   *child = lfirst(lc);
+			/* A Sort inserted by create_merge_append_plan is also a barrier. */
+			Path	   *limited = pathkeys_contained_in(path->pathkeys, child->pathkeys)
+				? limit_append_inputs(root, child) : child;
+
+			children = lappend(children, limited);
+			changed |= limited != child;
+		}
+		if (!changed)
+			return path;
+		result = makeNode(MergeAppendPath);
+		*result = *merge;
 		result->subpaths = children;
 		return &result->path;
 	}
@@ -97,7 +124,7 @@ limit_upper_paths(PlannerInfo *root, UpperRelationKind stage,
 	if (!enable_limit_pushdown || stage != UPPERREL_FINAL ||
 		query->commandType != CMD_SELECT || query->rowMarks ||
 		query->hasTargetSRFs || query->limitOffset || !query->limitCount ||
-		query->limitOption != LIMIT_OPTION_COUNT || root->sort_pathkeys != NIL ||
+		query->limitOption != LIMIT_OPTION_COUNT ||
 		contain_volatile_functions((Node *) query->targetList))
 		return;
 

@@ -126,9 +126,132 @@ class LimitPushdownTests(unittest.TestCase):
             self.c.sql('EXECUTE page(-1)')
         self.assertEqual(error.exception.sqlstate, '2201W')
 
+    def assert_ordered(self, query, count=2):
+        self.assert_limits(query, count=count)
+        self.assertTrue(all(' ORDER BY ' in sql for sql in self.remote_sql(query)))
+        expected = self.c.sql(query.replace('items', 'all_rows'))
+        self.assertEqual(self.c.sql(query), expected)
+        self.c.sql('SET pgwrh_fdw.enable_limit_pushdown = off')
+        self.assert_limits(query, count=count, limited=False)
+        self.assertEqual(self.c.sql(query), expected)
+        self.c.sql('SET pgwrh_fdw.enable_limit_pushdown = on')
+
+    def test_ordered_append(self):
+        for order in ['k, id', 'k DESC, id DESC']:
+            query = f'SELECT * FROM items ORDER BY {order} LIMIT 7'
+            self.assert_ordered(query)
+            self.assertIn('Append', [node['Node Type'] for node in self.nodes(self.plan(query))])
+        plan = self.plan('SELECT * FROM items ORDER BY k DESC, id DESC LIMIT 7', analyze=True)
+        scans = [node for node in self.nodes(plan) if 'Remote SQL' in node]
+        self.assertTrue(any(node['Actual Loops'] == 0 for node in scans), scans)
+
+    def test_merge_append_and_keyset(self):
+        for order in ['id, k', 'id DESC, k DESC']:
+            query = f'SELECT * FROM items ORDER BY {order} LIMIT 17'
+            self.assert_ordered(query)
+            self.assertIn('Merge Append', [node['Node Type'] for node in self.nodes(self.plan(query))])
+        self.assert_ordered('SELECT * FROM items WHERE id < 175 OR (id=175 AND k<100) '
+                            'ORDER BY id DESC, k DESC LIMIT 13')
+
+    def test_ties_and_null_ordering(self):
+        for table in ['all_rows', 'stored0', 'stored1']:
+            self.c.sql(f'UPDATE {table} SET id = CASE WHEN k%5=0 THEN NULL ELSE id%4 END')
+        for order in ['id ASC NULLS FIRST, k DESC', 'id DESC NULLS LAST, k']:
+            self.assert_ordered(f'SELECT * FROM items ORDER BY {order} LIMIT 17')
+
+    def test_generic_ordered_limit_and_runtime_pruning(self):
+        self.c.sql('SET plan_cache_mode = force_generic_plan; '
+                   'PREPARE ordered_page(bigint,int) AS '
+                   'SELECT * FROM items WHERE k >= $2 ORDER BY id, k LIMIT $1')
+        for bound, lower in [('7', 0), ('130', 0), ('3', 100), ('NULL', 170), ('0', 0)]:
+            query = f'EXECUTE ordered_page({bound},{lower})'
+            self.assert_limits(query, count=1 if lower >= 100 else 2)
+            expected = self.c.sql(f'SELECT * FROM all_rows WHERE k >= {lower} '
+                                  f'ORDER BY id, k LIMIT {bound}')
+            self.assertEqual(self.c.sql(query), expected)
+        plan = self.plan('EXECUTE ordered_page(3,100)', analyze=True)
+        self.assertTrue(any(node.get('Subplans Removed', 0) or
+                            ('Remote SQL' in node and node['Actual Loops'] == 0)
+                            for node in self.nodes(plan)), plan)
+
+    def test_nested_range_hash_partitions(self):
+        self.c.sql('DROP TABLE items; '
+                   'CREATE TABLE items(LIKE all_rows) PARTITION BY RANGE(k); '
+                   'CREATE TABLE storage(LIKE all_rows) PARTITION BY RANGE(k)')
+        for part in range(2):
+            bounds = f'FOR VALUES FROM ({part*100}) TO ({(part+1)*100})'
+            self.c.sql(f'CREATE TABLE p{part} PARTITION OF items {bounds} PARTITION BY HASH(id); '
+                       f'CREATE TABLE r{part} PARTITION OF storage {bounds} PARTITION BY HASH(id)')
+            for bucket in range(2):
+                self.c.sql(f"""
+                    CREATE TABLE r{part}_{bucket} PARTITION OF r{part}
+                      FOR VALUES WITH (MODULUS 2, REMAINDER {bucket});
+                    CREATE FOREIGN TABLE f{part}_{bucket} PARTITION OF p{part}
+                      FOR VALUES WITH (MODULUS 2, REMAINDER {bucket}) SERVER s{part}
+                      OPTIONS (schema_name 'public', table_name 'r{part}_{bucket}');
+                """)
+        self.c.sql('INSERT INTO storage SELECT * FROM all_rows')
+        self.assert_ordered('SELECT * FROM items ORDER BY k DESC, id DESC LIMIT 13', count=4)
+        self.assert_ordered('SELECT * FROM items WHERE id=ANY(ARRAY[37,74,111,148]) '
+                            'ORDER BY k DESC, id DESC LIMIT 3', count=4)
+
+    def test_with_ties_and_local_ordered_filter(self):
+        for query in [
+            'SELECT * FROM items ORDER BY id FETCH FIRST 7 ROWS WITH TIES',
+            'SELECT * FROM items WHERE local_keep(k) ORDER BY id, k LIMIT 7',
+        ]:
+            self.assert_limits(query, limited=False)
+            self.assertEqual(self.c.sql(query), self.c.sql(query.replace('items', 'all_rows')))
+
+    def test_other_fdw_is_not_modified(self):
+        database = self.c.scalar('SELECT current_database()')
+        self.c.sql(f"""
+            CREATE EXTENSION postgres_fdw;
+            CREATE SERVER native FOREIGN DATA WRAPPER postgres_fdw
+              OPTIONS (host {literal(self.cluster.path)}, port '{self.cluster.port}',
+                       dbname '{database}');
+            CREATE USER MAPPING FOR CURRENT_USER SERVER native;
+            ALTER TABLE items DETACH PARTITION f0;
+            CREATE FOREIGN TABLE native0 PARTITION OF items
+              FOR VALUES FROM (0) TO (100) SERVER native
+              OPTIONS (schema_name 'public', table_name 'stored0');
+        """)
+        query = 'SELECT * FROM items ORDER BY id, k LIMIT 17'
+        statements = self.remote_sql(query)
+        self.assertEqual(len(statements), 2, statements)
+        self.assertTrue(all((' LIMIT ' in sql) == ('stored1' in sql) for sql in statements))
+        self.assertEqual(self.c.sql(query), self.c.sql(query.replace('items', 'all_rows')))
+
+    def test_implicit_sort_barrier(self):
+        # The first input has no shippable ordering expression. A MergeAppend
+        # can insert its Sort during plan creation rather than expose SortPath.
+        query = ('SELECT k AS ordering, id FROM f0 UNION ALL '
+                 'SELECT k, id FROM f1 ORDER BY ordering, id LIMIT 11')
+        self.assert_limits(query)
+        query = ('SELECT local_keep(k)::int AS ordering, id FROM f0 UNION ALL '
+                 'SELECT k, id FROM f1 ORDER BY ordering, id LIMIT 11')
+        self.assertIn('Merge Append', [node['Node Type'] for node in self.nodes(self.plan(query))])
+        statements = self.remote_sql(query)
+        self.assertEqual(len(statements), 2, statements)
+        self.assertTrue(any(' LIMIT ' not in sql for sql in statements), statements)
+        self.c.sql('SET pgwrh_fdw.enable_limit_pushdown = off')
+        expected = self.c.sql(query)
+        self.c.sql('SET pgwrh_fdw.enable_limit_pushdown = on')
+        self.assertEqual(self.c.sql(query), expected)
+
+    def test_safe_sibling_of_local_filter(self):
+        query = ('SELECT * FROM f0 WHERE local_keep(k) UNION ALL '
+                 'SELECT * FROM f1 ORDER BY id, k LIMIT 7')
+        statements = self.remote_sql(query)
+        self.assertEqual(len(statements), 2, statements)
+        self.assertTrue(all((' LIMIT ' in sql) == ('stored1' in sql) for sql in statements))
+        self.assertEqual(self.c.sql(query),
+                         self.c.sql('SELECT * FROM all_rows WHERE k>=100 ORDER BY id, k LIMIT 7'))
+
     def test_filter_join_aggregate_and_sort_barriers(self):
         for query in [
             'SELECT * FROM items LIMIT 7 OFFSET 3',
+            'SELECT * FROM items ORDER BY id, k LIMIT 7 OFFSET 0',
             'SELECT DISTINCT label FROM items ORDER BY label LIMIT 7',
             'SELECT label, count(*) FROM items GROUP BY label ORDER BY label LIMIT 3',
             'SELECT *, count(*) OVER () FROM items LIMIT 3',
