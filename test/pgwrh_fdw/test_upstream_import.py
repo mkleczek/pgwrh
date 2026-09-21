@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Exercise filtered upstream updates and subsequent subtree integration."""
+"""Exercise pristine upstream imports while retaining shared patches and layouts."""
 import os
 from pathlib import Path
 import shutil
@@ -17,7 +17,7 @@ class UpstreamImportTests(unittest.TestCase):
         result = subprocess.run(['git', '-C', str(repo), *args], text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 env=dict(os.environ, FILTER_BRANCH_SQUELCH_WARNING='1'))
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return result.stdout.strip()
 
     def init(self, path):
@@ -30,6 +30,15 @@ class UpstreamImportTests(unittest.TestCase):
         self.git(repo, 'add', '.')
         self.git(repo, 'commit', '-m', message)
         return self.git(repo, 'rev-parse', 'HEAD')
+
+    def move(self, aggregate, major, branch):
+        self.git(self.filtered, 'switch', '-c', branch, aggregate)
+        entries = [entry for entry in self.filtered.iterdir() if entry.name != '.git']
+        destination = self.filtered / 'pgwrh_fdw' / str(major)
+        destination.mkdir(parents=True)
+        for entry in entries:
+            entry.rename(destination / entry.name)
+        return self.commit(self.filtered, f'Move PostgreSQL {major} FDW')
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='fdw-import-test-')
@@ -53,17 +62,17 @@ class UpstreamImportTests(unittest.TestCase):
         with (self.filtered / 'postgres_fdw.c').open('a') as f:
             f.write('/* local patch */\n')
         self.patch = self.commit(self.filtered, 'Shared FDW behavior')
-        self.base = self.git(self.filtered, 'commit-tree', 'HEAD^{tree}', '-p', self.old_upstream,
-                             '-p', self.patch, '-m', 'Collect the functional patches')
-        self.git(self.filtered, 'branch', 'fdw_base_18', self.base)
+        aggregate18 = self.git(self.filtered, 'commit-tree', 'HEAD^{tree}', '-p', self.old_upstream,
+                               '-p', self.patch, '-m', 'Collect the functional patches')
+        self.base = self.move(aggregate18, 18, 'fdw_base_18')
         self.git(self.filtered, 'switch', '-c', 'pg19-upstream', self.old_upstream)
         (self.filtered / 'pg19-only.c').write_text('/* other major must stay unchanged */\n')
         upstream19 = self.commit(self.filtered, 'PostgreSQL 19 upstream')
         self.git(self.filtered, 'merge', '--no-ff', self.patch, '-m', 'Share the same patch with PostgreSQL 19')
-        self.base19 = self.git(self.filtered, 'rev-parse', 'HEAD')
-        self.assertEqual(set(self.git(self.filtered, 'show', '-s', '--format=%P', self.base19).split()),
+        self.aggregate19 = self.git(self.filtered, 'rev-parse', 'HEAD')
+        self.assertEqual(set(self.git(self.filtered, 'show', '-s', '--format=%P', self.aggregate19).split()),
                          {upstream19, self.patch})
-        self.git(self.filtered, 'branch', 'fdw_base_19', self.base19)
+        self.base19 = self.move(self.aggregate19, 19, 'fdw_base_19')
         self.git(self.filtered, 'switch', 'main')
         self.init(self.repo)
         (self.repo / 'README').write_text('unrelated project data\n')
@@ -71,8 +80,11 @@ class UpstreamImportTests(unittest.TestCase):
         self.git(self.repo, 'fetch', str(self.filtered), 'fdw_base_18:refs/heads/fdw_base_18',
                  'fdw_base_19:refs/heads/fdw_base_19')
         self.git(self.repo, 'branch', 'upstream/postgres_fdw', self.old_upstream)
-        self.git(self.repo, 'subtree', 'add', '--prefix=pgwrh_fdw/18', 'fdw_base_18')
-        self.git(self.repo, 'subtree', 'add', '--prefix=pgwrh_fdw/19', 'fdw_base_19')
+        # Keep these importer fixtures Git-only. The jj workflow is exercised
+        # separately; disabling Git rename detection preserves both directories.
+        self.git(self.repo, '-c', 'merge.renames=false', 'merge', '--allow-unrelated-histories',
+                 '--no-ff', 'fdw_base_18', '-m', 'Integrate PostgreSQL 18')
+        self.git(self.repo, '-c', 'merge.renames=false', 'merge', '--no-ff', 'fdw_base_19', '-m', 'Integrate PostgreSQL 19')
         self.script = self.repo / 'pgwrh_fdw/tools/import-upstream.py'
         self.script.parent.mkdir(parents=True)
         shutil.copyfile(IMPORTER, self.script)
@@ -85,7 +97,7 @@ class UpstreamImportTests(unittest.TestCase):
         return subprocess.run([sys.executable, str(self.script), str(source or self.pg), tag],
                               text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-    def test_updates_only_upstream_and_reuses_shared_patch_in_subtree(self):
+    def test_updates_only_upstream_and_reuses_shared_patch_in_layout(self):
         (self.repo / 'README').write_text('uncommitted project work\n')
         before_status = self.git(self.repo, 'status', '--porcelain')
         result = self.run_import()
@@ -102,17 +114,18 @@ class UpstreamImportTests(unittest.TestCase):
         self.git(self.filtered, 'switch', '-c', 'next-fdw', 'next-upstream')
         self.git(self.filtered, 'merge', '--no-ff', self.patch, '-m', 'Merge upstream with the shared patch')
         next_parents = set(self.git(self.filtered, 'show', '-s', '--format=%P', 'next-fdw').split())
-        parents19 = set(self.git(self.filtered, 'show', '-s', '--format=%P', self.base19).split())
+        parents19 = set(self.git(self.filtered, 'show', '-s', '--format=%P', self.aggregate19).split())
         self.assertEqual(next_parents & parents19, {self.patch})
         self.assertIn(self.git(self.filtered, 'rev-parse', 'next-upstream'), next_parents)
-        self.git(self.repo, 'fetch', str(self.filtered), 'next-fdw:refs/heads/next-fdw')
+        self.move('next-fdw', 18, 'next-layout')
+        self.git(self.repo, 'fetch', str(self.filtered), 'next-layout:refs/heads/next-layout')
         self.git(self.repo, 'restore', 'README')
-        self.git(self.repo, 'subtree', 'merge', '--prefix=pgwrh_fdw/18', 'next-fdw')
+        self.git(self.repo, '-c', 'merge.renames=false', 'merge', '--no-ff', 'next-layout', '-m', 'Integrate the refreshed directory move')
         self.assertTrue((self.repo / 'pgwrh_fdw/18/connection.c').exists())
         self.assertIn('local patch', (self.repo / 'pgwrh_fdw/18/postgres_fdw.c').read_text())
         self.assertTrue(self.script.exists())
         self.assertEqual(self.git(self.repo, 'rev-parse', 'HEAD:pgwrh_fdw/19'),
-                         self.git(self.filtered, 'rev-parse', 'fdw_base_19^{tree}'))
+                         self.git(self.filtered, 'rev-parse', self.aggregate19 + '^{tree}'))
         self.assertEqual(self.git(self.repo, 'rev-parse', 'fdw_base_19'), self.base19)
         repeated = self.run_import()
         self.assertNotEqual(repeated.returncode, 0)
