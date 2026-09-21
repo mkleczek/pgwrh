@@ -25,6 +25,8 @@
 #include "commands/extension.h"
 #include "libpq/libpq-be.h"
 #include "postgres_fdw.h"
+#include "transaction_context.h"
+#include "virtual.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
 #include "utils/varlena.h"
@@ -158,10 +160,29 @@ pgwrh_fdw_validator(PG_FUNCTION_ARGS)
 						 errmsg("\"%s\" must be a floating point value greater than or equal to zero",
 								def->defname)));
 		}
+		else if (strcmp(def->defname, "transaction_parameters") == 0)
+		{
+			list_free_deep(pgwrh_fdw_parse_parameters(defGetString(def)));
+		}
 		else if (strcmp(def->defname, "extensions") == 0)
 		{
 			/* check list syntax, warn about uninstalled extensions */
 			(void) ExtractExtensionList(defGetString(def), true);
+		}
+		else if (strcmp(def->defname, "load_balance_weight") == 0)
+		{
+			char	   *value = defGetString(def);
+			char	   *end;
+			long		weight;
+
+			errno = 0;
+			weight = strtol(value, &end, 10);
+			if (errno != 0 || end == value || *end != '\0' ||
+				weight < 1 || weight > INT_MAX)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("\"%s\" must be an integer between 1 and %d",
+								def->defname, INT_MAX)));
 		}
 		else if (strcmp(def->defname, "fetch_size") == 0 ||
 				 strcmp(def->defname, "batch_size") == 0)
@@ -231,6 +252,7 @@ pgwrh_fdw_validator(PG_FUNCTION_ARGS)
 		}
 	}
 
+	pgwrh_fdw_validate_virtual_options(options_list, catalog);
 	PG_RETURN_VOID();
 }
 
@@ -247,6 +269,9 @@ InitPgFdwOptions(void)
 
 	/* non-libpq FDW-specific FDW options */
 	static const PgFdwOption non_libpq_options[] = {
+		{"members", ForeignServerRelationId, false},
+		{"load_balance_weight", ForeignServerRelationId, false},
+		{"transaction_parameters", ForeignServerRelationId, false},
 		{"schema_name", ForeignTableRelationId, false},
 		{"table_name", ForeignTableRelationId, false},
 		{"column_name", AttributeRelationId, false},
@@ -577,6 +602,8 @@ process_pgfdw_appname(const char *appname)
 void
 _PG_init(void)
 {
+	pgwrh_fdw_context_init();
+
 	/*
 	 * Unlike application_name GUC, don't set GUC_IS_NAME flag nor check_hook
 	 * to allow pgwrh_fdw.application_name to be any string more than

@@ -28,6 +28,18 @@ my $node2 = PostgreSQL::Test::Cluster->new('node2');
 $node1->init;
 $node2->init;
 
+# Standalone PGXS development can stage files without a system-wide install.
+if (my $stage = $ENV{PGWRH_FDW_TEST_STAGE})
+{
+	$stage =~ s/'/''/g;
+	for my $node ($node1, $node2)
+	{
+		$node->append_conf('postgresql.conf',
+			"extension_control_path = '$stage:\$system'\n"
+			. "dynamic_library_path = '$stage:\$libdir'\n");
+	}
+}
+
 $node1->start;
 $node2->start;
 

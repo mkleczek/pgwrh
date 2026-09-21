@@ -48,6 +48,8 @@
 #include "pgstat.h"
 #include "postgres_fdw.h"
 #include "statistics/statistics.h"
+#include "virtual.h"
+#include "join.h"
 #include "storage/latch.h"
 #include "utils/builtins.h"
 #include "utils/float.h"
@@ -95,6 +97,8 @@ enum FdwScanPrivateIndex
 	 * of join, added when the scan is join
 	 */
 	FdwScanPrivateRelations,
+	/* OID list of all servers whose tables the remote query reads. */
+	FdwScanPrivateServers,
 };
 
 /*
@@ -654,6 +658,8 @@ pgwrh_fdw_handler(PG_FUNCTION_ARGS)
 {
 	FdwRoutine *routine = makeNode(FdwRoutine);
 
+	pgwrh_fdw_join_init(postgresGetForeignJoinPaths);
+
 	/* Functions for scanning foreign tables */
 	routine->GetForeignRelSize = postgresGetForeignRelSize;
 	routine->GetForeignPaths = postgresGetForeignPaths;
@@ -741,6 +747,7 @@ postgresGetForeignRelSize(PlannerInfo *root,
 	/* Look up foreign-table catalog info. */
 	fpinfo->table = GetForeignTable(foreigntableid);
 	fpinfo->server = GetForeignServer(fpinfo->table->serverid);
+	fpinfo->relation_serverids = list_make1_oid(fpinfo->table->serverid);
 
 	/*
 	 * Extract user-settable option values.  Note that per-table settings of
@@ -1519,8 +1526,11 @@ postgresGetForeignPlan(PlannerInfo *root,
 							 retrieved_attrs,
 							 makeInteger(fpinfo->fetch_size));
 	if (IS_JOIN_REL(foreignrel) || IS_UPPER_REL(foreignrel))
+	{
 		fdw_private = lappend(fdw_private,
 							  makeString(fpinfo->relation_name));
+		fdw_private = lappend(fdw_private, fpinfo->relation_serverids);
+	}
 
 	/*
 	 * Create the ForeignScan node for the given relation.
@@ -1638,7 +1648,13 @@ postgresBeginForeignScan(ForeignScanState *node, int eflags)
 	 * Get connection to the foreign server.  Connection manager will
 	 * establish new connection if necessary.
 	 */
-	fsstate->conn = GetConnection(user, false, &fsstate->conn_state);
+	if (list_length(fsplan->fdw_private) > FdwScanPrivateServers &&
+		list_length(list_nth(fsplan->fdw_private, FdwScanPrivateServers)) > 1)
+		fsstate->conn = pgwrh_fdw_group_connection(
+			list_nth(fsplan->fdw_private, FdwScanPrivateServers),
+			userid, &fsstate->conn_state, true);
+	else
+		fsstate->conn = GetConnection(user, false, &fsstate->conn_state);
 
 	/* Assign a unique ID for my cursor */
 	fsstate->cursor_number = GetCursorNumber(fsstate->conn);
@@ -3256,7 +3272,11 @@ estimate_path_cost_size(PlannerInfo *root,
 								false, &retrieved_attrs, NULL);
 
 		/* Get the remote estimate */
-		conn = GetConnection(fpinfo->user, false, NULL);
+		if (pgwrh_fdw_is_virtual_server(fpinfo->server->serverid))
+			conn = pgwrh_fdw_group_connection(fpinfo->relation_serverids,
+											fpinfo->user->userid, NULL, false);
+		else
+			conn = GetConnection(fpinfo->user, false, NULL);
 		get_remote_estimate(sql.data, conn, &rows, &width,
 							&startup_cost, &total_cost);
 		ReleaseConnection(conn);
@@ -6621,6 +6641,32 @@ foreign_join_ok(PlannerInfo *root, RelOptInfo *joinrel, JoinType jointype,
 	if (fpinfo_o->local_conds || fpinfo_i->local_conds)
 		return false;
 
+	/* Check the full intersection, also when core calls us for a larger join. */
+	{
+		List *servers = list_union_oid(fpinfo_o->relation_serverids,
+									  fpinfo_i->relation_serverids);
+
+		if (list_length(servers) > 1)
+		{
+			Oid userid = OidIsValid(joinrel->userid) ? joinrel->userid : GetUserId();
+			List *targets;
+
+			/* Cross-server writes and EPQ require additional routing work. */
+			if (root->parse->commandType != CMD_SELECT || root->rowMarks ||
+				fpinfo_o->server->fdwid != fpinfo_i->server->fdwid ||
+				!equal(fpinfo_o->shippable_extensions, fpinfo_i->shippable_extensions) ||
+				!pgwrh_fdw_join_isolated(root, joinrel, servers))
+				return false;
+			targets = pgwrh_fdw_common_targets(servers, userid);
+			if (targets == NIL)
+				return false;
+			list_free(targets);
+			/* Eligibility depends on the effective user's mappings and ACLs. */
+			root->glob->dependsOnRole = true;
+		}
+		list_free(servers);
+	}
+
 	/*
 	 * Merge FDW options.  We might be tempted to do this after we have deemed
 	 * the foreign join to be OK.  But we must do this beforehand so that we
@@ -7086,9 +7132,9 @@ merge_fdw_options(PgFdwRelationInfo *fpinfo,
 	/* We must always have fpinfo_o. */
 	Assert(fpinfo_o);
 
-	/* fpinfo_i may be NULL, but if present the servers must both match. */
+	/* Cross-server inputs have already passed the common-target safety check. */
 	Assert(!fpinfo_i ||
-		   fpinfo_i->server->serverid == fpinfo_o->server->serverid);
+		   fpinfo_i->server->fdwid == fpinfo_o->server->fdwid);
 
 	/*
 	 * Copy the server specific FDW options.  (For a join, both relations come
@@ -7101,10 +7147,15 @@ merge_fdw_options(PgFdwRelationInfo *fpinfo,
 	fpinfo->use_remote_estimate = fpinfo_o->use_remote_estimate;
 	fpinfo->fetch_size = fpinfo_o->fetch_size;
 	fpinfo->async_capable = fpinfo_o->async_capable;
+	fpinfo->relation_serverids = fpinfo_i ?
+		list_union_oid(fpinfo_o->relation_serverids, fpinfo_i->relation_serverids) :
+		list_copy(fpinfo_o->relation_serverids);
 
 	/* Merge the table level options from either side of the join. */
 	if (fpinfo_i)
 	{
+		fpinfo->fdw_startup_cost = Max(fpinfo->fdw_startup_cost, fpinfo_i->fdw_startup_cost);
+		fpinfo->fdw_tuple_cost = Max(fpinfo->fdw_tuple_cost, fpinfo_i->fdw_tuple_cost);
 		/*
 		 * We'll prefer to use remote estimates for this join if any table
 		 * from either side of the join is using remote estimates.  This is

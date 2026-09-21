@@ -33,6 +33,8 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "postgres_fdw.h"
+#include "transaction_context.h"
+#include "virtual.h"
 #include "storage/latch.h"
 #include "utils/builtins.h"
 #include "utils/hsearch.h"
@@ -204,6 +206,36 @@ static int	pgfdw_conn_check(PGconn *conn);
 static bool pgfdw_conn_checkable(void);
 static bool pgfdw_has_required_scram_options(const char **keywords, const char **values);
 
+/* Inspect only: never connect to, initialize, or drain unselected members. */
+PgwrhFdwConnectionRank
+pgwrh_fdw_rank_cached_connection(Oid umid)
+{
+	ConnCacheEntry *entry = ConnectionHash ?
+		hash_search(ConnectionHash, &umid, HASH_FIND, NULL) : NULL;
+
+	if (entry == NULL || entry->conn == NULL)
+		return PGWRH_FDW_CONNECTION_NEW;
+	if (entry->changing_xact_state ||
+		(entry->xact_depth > 0 &&
+		 (entry->invalidated || PQstatus(entry->conn) != CONNECTION_OK)))
+		return PGWRH_FDW_CONNECTION_UNUSABLE;
+	if (entry->invalidated || PQstatus(entry->conn) != CONNECTION_OK)
+		return PGWRH_FDW_CONNECTION_NEW;
+	return entry->xact_depth > 0 ?
+		PGWRH_FDW_CONNECTION_ACTIVE : PGWRH_FDW_CONNECTION_IDLE;
+}
+
+/* Check a routing pin before an acquisition could reconnect its cache entry. */
+void
+pgwrh_fdw_check_cached_virtual_connection(PgwrhFdwVirtualBinding *binding, Oid umid)
+{
+	ConnCacheEntry *entry = ConnectionHash ?
+		hash_search(ConnectionHash, &umid, HASH_FIND, NULL) : NULL;
+
+	pgwrh_fdw_check_virtual_connection(binding, entry ? entry->conn : NULL,
+									 entry && entry->conn ? entry->xact_depth : 0);
+}
+
 /*
  * Get a PGconn which can be used to execute queries on the remote PostgreSQL
  * server with the user's authorization.  A new connection is established
@@ -225,6 +257,8 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 	ConnCacheEntry *entry;
 	ConnCacheKey key;
 	MemoryContext ccxt = CurrentMemoryContext;
+	PgwrhFdwVirtualBinding *binding;
+	Oid			requested_serverid = user->serverid;
 
 	/* First time through, initialize connection cache hashtable */
 	if (ConnectionHash == NULL)
@@ -256,6 +290,9 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 	/* Set flag that we did GetConnection during the current transaction */
 	xact_got_connection = true;
 
+	/* Resolve aliases before entering the unchanged physical connection cache. */
+	user = pgwrh_fdw_resolve_virtual_mapping(user, pgwrh_fdw_rank_cached_connection, &binding);
+
 	/* Create hash key for the entry.  Assume no pad bytes in key struct */
 	key = user->umid;
 
@@ -273,7 +310,14 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 	}
 
 	/* Reject further use of connections which failed abort cleanup. */
+	pgwrh_fdw_check_virtual_connection(binding, entry->conn,
+									 entry->conn ? entry->xact_depth : 0);
 	pgfdw_reject_incomplete_xact_state_change(entry);
+
+	/* Keep initial virtual-target failover outside the physical cache path. */
+	if (binding)
+		return pgwrh_fdw_acquire_virtual_connection(requested_serverid, user, binding,
+												  will_prep_stmt, state);
 
 	/*
 	 * If the connection needs to be remade due to invalidation, disconnect as
@@ -373,6 +417,7 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 	if (state)
 		*state = &entry->state;
 
+	pgwrh_fdw_virtual_connected(binding, entry->conn);
 	return entry->conn;
 }
 
@@ -931,6 +976,7 @@ begin_remote_xact(ConnCacheEntry *entry)
 		 */
 		StringInfoData sql;
 		bool		ro = (read_only_level == 1);
+		List	   *parameters = pgwrh_fdw_transaction_parameters(entry->serverid);
 
 		elog(DEBUG3, "starting remote transaction on connection %p",
 			 entry->conn);
@@ -953,6 +999,16 @@ begin_remote_xact(ConnCacheEntry *entry)
 			Assert(!entry->xact_read_only);
 			entry->xact_read_only = true;
 		}
+		/*
+		 * Apply at top level, before snapshot-taking commands AND before
+		 * mirrored savepoints. Rollback of a first-use subtransaction must
+		 * not undo this context. Keep changing_xact_state armed on failure:
+		 * a partially initialized transaction must never be reused/committed.
+		 * Both the normal path and the reconnect retry call this function on
+		 * the actual selected connection.
+		 */
+		pgwrh_fdw_apply_parameters(entry->conn, parameters);
+		list_free(parameters);
 		entry->changing_xact_state = false;
 	}
 	else if (!entry->xact_read_only)

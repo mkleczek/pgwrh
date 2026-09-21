@@ -39,8 +39,18 @@ RETURNS bool
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT PARALLEL RESTRICTED;
 
--- PostgreSQL 19 allows subscriptions to connect through a foreign server.
--- The internal argument prevents direct invocation from SQL.
+CREATE FUNCTION pgwrh_fdw_set_members(server_name text, members text[])
+RETURNS void
+AS 'MODULE_PATHNAME'
+LANGUAGE C VOLATILE PARALLEL UNSAFE;
+
+-- Use the server's SCRAM iteration policy and a fresh cryptographic salt.
+CREATE FUNCTION pgwrh_fdw_scram_verifier(password text)
+RETURNS text
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT VOLATILE PARALLEL RESTRICTED;
+
+-- PostgreSQL 19 subscription connections use the FDW connection callback.
 CREATE FUNCTION pgwrh_fdw_connection(oid, oid, internal)
 RETURNS text
 AS 'MODULE_PATHNAME'
