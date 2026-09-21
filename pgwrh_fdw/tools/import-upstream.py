@@ -9,7 +9,6 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
-UPSTREAM = "refs/heads/upstream/postgres_fdw"
 
 
 def git(repo, *args):
@@ -19,12 +18,15 @@ def git(repo, *args):
 
 
 def main():
-    if len(sys.argv) != 3 or not re.fullmatch(r"REL_18_\d+", sys.argv[2]):
-        sys.exit("usage: python3 pgwrh_fdw/tools/import-upstream.py /local/postgres/repo REL_18_N")
+    if len(sys.argv) != 3 or not re.fullmatch(r"REL_(18|19)_(\d+|BETA\d+|RC\d+)", sys.argv[2]):
+        sys.exit("usage: python3 pgwrh_fdw/tools/import-upstream.py /local/postgres/repo REL_MAJOR_RELEASE")
     source = Path(sys.argv[1]).resolve(strict=True)
     tag = sys.argv[2]
     commit = git(source, "rev-parse", tag + "^{commit}")
-    previous = git(ROOT, "rev-parse", UPSTREAM)
+    major = tag.split("_")[1]
+    upstream = "refs/heads/upstream/postgres_fdw" + ("" if major == "18" else "_" + major)
+    exists = subprocess.run(["git", "-C", str(ROOT), "show-ref", "--verify", "--quiet", upstream]).returncode == 0
+    previous = git(ROOT, "rev-parse", upstream) if exists else None
     tag_ref = "refs/tags/upstream/" + tag
     if subprocess.run(["git", "-C", str(ROOT), "show-ref", "--verify", "--quiet", tag_ref]).returncode == 0:
         sys.exit(f"{tag_ref} already exists; upstream snapshots are immutable")
@@ -42,18 +44,19 @@ def main():
         )
         snapshot = git(filtered, "rev-parse", "fdw-import")
 
-        subprocess.run(["git", "-C", str(filtered), "merge-base", "--is-ancestor", previous, snapshot], check=True)
+        if previous:
+            subprocess.run(["git", "-C", str(filtered), "merge-base", "--is-ancestor", previous, snapshot], check=True)
         for key in ("user.name", "user.email"):
             git(filtered, "config", key, git(ROOT, "config", "--get", key))
         git(filtered, "tag", "-a", "upstream/" + tag, snapshot, "-m",
             f"PostgreSQL {tag}\nUpstream commit: {commit}\nFiltered path: contrib/postgres_fdw")
         # No force: a failed or conflicting import leaves both refs unchanged.
-        # fdw_base_18 is the patched aggregate, so it moves only after review.
+        # The patched aggregates move only after review.
         git(ROOT, "fetch", "--atomic", "--no-tags", str(filtered),
-            "refs/heads/fdw-import:" + UPSTREAM, tag_ref + ":" + tag_ref)
+            "refs/heads/fdw-import:" + upstream, tag_ref + ":" + tag_ref)
 
     print(f"Imported {tag} ({commit}); filtered tip {snapshot}")
-    print("Advanced upstream/postgres_fdw; fdw_base_18, patches, main and working files are unchanged.")
+    print(f"Updated {upstream}; patched aggregates, main and working files are unchanged.")
     print("See pgwrh_fdw/UPSTREAM.md for review, provenance and test requirements.")
 
 

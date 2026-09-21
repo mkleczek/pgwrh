@@ -19,6 +19,8 @@
 PG_CONFIG ?= pg_config
 PYTHON ?= python3
 BUILD = .build
+PG_MAJOR = $(shell $(PG_CONFIG) --version | sed -E 's/^PostgreSQL ([0-9]+).*/\1/')
+FDW_DIR = pgwrh_fdw/$(PG_MAJOR)
 TESTGRES_EXT_ROOT = $(abspath $(BUILD)/testgres-ext)
 TEST_STAGE_ROOT = $(abspath $(BUILD)/test-stage)
 
@@ -53,9 +55,6 @@ all: $(ALL_TARGETS)
 install: $(INSTALL_TARGETS)
 uninstall: $(UNINSTALL_TARGETS)
 clean: $(CLEAN_TARGETS)
-ifeq ($(WITH_FDW),1)
-	$(MAKE) -C test/pgwrh_fdw clean PG_CONFIG="$(PG_CONFIG)"
-endif
 	rm -rf $(BUILD)
 
 $(ALL_TARGETS):
@@ -105,12 +104,12 @@ test-ui: testgres-ext
 
 ifeq ($(WITH_FDW),1)
 test-fdw: pgwrh_fdw-all
-	PG_CONFIG="$(PG_CONFIG)" $(PYTHON) test/pgwrh_fdw/test_context.py
-	PG_CONFIG="$(PG_CONFIG)" $(PYTHON) test/pgwrh_fdw/run-upstream.py
-	$(PYTHON) test/pgwrh_fdw/check-symbols.py
+	PG_CONFIG="$(PG_CONFIG)" $(PYTHON) $(FDW_DIR)/test_context.py
+	PG_CONFIG="$(PG_CONFIG)" $(PYTHON) $(FDW_DIR)/run-upstream.py
+	$(PYTHON) $(FDW_DIR)/check-symbols.py
 
 test-fdw-tap: pgwrh_fdw-all
-	PG_CONFIG="$(PG_CONFIG)" $(PYTHON) test/pgwrh_fdw/run-tap.py
+	PG_CONFIG="$(PG_CONFIG)" $(PYTHON) $(FDW_DIR)/run-tap.py
 else
 test-fdw test-fdw-tap:
 	$(error test-fdw requires WITH_FDW=1)

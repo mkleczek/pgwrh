@@ -41,7 +41,7 @@ broader join pushdown and query-wide routing optimization as subsequent work.
 | `pgwrh/src/master/implementation-views.sql` | Controller selects effective current/target routes and credentials; repeats same-zone endpoints in host lists. | The FDW must preserve readiness, credential generations, and weighting. |
 | `pgwrh/src/replica/aggregation.sql`, `remote_node_assignment` | Parent aggregation requires identical effective destinations and complete locally serving subtrees on every eligible member. | Mere endpoint overlap is insufficient to replace leaf routes with a parent scan. |
 | `pgwrh_fdw/connection.c`, `begin_remote_xact()` | Starts remote transaction, propagates frozen settings, then creates mirrored savepoints. | Initialization belongs to the physical participant and must precede its first snapshot. |
-| `pgwrh_fdw/postgres_fdw.c`, `postgresBeginForeignScan()` | Acquires the connection at scan initialization; planner estimates and ANALYZE also acquire connections. | An executor-only patch would miss several routing and consistency paths. |
+| `pgwrh_fdw/MAJOR/postgres_fdw.c`, `postgresBeginForeignScan()` | Acquires the connection at scan initialization; planner estimates and ANALYZE also acquire connections. | An executor-only patch would miss several routing and consistency paths. |
 
 Libpq randomizes connection attempts and then keeps the selected endpoint for
 that connection. It does not coordinate separate callers or know which shards a
