@@ -1,7 +1,7 @@
 # Shared integration-test dependencies; CI imports this through flake.lock.
-{ pkgs }:
+{ pkgs, postgresql ? pkgs.postgresql_18, background ? pkgs.callPackage ./pg-background.nix { inherit postgresql; } }:
 let
-  postgres = pkgs.postgresql_18.withPackages (ps: [ ps.pg_background ]);
+  postgres = postgresql.withPackages (ps: [ background ]);
   python = pkgs.python3.withPackages (ps: [ ps.pytest (pkgs.callPackage ./testgres.nix {}) ]);
 in pkgs.mkShell {
   packages = [ postgres postgres.pg_config python pkgs.postgrest pkgs.gnumake pkgs.llvmPackages.clang ];
