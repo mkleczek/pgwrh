@@ -69,3 +69,17 @@ their own credentials, storage, resource limits, replication settings and
 network configuration. Overriding the image's command replaces its default
 PostgreSQL settings; preserve the required preload and logical-replication
 settings. See [native installation](packages.md).
+
+## PostgreSQL 19 preview
+
+From the development checkout, build a local PostgreSQL 19 Beta 3 image:
+
+```sh
+docker build -f packaging/container/Dockerfile --build-arg PG_MAJOR=19 \
+  --build-arg POSTGRES_IMAGE=postgres:19beta3-trixie -t pgwrh:pg19-preview .
+PGWRH_IMAGE=pgwrh:pg19-preview bash examples/compose/quickstart.sh
+```
+
+Use fresh demo volumes for the different server major. The release workflow
+prepares a separate `-pg19` image tag; the already published alpha1 tag remains
+unchanged. Both development images include pg_background 2.0.3 or newer.
