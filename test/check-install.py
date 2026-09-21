@@ -11,7 +11,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 pg_config = shutil.which(os.environ.get("PG_CONFIG", "pg_config"))
 if pg_config is None:
-    sys.exit("Set PG_CONFIG to a PostgreSQL 18 pg_config executable")
+    sys.exit("Set PG_CONFIG to a PostgreSQL 18 or 19 pg_config executable")
 PG_CONFIG = str(Path(pg_config).resolve())
 
 

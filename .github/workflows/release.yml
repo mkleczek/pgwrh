@@ -82,11 +82,16 @@ jobs:
       fail-fast: false
       matrix:
         runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        pg: [18, 19]
         target:
           - {name: noble, image: 'ubuntu:24.04', format: deb}
           - {name: resolute, image: 'ubuntu:26.04', format: deb}
           - {name: trixie, image: 'debian:trixie-slim', format: deb}
           - {name: el9, image: 'almalinux:9', format: rpm}
+        # PGDG has not yet published pg_background_19 for RPM.
+        exclude:
+          - pg: 19
+            target: {name: el9, image: 'almalinux:9', format: rpm}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
     steps:
@@ -101,10 +106,13 @@ jobs:
         env:
           FORMAT: ${{ matrix.target.format }}
           BASE_IMAGE: ${{ matrix.target.image }}
-        run: docker build -f "packaging/$FORMAT/Dockerfile" --build-arg "BASE_IMAGE=$BASE_IMAGE" --output type=local,dest=../packages .
+          PG_MAJOR: ${{ matrix.pg }}
+          PGDG_COMPONENTS: ${{ matrix.pg == 19 && 'main 19' || 'main' }}
+          PGDG_TESTING: ${{ matrix.pg == 19 && '1' || '0' }}
+        run: docker build -f "packaging/$FORMAT/Dockerfile" --build-arg "BASE_IMAGE=$BASE_IMAGE" --build-arg "PG_MAJOR=$PG_MAJOR" --build-arg "PGDG_COMPONENTS=$PGDG_COMPONENTS" --build-arg "PGDG_TESTING=$PGDG_TESTING" --output type=local,dest=../packages .
       - uses: actions/upload-artifact@v4
         with:
-          name: native-${{ matrix.target.name }}-${{ matrix.runner }}
+          name: native-pg${{ matrix.pg }}-${{ matrix.target.name }}-${{ matrix.runner }}
           path: packages/*
           if-no-files-found: error
 
@@ -113,13 +121,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
+        pg:
+          - {major: 18, image: 'postgres:18.6-trixie'}
+          - {major: 19, image: 'postgres:19beta3-trixie'}
+        platform:
           - {runner: ubuntu-24.04, arch: amd64}
           - {runner: ubuntu-24.04-arm, arch: arm64}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 25
     env:
-      PGWRH_IMAGE: pgwrh:release-${{ matrix.arch }}
+      PGWRH_IMAGE: pgwrh:release-pg${{ matrix.pg.major }}-${{ matrix.platform.arch }}
     steps:
       - uses: actions/download-artifact@v4
         with: {name: source, path: source}
@@ -128,7 +139,7 @@ jobs:
           tar -xzf source/*.tar.gz -C src --strip-components=1
       - name: Build and test the installed image
         working-directory: src
-        run: docker build -f packaging/container/Dockerfile -t "$PGWRH_IMAGE" .
+        run: docker build -f packaging/container/Dockerfile --build-arg "PG_MAJOR=${{ matrix.pg.major }}" --build-arg "POSTGRES_IMAGE=${{ matrix.pg.image }}" -t "$PGWRH_IMAGE" .
       - name: Verify the documented quickstart, console and repeated setup
         working-directory: src/examples/compose
         run: |
@@ -143,7 +154,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: compose-logs-${{ matrix.arch }}
+          name: compose-logs-pg${{ matrix.pg.major }}-${{ matrix.platform.arch }}
           path: ${{ runner.temp }}/compose.log
       - name: Remove the test cluster
         if: always()
@@ -151,12 +162,12 @@ jobs:
         run: docker compose --profile ui down -v
       - name: Save the tested image
         if: github.event_name == 'release' || inputs.prepare_draft
-        run: docker save "$PGWRH_IMAGE" | gzip > image-${{ matrix.arch }}.tar.gz
+        run: docker save "$PGWRH_IMAGE" | gzip > image-pg${{ matrix.pg.major }}-${{ matrix.platform.arch }}.tar.gz
       - uses: actions/upload-artifact@v4
         if: github.event_name == 'release' || inputs.prepare_draft
         with:
-          name: image-${{ matrix.arch }}
-          path: image-${{ matrix.arch }}.tar.gz
+          name: image-pg${{ matrix.pg.major }}-${{ matrix.platform.arch }}
+          path: image-pg${{ matrix.pg.major }}-${{ matrix.platform.arch }}.tar.gz
           compression-level: 0
 
   nix:
@@ -166,7 +177,7 @@ jobs:
       matrix:
         runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/download-artifact@v4
         with: {name: source, path: source}
@@ -261,14 +272,16 @@ jobs:
         env:
           REPOSITORY: ${{ github.repository }}
         run: |
-          image="ghcr.io/${REPOSITORY,,}:$VERSION-pg18"
-          for arch in amd64 arm64; do
-            gunzip -c "artifacts/image-$arch/image-$arch.tar.gz" | docker load
-            docker tag "pgwrh:release-$arch" "$image-$arch"
-            docker push "$image-$arch"
+          for major in 18 19; do
+            image="ghcr.io/${REPOSITORY,,}:$VERSION-pg$major"
+            for arch in amd64 arm64; do
+              gunzip -c "artifacts/image-pg$major-$arch/image-pg$major-$arch.tar.gz" | docker load
+              docker tag "pgwrh:release-pg$major-$arch" "$image-$arch"
+              docker push "$image-$arch"
+            done
+            docker manifest create "$image" "$image-amd64" "$image-arm64"
+            docker manifest push "$image"
           done
-          docker manifest create "$image" "$image-amd64" "$image-arm64"
-          docker manifest push "$image"
       - name: Attach the release artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
