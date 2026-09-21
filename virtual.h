@@ -21,6 +21,8 @@ typedef PgwrhFdwConnectionRank (*PgwrhFdwRankConnection) (Oid umid);
 struct PgFdwConnState;
 
 extern PgwrhFdwConnectionRank pgwrh_fdw_rank_cached_connection(Oid umid);
+extern void pgwrh_fdw_check_cached_virtual_connection(PgwrhFdwVirtualBinding *binding,
+													Oid umid);
 extern bool pgwrh_fdw_is_virtual_server(Oid serverid);
 extern List *pgwrh_fdw_routing_members(Oid serverid, Oid userid);
 extern List *pgwrh_fdw_common_targets(List *serverids, Oid userid);
@@ -35,5 +37,10 @@ extern void pgwrh_fdw_check_virtual_connection(PgwrhFdwVirtualBinding *binding,
 											 PGconn *conn, int xact_depth);
 extern void pgwrh_fdw_virtual_connected(PgwrhFdwVirtualBinding *binding,
 										  PGconn *conn);
+extern PGconn *pgwrh_fdw_acquire_virtual_connection(Oid virtual_serverid,
+												  UserMapping *target,
+												  PgwrhFdwVirtualBinding *binding,
+												  bool will_prep_stmt,
+												  struct PgFdwConnState **state);
 
 #endif
