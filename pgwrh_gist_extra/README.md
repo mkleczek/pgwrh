@@ -24,12 +24,12 @@ the development bundle; published alpha1 artifacts predate this addition.
 
 | Operator | Meaning for a non-NULL text value |
 | --- | --- |
-| `value ||= text[]` | True if any non-NULL array element equals the value; false for an empty array |
-| `value &&= text[]` | True if every element is non-NULL and equals the value; true for an empty array |
+| `value ||= text[]` | True if any element equals the value; false for an empty array; otherwise NULL if the array contains NULL |
+| `value &&= text[]` | False if an element differs; true for an empty array; otherwise NULL if the array contains NULL |
 
 Both operators are strict: a NULL value or NULL array produces NULL. NULL
-array elements otherwise behave as nonmatches, so the operators are not exact
-three-valued replacements for SQL `ANY`/`ALL` in arbitrary expressions.
+array elements follow SQL `ANY`/`ALL` three-valued logic. Strictness means that
+a NULL scalar with an empty array still produces NULL, unlike native `ANY`/`ALL`.
 The opclass also supports the usual text comparison operators.
 
 For partitioned tables, retain a native predicate alongside the GiST predicate
@@ -43,8 +43,10 @@ WHERE account = ANY ($1::text[])
 The optional opclass setting `attno` identifies the indexed attribute's
 one-based position within the index. The imported implementation uses it to
 filter array elements against a matching single-column hash partition key.
-This experimental optimization and its cache require further hardening; the
-default opclass does not enable partition-bound filtering. It does not add
+The scan owns its cached array, refreshes it by contents, and releases replaced
+values on rescans. Hash filtering maps attached-table columns by name and uses
+the partition key's hash function and matching collation; unsupported keys are
+left unchanged. The default opclass does not enable partition-bound filtering. It does not add
 PostgreSQL-native SAOP pruning or ordinary GiST `ORDER BY` support.
 
 For FDW queries, install matching versions on both sides and include
