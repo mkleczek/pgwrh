@@ -26,6 +26,7 @@
 #include "libpq/libpq-be.h"
 #include "postgres_fdw.h"
 #include "transaction_context.h"
+#include "virtual.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
 #include "utils/varlena.h"
@@ -236,6 +237,7 @@ pgwrh_fdw_validator(PG_FUNCTION_ARGS)
 		}
 	}
 
+	pgwrh_fdw_validate_virtual_options(options_list, catalog);
 	PG_RETURN_VOID();
 }
 
@@ -252,6 +254,7 @@ InitPgFdwOptions(void)
 
 	/* non-libpq FDW-specific FDW options */
 	static const PgFdwOption non_libpq_options[] = {
+		{"members", ForeignServerRelationId, false},
 		{"transaction_parameters", ForeignServerRelationId, false},
 		{"schema_name", ForeignTableRelationId, false},
 		{"table_name", ForeignTableRelationId, false},
