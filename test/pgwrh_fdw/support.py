@@ -9,8 +9,8 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parent
-REPO_ROOT = ROOT
-EXTENSION_ROOT = ROOT
+REPO_ROOT = ROOT.parents[1]
+EXTENSION_ROOT = REPO_ROOT / "pgwrh_fdw"
 PG_CONFIG = os.environ.get("PG_CONFIG", "pg_config")
 
 

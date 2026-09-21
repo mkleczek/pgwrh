@@ -1,4 +1,4 @@
-# Standalone pgwrh_fdw build and regression tests.
+# pgwrh_fdw extension build; regression tests live in ../test/pgwrh_fdw.
 
 MODULE_big = pgwrh_fdw
 OBJS = \
@@ -20,12 +20,6 @@ SHLIB_LINK_INTERNAL = $(libpq)
 EXTENSION = pgwrh_fdw
 DATA = pgwrh_fdw--1.0.0-alpha1.sql
 
-MODULES = context_probe
-REGRESS = pgwrh_fdw query_cancel
-ISOLATION = eval_plan_qual
-ISOLATION_OPTS = --load-extension=pgwrh_fdw
-TAP_TESTS = 1
-
 PG_CONFIG ?= pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
@@ -37,7 +31,7 @@ connection.o join.o option.o virtual.o postgres_fdw.o: virtual.h
 join.o postgres_fdw.o: join.h
 $(OBJS): postgres_fdw.h namespace.h
 
-STAGE_DIR ?= $(abspath .build/testgres-ext)
+STAGE_DIR ?= $(abspath ../.build/testgres-ext)
 stage: all
 	mkdir -p "$(STAGE_DIR)/extension"
 	cp $(DATA) "$(STAGE_DIR)/extension/"
