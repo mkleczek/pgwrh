@@ -28,6 +28,31 @@ BEGIN
 END $$;
 RESET enable_seqscan;
 DROP TABLE gist_probe;
+CREATE TABLE gist_order_probe(d date NOT NULL, id bigint NOT NULL);
+INSERT INTO gist_order_probe VALUES
+    ('2100-12-31', 9223372036854775807),
+    ('2100-12-31', 9223372036854775806),
+    ('2000-01-01', '-9223372036854775808');
+CREATE INDEX ON gist_order_probe USING gist
+    (d pgwrh_gist_date_order_ops, id pgwrh_gist_int8_order_ops);
+SET enable_seqscan=off;
+SET enable_sort=off;
+DO $$
+DECLARE
+    query_plan json;
+BEGIN
+    ASSERT (SELECT array_agg(id) FROM
+        (SELECT id FROM gist_order_probe ORDER BY d DESC,id DESC LIMIT 2) page)
+        = ARRAY[9223372036854775807,9223372036854775806]::bigint[],
+        'Packaged GiST ordering lost bigint precision';
+    EXECUTE 'EXPLAIN (FORMAT JSON) SELECT * FROM gist_order_probe ORDER BY d DESC,id DESC LIMIT 2'
+        INTO query_plan;
+    ASSERT query_plan::text LIKE '%pgwrh GiST ordered scan%',
+        'Packaged GiST planner hook did not produce an ordered scan';
+END $$;
+RESET enable_seqscan;
+RESET enable_sort;
+DROP TABLE gist_order_probe;
 CREATE SUBSCRIPTION packaging_probe CONNECTION 'host=localhost dbname=postgres'
     PUBLICATION packaging_probe WITH (connect = false);
 SELECT pgwrh.applied_lsn('packaging_probe');

@@ -1,8 +1,8 @@
 # pgwrh_gist_extra
 
 Additional operators and operator classes for PostgreSQL GiST indexes.
-The current implementation provides text-array membership filters on top of
-`btree_gist`. It can be installed independently of pgwrh and supports PostgreSQL
+The extension provides text-array membership filters and exact column ordering
+on top of `btree_gist`. It can be installed independently of pgwrh and supports PostgreSQL
 18 and 19 preview.
 
 ```sql
@@ -24,12 +24,12 @@ the development bundle; published alpha1 artifacts predate this addition.
 
 | Operator | Meaning for a non-NULL text value |
 | --- | --- |
-| `value ||= text[]` | True if any non-NULL array element equals the value; false for an empty array |
-| `value &&= text[]` | True if every element is non-NULL and equals the value; true for an empty array |
+| `value ||= text[]` | True if any element equals the value; false for an empty array; otherwise NULL if the array contains NULL |
+| `value &&= text[]` | False if an element differs; true for an empty array; otherwise NULL if the array contains NULL |
 
 Both operators are strict: a NULL value or NULL array produces NULL. NULL
-array elements otherwise behave as nonmatches, so the operators are not exact
-three-valued replacements for SQL `ANY`/`ALL` in arbitrary expressions.
+array elements follow SQL `ANY`/`ALL` three-valued logic. Strictness means that
+a NULL scalar with an empty array still produces NULL, unlike native `ANY`/`ALL`.
 The opclass also supports the usual text comparison operators.
 
 For partitioned tables, retain a native predicate alongside the GiST predicate
@@ -41,11 +41,28 @@ WHERE account = ANY ($1::text[])
 ```
 
 The optional opclass setting `attno` identifies the indexed attribute's
-one-based position within the index. The imported implementation uses it to
+one-based position within the index. The implementation uses it to
 filter array elements against a matching single-column hash partition key.
-This experimental optimization and its cache require further hardening; the
-default opclass does not enable partition-bound filtering. It does not add
-PostgreSQL-native SAOP pruning or ordinary GiST `ORDER BY` support.
+The scan owns its cached array, refreshes it by contents, and releases replaced
+values on rescans. Hash filtering maps attached-table columns by name and uses
+the partition key's hash function and matching collation; unsupported keys are
+left unchanged. The default opclass does not enable partition-bound filtering.
+It does not add PostgreSQL-native SAOP pruning.
+
+## Exact column ordering
+
+The `pgwrh_gist_{int2,int4,int8,date,timestamp,timestamptz}_order_ops` opclasses
+allow ordinary `ORDER BY column` through a custom scan over GiST. They preserve
+the full supported value range, including bigint extremes and temporal infinities.
+No application cursor encoding or declared minimum/maximum is needed.
+See [ORDERING.md](ORDERING.md) for loading the planner hook, index definitions,
+supported orderings, and fallback behavior. Use these opclasses explicitly;
+existing indexes keep their existing behavior.
+
+Array filters, ordering and cursor predicates are independent. An application can
+use an indexable scalar expression for composite pagination; [PAGING.md](PAGING.md)
+shows a date/bigint example. [TRANSACTIONS.md](TRANSACTIONS.md) combines these
+features with date-range and account-hash partitioning and remote LIMIT pushdown.
 
 For FDW queries, install matching versions on both sides and include
 `pgwrh_gist_extra` in the server's `extensions` option to permit operator shipping.
@@ -58,6 +75,7 @@ the same schema: the operator names overlap.
 make -C pgwrh_gist_extra PG_CONFIG=/path/to/pg_config
 make -C pgwrh_gist_extra install PG_CONFIG=/path/to/pg_config
 make test-gist
+make test-gist-integration
 ```
 
 The root build includes the extension by default. Use `WITH_GIST_EXTRA=0` to
