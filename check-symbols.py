@@ -14,7 +14,7 @@ if sys.platform == "darwin":
     actual = {name[1:] for name in actual}
 functions = {"pgwrh_fdw_" + name for name in (
     "handler", "validator", "get_connections", "get_connections_1_2",
-    "disconnect", "disconnect_all", "connection")}
+    "disconnect", "disconnect_all", "connection", "set_members")}
 expected = {"Pg_magic_func", "_PG_init"} | functions | {"pg_finfo_" + f for f in functions}
 if actual != expected:
     sys.exit(f"Unexpected exports: {actual - expected}; missing: {expected - actual}")
