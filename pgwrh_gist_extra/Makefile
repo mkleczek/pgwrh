@@ -1,6 +1,6 @@
 EXTENSION = pgwrh_gist_extra
 MODULE_big = pgwrh_gist_extra
-OBJS = pgwrh_gist_extra.o
+OBJS = pgwrh_gist_extra.o order_keys.o
 DATA = pgwrh_gist_extra--1.0.0-alpha1.sql
 
 PG_CONFIG ?= pg_config
