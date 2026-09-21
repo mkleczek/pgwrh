@@ -4,7 +4,7 @@ setup
 {
     DO $d$
         BEGIN
-            EXECUTE $$CREATE SERVER loopback FOREIGN DATA WRAPPER postgres_fdw
+            EXECUTE $$CREATE SERVER loopback FOREIGN DATA WRAPPER pgwrh_fdw
                 OPTIONS (dbname '$$||current_database()||$$',
                          port '$$||current_setting('port')||$$',
                          use_remote_estimate 'true'

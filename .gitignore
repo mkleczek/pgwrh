@@ -4,3 +4,12 @@
 /output_iso/
 /tmp_check/
 /tmp_check_iso/
+
+*.o
+*.so
+*.dylib
+*.bc
+/.build/
+__pycache__/
+/regression.diffs
+/regression.out

@@ -1,3 +1,8 @@
+/*
+ * pgwrh_fdw modifications Copyright (c) 2026, pgwrh_fdw contributors.
+ * Licensed under GNU AGPL version 3 only; see LICENSE and LICENSING.md.
+ * Original PostgreSQL notices and permissions are retained below.
+ */
 /*-------------------------------------------------------------------------
  *
  * option.c
@@ -65,10 +70,10 @@ static bool is_libpq_option(const char *keyword);
  *
  * Raise an ERROR if the option or its value is considered invalid.
  */
-PG_FUNCTION_INFO_V1(postgres_fdw_validator);
+PG_FUNCTION_INFO_V1(pgwrh_fdw_validator);
 
 Datum
-postgres_fdw_validator(PG_FUNCTION_ARGS)
+pgwrh_fdw_validator(PG_FUNCTION_ARGS)
 {
 	List	   *options_list = untransformRelOptions(PG_GETARG_DATUM(0));
 	Oid			catalog = PG_GETARG_OID(1);
@@ -578,13 +583,13 @@ _PG_init(void)
 {
 	/*
 	 * Unlike application_name GUC, don't set GUC_IS_NAME flag nor check_hook
-	 * to allow postgres_fdw.application_name to be any string more than
+	 * to allow pgwrh_fdw.application_name to be any string more than
 	 * NAMEDATALEN characters and to include non-ASCII characters. Instead,
 	 * remote server truncates application_name of remote connection to less
 	 * than NAMEDATALEN and replaces any non-ASCII characters in it with a '?'
 	 * character.
 	 */
-	DefineCustomStringVariable("postgres_fdw.application_name",
+	DefineCustomStringVariable("pgwrh_fdw.application_name",
 							   "Sets the application name to be used on the remote server.",
 							   NULL,
 							   &pgfdw_application_name,
@@ -595,5 +600,5 @@ _PG_init(void)
 							   NULL,
 							   NULL);
 
-	MarkGUCPrefixReserved("postgres_fdw");
+	MarkGUCPrefixReserved("pgwrh_fdw");
 }
