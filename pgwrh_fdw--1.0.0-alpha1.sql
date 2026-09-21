@@ -39,3 +39,8 @@ RETURNS bool
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT PARALLEL RESTRICTED;
 
+-- Use the server's SCRAM iteration policy and a fresh cryptographic salt.
+CREATE FUNCTION pgwrh_fdw_scram_verifier(password text)
+RETURNS text
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT VOLATILE PARALLEL RESTRICTED;
