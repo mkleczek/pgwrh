@@ -1,3 +1,8 @@
+/*
+ * pgwrh_fdw modifications Copyright (c) 2026, pgwrh_fdw contributors.
+ * Licensed under GNU AGPL version 3 only; see LICENSE and LICENSING.md.
+ * Original PostgreSQL notices and permissions are retained below.
+ */
 /*-------------------------------------------------------------------------
  *
  * postgres_fdw.h
@@ -12,6 +17,12 @@
  */
 #ifndef POSTGRES_FDW_H
 #define POSTGRES_FDW_H
+
+#include "namespace.h"
+
+#if PG_VERSION_NUM < 190000 || PG_VERSION_NUM >= 200000
+#error "pgwrh_fdw supports PostgreSQL 19 only"
+#endif
 
 #include "foreign/foreign.h"
 #include "lib/stringinfo.h"

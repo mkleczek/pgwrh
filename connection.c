@@ -1,3 +1,8 @@
+/*
+ * pgwrh_fdw modifications Copyright (c) 2026, pgwrh_fdw contributors.
+ * Licensed under GNU AGPL version 3 only; see LICENSE and LICENSING.md.
+ * Original PostgreSQL notices and permissions are retained below.
+ */
 /*-------------------------------------------------------------------------
  *
  * connection.c
@@ -136,11 +141,11 @@ enum pgfdwVersion
 /*
  * SQL functions
  */
-PG_FUNCTION_INFO_V1(postgres_fdw_get_connections);
-PG_FUNCTION_INFO_V1(postgres_fdw_get_connections_1_2);
-PG_FUNCTION_INFO_V1(postgres_fdw_disconnect);
-PG_FUNCTION_INFO_V1(postgres_fdw_disconnect_all);
-PG_FUNCTION_INFO_V1(postgres_fdw_connection);
+PG_FUNCTION_INFO_V1(pgwrh_fdw_get_connections);
+PG_FUNCTION_INFO_V1(pgwrh_fdw_get_connections_1_2);
+PG_FUNCTION_INFO_V1(pgwrh_fdw_disconnect);
+PG_FUNCTION_INFO_V1(pgwrh_fdw_disconnect_all);
+PG_FUNCTION_INFO_V1(pgwrh_fdw_connection);
 
 /* prototypes of private functions */
 static void make_new_connection(ConnCacheEntry *entry, UserMapping *user);
@@ -228,11 +233,11 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 
 		if (pgfdw_we_get_result == 0)
 			pgfdw_we_get_result =
-				WaitEventExtensionNew("PostgresFdwGetResult");
+				WaitEventExtensionNew("PgwrhFdwGetResult");
 
 		ctl.keysize = sizeof(ConnCacheKey);
 		ctl.entrysize = sizeof(ConnCacheEntry);
-		ConnectionHash = hash_create("postgres_fdw connections", 8,
+		ConnectionHash = hash_create("pgwrh_fdw connections", 8,
 									 &ctl,
 									 HASH_ELEM | HASH_BLOBS);
 
@@ -432,7 +437,7 @@ make_new_connection(ConnCacheEntry *entry, UserMapping *user)
 	/* Now try to make the connection */
 	entry->conn = connect_pg_server(server, user);
 
-	elog(DEBUG3, "new postgres_fdw connection %p for server \"%s\" (user mapping oid %u, userid %u)",
+	elog(DEBUG3, "new pgwrh_fdw connection %p for server \"%s\" (user mapping oid %u, userid %u)",
 		 entry->conn, server->servername, user->umid, user->userid);
 }
 
@@ -566,9 +571,9 @@ construct_connection_params(ForeignServer *server, UserMapping *user,
 
 	*p_appname = appname;
 
-	/* Use "postgres_fdw" as fallback_application_name */
+	/* Use "pgwrh_fdw" as fallback_application_name */
 	keywords[n] = "fallback_application_name";
-	values[n] = "postgres_fdw";
+	values[n] = "pgwrh_fdw";
 	n++;
 
 	/* Set client_encoding so that libpq can convert encoding properly. */
@@ -644,7 +649,7 @@ connect_pg_server(ForeignServer *server, UserMapping *user)
 
 		/* first time, allocate or get the custom wait event */
 		if (pgfdw_we_connect == 0)
-			pgfdw_we_connect = WaitEventExtensionNew("PostgresFdwConnect");
+			pgfdw_we_connect = WaitEventExtensionNew("PgwrhFdwConnect");
 
 		/* OK to make connection */
 		start_conn =
@@ -1259,7 +1264,7 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 					 */
 					ereport(ERROR,
 							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-							 errmsg("cannot PREPARE a transaction that has operated on postgres_fdw foreign tables")));
+							 errmsg("cannot PREPARE a transaction that has operated on pgwrh_fdw foreign tables")));
 					break;
 				case XACT_EVENT_PARALLEL_COMMIT:
 				case XACT_EVENT_COMMIT:
@@ -1823,7 +1828,7 @@ pgfdw_get_cleanup_result(PGconn *conn, TimestampTz endtime,
 
 			/* first time, allocate or get the custom wait event */
 			if (pgfdw_we_cleanup_result == 0)
-				pgfdw_we_cleanup_result = WaitEventExtensionNew("PostgresFdwCleanupResult");
+				pgfdw_we_cleanup_result = WaitEventExtensionNew("PgwrhFdwCleanupResult");
 
 			/* Sleep until there's something to do */
 			wc = WaitLatchOrSocket(MyLatch,
@@ -2279,7 +2284,7 @@ pgfdw_finish_abort_cleanup(List *pending_entries, List *cancel_requested,
 #define POSTGRES_FDW_GET_CONNECTIONS_COLS	6	/* maximum of above */
 
 /*
- * Internal function used by postgres_fdw_get_connections variants.
+ * Internal function used by pgwrh_fdw_get_connections variants.
  *
  * For API version 1.1, this function takes no input parameter and
  * returns a set of records with the following values:
@@ -2467,7 +2472,7 @@ appendEscapedValue(StringInfo str, const char *val)
 }
 
 Datum
-postgres_fdw_connection(PG_FUNCTION_ARGS)
+pgwrh_fdw_connection(PG_FUNCTION_ARGS)
 {
 	Oid			userid = PG_GETARG_OID(0);
 	Oid			serverid = PG_GETARG_OID(1);
@@ -2519,7 +2524,7 @@ postgres_fdw_connection(PG_FUNCTION_ARGS)
  * we continue to support the older API versions.
  */
 Datum
-postgres_fdw_get_connections_1_2(PG_FUNCTION_ARGS)
+pgwrh_fdw_get_connections_1_2(PG_FUNCTION_ARGS)
 {
 	postgres_fdw_get_connections_internal(fcinfo, PGFDW_V1_2);
 
@@ -2527,7 +2532,7 @@ postgres_fdw_get_connections_1_2(PG_FUNCTION_ARGS)
 }
 
 Datum
-postgres_fdw_get_connections(PG_FUNCTION_ARGS)
+pgwrh_fdw_get_connections(PG_FUNCTION_ARGS)
 {
 	postgres_fdw_get_connections_internal(fcinfo, PGFDW_V1_1);
 
@@ -2547,7 +2552,7 @@ postgres_fdw_get_connections(PG_FUNCTION_ARGS)
  * foreign server with the given name is found, an error is reported.
  */
 Datum
-postgres_fdw_disconnect(PG_FUNCTION_ARGS)
+pgwrh_fdw_disconnect(PG_FUNCTION_ARGS)
 {
 	ForeignServer *server;
 	char	   *servername;
@@ -2568,7 +2573,7 @@ postgres_fdw_disconnect(PG_FUNCTION_ARGS)
  * returns true if it disconnects at least one connection, otherwise false.
  */
 Datum
-postgres_fdw_disconnect_all(PG_FUNCTION_ARGS)
+pgwrh_fdw_disconnect_all(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_BOOL(disconnect_cached_connections(InvalidOid));
 }
