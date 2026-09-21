@@ -1,10 +1,12 @@
 # PostgreSQL versions and the 19 preview
 
 pgwrh has one main branch and one extension version across PostgreSQL majors.
-Only `pgwrh_fdw` has a separate upstream and patch graph per major. Their exact
-patched trees are imported into `pgwrh_fdw/18/` and `pgwrh_fdw/19/`; `PG_CONFIG`
+Only `pgwrh_fdw` has a separate upstream and patched aggregate per major. Both
+aggregates share the same 13 functional patch changes, based on the common
+upstream ancestor; each aggregate holds its version-specific adaptations. Their
+exact patched trees are imported into `pgwrh_fdw/18/` and `pgwrh_fdw/19/`; `PG_CONFIG`
 selects the matching implementation. SQL, UI and the wait extension stay shared.
-See the [FDW workflow](../../pgwrh_fdw/UPSTREAM.md) for updating either graph.
+See the [FDW workflow](../../pgwrh_fdw/UPSTREAM.md) for updating shared patches or one major.
 
 | Target | FDW source | Status |
 | --- | --- | --- |
@@ -39,12 +41,12 @@ skip the PostgreSQL 19 functional suites.
 
 ## Before releasing against PostgreSQL 19 final
 
-1. Import the selected PostgreSQL 19 release and port the 13-patch graph from the
-   previous pristine base. Verify the aggregate, then subtree-merge it into
-   `pgwrh_fdw/19`.
+1. Import the selected PostgreSQL 19 release and replace the upstream parent of
+   its aggregate, retaining the shared patch parents. Resolve version-specific
+   conflicts, verify the aggregate, then subtree-merge it into `pgwrh_fdw/19`.
 2. Update the source pin/hash in `nix/postgresql-19.nix`, the FDW CI source pin,
    container base tag and this provenance documentation. Keep PostgreSQL 18's
-   graph and directory intact.
+   aggregate and directory intact.
 3. Remove beta-specific APT/RPM repository settings once PGDG moves 19 into its
    ordinary repositories. Enable the PostgreSQL 19 RPM matrix entry when its
    pg_background package is available.
@@ -78,3 +80,10 @@ using pg_background 2.0.3 for both:
 
 The expanded CI matrix remains responsible for the other operating-system and
 architecture combinations. No release tag or published artifact was changed.
+
+The later shared-patch history reorganization preserved both tested FDW trees
+byte for byte. All 13 shared patch revisions compiled with PostgreSQL 18's
+upstream C updates applied. A temporary shared-patch edit propagated to both
+aggregates; a PostgreSQL 19 upstream update left the PostgreSQL 18 aggregate
+unchanged. The upstream/subtree maintenance tests passed with shared patch
+commits retained across the update.

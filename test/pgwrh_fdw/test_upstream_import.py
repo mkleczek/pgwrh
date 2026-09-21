@@ -52,13 +52,17 @@ class UpstreamImportTests(unittest.TestCase):
         self.old_upstream = self.git(self.filtered, 'rev-parse', 'HEAD')
         with (self.filtered / 'postgres_fdw.c').open('a') as f:
             f.write('/* local patch */\n')
-        patched = self.commit(self.filtered, 'Local FDW behavior')
+        self.patch = self.commit(self.filtered, 'Shared FDW behavior')
         self.base = self.git(self.filtered, 'commit-tree', 'HEAD^{tree}', '-p', self.old_upstream,
-                             '-p', patched, '-m', 'Collect the functional patches')
+                             '-p', self.patch, '-m', 'Collect the functional patches')
         self.git(self.filtered, 'branch', 'fdw_base_18', self.base)
-        self.git(self.filtered, 'switch', '-c', 'pg19-patches', self.base)
+        self.git(self.filtered, 'switch', '-c', 'pg19-upstream', self.old_upstream)
         (self.filtered / 'pg19-only.c').write_text('/* other major must stay unchanged */\n')
-        self.base19 = self.commit(self.filtered, 'PostgreSQL 19 compatibility')
+        upstream19 = self.commit(self.filtered, 'PostgreSQL 19 upstream')
+        self.git(self.filtered, 'merge', '--no-ff', self.patch, '-m', 'Share the same patch with PostgreSQL 19')
+        self.base19 = self.git(self.filtered, 'rev-parse', 'HEAD')
+        self.assertEqual(set(self.git(self.filtered, 'show', '-s', '--format=%P', self.base19).split()),
+                         {upstream19, self.patch})
         self.git(self.filtered, 'branch', 'fdw_base_19', self.base19)
         self.git(self.filtered, 'switch', 'main')
         self.init(self.repo)
@@ -81,7 +85,7 @@ class UpstreamImportTests(unittest.TestCase):
         return subprocess.run([sys.executable, str(self.script), str(source or self.pg), tag],
                               text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-    def test_updates_only_upstream_then_patches_and_subtree_reapply(self):
+    def test_updates_only_upstream_and_reuses_shared_patch_in_subtree(self):
         (self.repo / 'README').write_text('uncommitted project work\n')
         before_status = self.git(self.repo, 'status', '--porcelain')
         result = self.run_import()
@@ -95,10 +99,12 @@ class UpstreamImportTests(unittest.TestCase):
                          self.git(self.pg, 'rev-parse', 'REL_18_4:contrib/postgres_fdw'))
         self.assertIn(self.new_source, self.git(self.repo, 'cat-file', '-p', 'upstream/REL_18_4'))
         self.git(self.filtered, 'fetch', str(self.repo), 'upstream/postgres_fdw:refs/heads/next-upstream')
-        self.git(self.filtered, 'rebase', '--onto', 'next-upstream', self.old_upstream, 'main')
-        next_base = self.git(self.filtered, 'commit-tree', 'HEAD^{tree}', '-p', 'next-upstream',
-                             '-p', 'HEAD', '-m', 'Collect the refreshed patches')
-        self.git(self.filtered, 'branch', 'next-fdw', next_base)
+        self.git(self.filtered, 'switch', '-c', 'next-fdw', 'next-upstream')
+        self.git(self.filtered, 'merge', '--no-ff', self.patch, '-m', 'Merge upstream with the shared patch')
+        next_parents = set(self.git(self.filtered, 'show', '-s', '--format=%P', 'next-fdw').split())
+        parents19 = set(self.git(self.filtered, 'show', '-s', '--format=%P', self.base19).split())
+        self.assertEqual(next_parents & parents19, {self.patch})
+        self.assertIn(self.git(self.filtered, 'rev-parse', 'next-upstream'), next_parents)
         self.git(self.repo, 'fetch', str(self.filtered), 'next-fdw:refs/heads/next-fdw')
         self.git(self.repo, 'restore', 'README')
         self.git(self.repo, 'subtree', 'merge', '--prefix=pgwrh_fdw/18', 'next-fdw')
