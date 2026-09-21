@@ -133,11 +133,19 @@ ifeq ($(WITH_GIST_EXTRA),1)
 test-gist: pgwrh_gist_extra-all
 	$(MAKE) -C pgwrh_gist_extra stage PG_CONFIG="$(PG_CONFIG)" STAGE_DIR="$(TEST_STAGE_ROOT)"
 	$(PYTHON) -m pytest test/pgwrh_gist_extra -v
+ifeq ($(WITH_FDW),1)
+test-gist-integration: test-gist pgwrh_fdw-all
+	$(MAKE) -C pgwrh_fdw stage PG_CONFIG="$(PG_CONFIG)" STAGE_DIR="$(TEST_STAGE_ROOT)"
+	$(PYTHON) -m pytest test/pgwrh_gist_extra_integration -v
 else
-test-gist:
+test-gist-integration:
+	$(error test-gist-integration requires WITH_FDW=1)
+endif
+else
+test-gist test-gist-integration:
 	$(error test-gist requires WITH_GIST_EXTRA=1)
 endif
 
 .PHONY: all install uninstall clean prepare testgres-ext test-stage \
-	test-pgwrh test-ui test-wait test-fdw test-fdw-tap test-gist test-packaging \
+	test-pgwrh test-ui test-wait test-fdw test-fdw-tap test-gist test-gist-integration test-packaging \
 	$(ALL_TARGETS) $(INSTALL_TARGETS) $(CLEAN_TARGETS) $(UNINSTALL_TARGETS)

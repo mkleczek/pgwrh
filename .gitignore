@@ -5,8 +5,10 @@
 result
 /.idea/
 *.o
+*.o.tmp
 *.so
 *.dylib
 *.bc
+*.bc.tmp
 __pycache__/
 .pytest_cache/
