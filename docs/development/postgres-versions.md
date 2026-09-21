@@ -4,7 +4,9 @@ pgwrh has one main branch and one extension version across PostgreSQL majors.
 Only `pgwrh_fdw` has a separate upstream and patched aggregate per major. Both
 aggregates share the same 13 functional patch changes, based on the common
 upstream ancestor; each aggregate holds its version-specific adaptations. Their
-exact patched trees are imported into `pgwrh_fdw/18/` and `pgwrh_fdw/19/`; `PG_CONFIG`
+exact patched trees are moved into `pgwrh_fdw/18/` and `pgwrh_fdw/19/` by separate
+jj changes bookmarked as `fdw_base_18` and `fdw_base_19`. Each move has its
+aggregate as its sole parent, and both moves are parents of `main`. `PG_CONFIG`
 selects the matching implementation. SQL, UI and the wait extension stay shared.
 See the [FDW workflow](../../pgwrh_fdw/UPSTREAM.md) for updating shared patches or one major.
 
@@ -43,7 +45,8 @@ skip the PostgreSQL 19 functional suites.
 
 1. Import the selected PostgreSQL 19 release and replace the upstream parent of
    its aggregate, retaining the shared patch parents. Resolve version-specific
-   conflicts, verify the aggregate, then subtree-merge it into `pgwrh_fdw/19`.
+   conflicts, verify the aggregate, then refresh its directory-move change with
+   `python3 pgwrh_fdw/tools/refresh-layout.py 19`.
 2. Update the source pin/hash in `nix/postgresql-19.nix`, the FDW CI source pin,
    container base tag and this provenance documentation. Keep PostgreSQL 18's
    aggregate and directory intact.
@@ -75,7 +78,7 @@ using pg_background 2.0.3 for both:
 - The PostgreSQL 19 Compose demo passed initial and repeated setup, returned
   100 rows from each replica and served the read-only console.
 - Release metadata, workflow lint, signed repository generation for both DEB
-  names, and synthetic upstream/subtree update tests passed. The latter verify
+  names, and synthetic upstream/integration update tests passed. The latter verify
   that updating one imported directory preserves the other exactly.
 
 The expanded CI matrix remains responsible for the other operating-system and
@@ -85,5 +88,11 @@ The later shared-patch history reorganization preserved both tested FDW trees
 byte for byte. All 13 shared patch revisions compiled with PostgreSQL 18's
 upstream C updates applied. A temporary shared-patch edit propagated to both
 aggregates; a PostgreSQL 19 upstream update left the PostgreSQL 18 aggregate
-unchanged. The upstream/subtree maintenance tests passed with shared patch
+unchanged. The upstream/integration maintenance tests passed with shared patch
 commits retained across the update.
+
+The subsequent switch to jj directory-move changes also preserved both tested
+source trees exactly. Tests cover refreshing shared edits, added and deleted
+files through both moves into `main`, updating one upstream without changing the
+other major, and preserving unrelated working edits. No Git subtree command is
+needed for this maintenance workflow.

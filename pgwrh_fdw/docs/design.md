@@ -86,16 +86,19 @@ must be adapted to pgwrh_fdw's installation script.
 `upstream/postgres_fdw` and `upstream/postgres_fdw_19` retain unmodified filtered
 PostgreSQL history for their respective majors. One shared graph of functional
 jj changes starts at `fdw_patch_base`, their common upstream ancestor, and keeps
-that standalone layout. Each `fdw_base_MAJOR` has the same functional changes
-and its own pristine upstream tip as parents. Version-specific API adaptations
-and merge resolutions live in the aggregates. Git subtree imports each exact aggregate,
-including its tests, under `pgwrh_fdw/MAJOR/`. A common build wrapper selects the
+that standalone layout. Each aggregate has the same functional changes and its
+own pristine upstream tip as parents. Version-specific API adaptations and merge
+resolutions live in the aggregates. Each `fdw_base_MAJOR` bookmarks a separate
+directory-move change whose sole parent is its aggregate (`fdw_base_MAJOR-`).
+The move puts that exact tree, including its tests, under `pgwrh_fdw/MAJOR/`, and
+both moves are parents of `main`. A common build wrapper selects the
 matching directory using `PG_CONFIG`.
 
 The import helper advances only the pristine upstream bookmark and its
 provenance tag. Replace only the aggregate's upstream parent, retain its shared
-patch parents, resolve compatibility conflicts, and test before importing the
-reviewed aggregate into pgwrh. Another major reuses the shared patches with its
+patch parents, resolve compatibility conflicts, and test before refreshing its
+directory move with `pgwrh_fdw/tools/refresh-layout.py`. jj then rebases the
+integration. Another major reuses the shared patches with its
 own upstream parent and compatibility resolutions. See [upstream
 maintenance](../UPSTREAM.md) for the update and porting workflow.
 

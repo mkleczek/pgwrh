@@ -177,7 +177,7 @@ happen before relying on the wait API.
 Release archives must contain `pgwrh/`, `pgwrh_ui/`, `pgwrh_wait/`, and
 `pgwrh_fdw/`, together with the root Makefile. Include `test/` to run the
 verification suites. No submodule initialization or separate pgwrh_fdw release
-download is required. Archive a reviewed release commit, including its subtree,
+download is required. Archive a reviewed release commit, including both FDW directories,
 rather than assembling sources from independent checkouts at package-build time.
 
 ## Build variants

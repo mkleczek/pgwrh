@@ -4,7 +4,7 @@ let
   postgres = postgresql.withPackages (ps: [ background ]);
   python = pkgs.python3.withPackages (ps: [ ps.pytest (pkgs.callPackage ./testgres.nix {}) ]);
 in pkgs.mkShell {
-  packages = [ postgres postgres.pg_config python pkgs.postgrest pkgs.gnumake pkgs.llvmPackages.clang ];
+  packages = [ postgres postgres.pg_config python pkgs.postgrest pkgs.gnumake pkgs.llvmPackages.clang pkgs.git pkgs.jujutsu ];
   buildInputs = [ pkgs.openssl pkgs.libkrb5 ];
   PG_CONFIG = "${postgres.pg_config}/bin/pg_config";
   PG_BIN = "${postgres}/bin";

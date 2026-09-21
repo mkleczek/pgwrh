@@ -30,6 +30,9 @@ jobs:
         if: inputs.source_artifact != ''
         run: tar -xzf release-source/*.tar.gz --strip-components=1
       - uses: cachix/install-nix-action@v31
+      - name: Verify jj directory-move maintenance
+        if: matrix.pg == 18
+        run: nix develop .#tests-18 --command python3 test/pgwrh_fdw/test_jj_layout.py
       - name: Test core, replication waits and the real PostgREST UI
         run: nix develop .#tests-${{ matrix.pg }} --command bash test/run-functional.sh
       - name: Preserve integration test results
