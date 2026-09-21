@@ -33,6 +33,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "postgres_fdw.h"
+#include "transaction_context.h"
 #include "storage/latch.h"
 #include "utils/builtins.h"
 #include "utils/hsearch.h"
@@ -931,6 +932,7 @@ begin_remote_xact(ConnCacheEntry *entry)
 		 */
 		StringInfoData sql;
 		bool		ro = (read_only_level == 1);
+		List	   *parameters = pgwrh_fdw_transaction_parameters(entry->serverid);
 
 		elog(DEBUG3, "starting remote transaction on connection %p",
 			 entry->conn);
@@ -953,6 +955,16 @@ begin_remote_xact(ConnCacheEntry *entry)
 			Assert(!entry->xact_read_only);
 			entry->xact_read_only = true;
 		}
+		/*
+		 * Apply at top level, before snapshot-taking commands AND before
+		 * mirrored savepoints. Rollback of a first-use subtransaction must
+		 * not undo this context. Keep changing_xact_state armed on failure:
+		 * a partially initialized transaction must never be reused/committed.
+		 * Both the normal path and the reconnect retry call this function on
+		 * the actual selected connection.
+		 */
+		pgwrh_fdw_apply_parameters(entry->conn, parameters);
+		list_free(parameters);
 		entry->changing_xact_state = false;
 	}
 	else if (!entry->xact_read_only)
