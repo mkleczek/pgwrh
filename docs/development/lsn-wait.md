@@ -5,9 +5,10 @@ publisher log sequence number (LSN). Read the [user contract](../lsn-wait.md)
 before changing the monitor or its transaction ordering.
 
 The preloaded library registers a transaction callback in every backend and
-filters for logical apply workers, excluding table synchronization workers and
-ordinary sessions. PRE_COMMIT captures the worker's own
-`replorigin_session_origin_lsn` and reserves a shared hash entry. Only
+filters for leader and parallel apply workers, excluding table and sequence
+synchronization workers and ordinary sessions. PRE_COMMIT captures the worker's own
+origin LSN (`replorigin_session_origin_lsn` on 18,
+`replorigin_xact_state.origin_lsn` on 19) and reserves a shared hash entry. Only
 XACT_EVENT_COMMIT publishes it, after `ProcArrayEndTransaction` has removed the
 applying transaction. The post-commit path does no allocation, catalog access,
 SQL execution, or error reporting. Aborted/prepared transactions do not publish.
@@ -42,9 +43,14 @@ watermark. Size this for subscription churn. Exhaustion does not stop apply;
 untracked subscribers report an explicit capacity error to readers. Increase the
 setting and restart to reclaim the table.
 
-This relies on PostgreSQL 18 internal worker structures and callback ordering.
-The build rejects other major versions until the implementation and tests have
-been audited for them. Relevant upstream code:
+This relies on PostgreSQL 18/19 internal worker structures and callback ordering.
+`src/compat.h` adapts origin state, shared-hash initialization, LSN soft-error
+parsing and table-readiness enumeration. The monitor and wait logic stay shared.
+PostgreSQL 19 sequence synchronization neither publishes table-read watermarks
+nor blocks a wait once all subscription tables are ready. The origin-setup commit
+still precedes the upstream connection, and COMMIT callbacks still follow
+ProcArray removal in `REL_19_BETA3`. Other majors are rejected until audited.
+Relevant upstream code:
 
 - [CommitTransaction and ProcArray ordering](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/backend/access/transam/xact.c)
 - [Apply commit handling and origin setup](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/backend/replication/logical/worker.c)
