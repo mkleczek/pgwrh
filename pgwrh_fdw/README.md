@@ -118,6 +118,15 @@ partitionwise joins because all aliases share a transaction binding. See
 [virtual-server routing](docs/virtual-servers.md) for transaction and plan
 rules.
 
+## Local lookup joins
+
+Small filtered local tables can drive remote INNER and SEMI joins through
+parameterized `unnest` relations. Output-only lookup values stay local; shard
+routing skips irrelevant execution connections. Ordinary joins and `IN`/`EXISTS`
+need no manual arrays. See [automatic lookup joins](docs/lookup-joins.md) for
+supported inputs, the enable setting, runtime bounds/fallback and a reproducible
+`EXPLAIN ANALYZE` example.
+
 ## Frozen transaction context
 
 The first attempt to start a remote transaction on a server with

@@ -814,12 +814,13 @@ scripts (async, transactional, description, commands) AS (
         TRUE,
         format('Creating missing remote shards [%s]', string_agg(fqn(remote_rel_id), ', ')),
         array_agg(
-            format('CREATE FOREIGN TABLE %s PARTITION OF %s %s SERVER %I OPTIONS (schema_name %L)',
+            format('CREATE FOREIGN TABLE %s PARTITION OF %s %s SERVER %I OPTIONS (schema_name %L, lookup_join %L)',
                 fqn(remote_rel_id),
                 template.reg_class,
                 sa.remote_bound,
                 shard_server_name,
-                (sa).view_schema_name
+                (sa).view_schema_name,
+                sa.is_leaf::text
             )
         )
         ||

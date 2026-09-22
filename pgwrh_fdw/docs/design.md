@@ -4,6 +4,38 @@ This contributor guide describes how `pgwrh_fdw` propagates transaction settings
 and how to maintain its PostgreSQL fork. Read the [user contract](../README.md)
 first; [virtual-server internals](virtual-server-internals.md) covers routing.
 
+## Remote lookup joins
+
+`lookup_join.c` chains the join-path hook and offers a costed CustomPath beside
+the ordinary INNER/SEMI paths. Eligibility requires an independent local scan,
+a strict same-integer-type key equality, supported partition metadata and
+shippability of every remote condition. The existing virtual join hook retains
+its behavior. No user query is executed to construct the plan.
+
+The CustomScan stores only copyable planner nodes. Its children include the
+lookup scan, ordinary shard scans for fallback, and generated ForeignScans over
+parameterized `ROWS FROM (pg_catalog.unnest(...))` relations. Custom expression
+and scan target lists let PostgreSQL perform normal parameter/Var rewriting.
+Synthetic array placeholders in the plan are replaced by executor-owned values
+at cursor creation; cached plans contain no materialized lookup data.
+
+Execution first consumes the local lookup into a spillable spool and a bounded
+row-occurrence index. It builds all parallel arrays from those same rows, using
+the FDW's transmission settings and type output machinery. PostgreSQL partition
+bound helpers assign rows to eligible destinations. Stable row IDs reconnect
+remote INNER results with retained local output columns; SEMI SQL uses EXISTS
+and needs no IDs. Remote matching is never repeated locally on this path.
+
+Foreign children initialize with connection acquisition deferred. Only selected
+destinations enter the normal FDW Begin/Iterate/End lifecycle, preserving
+effective users, actual/virtual routing and transaction context. If the actual
+row/index/payload budget overflows, the node uses the saved ordinary scans and
+local qualification against the spool before returning any results. Local leaves
+use that same qualification path. Rescans reset foreign cursors and reuse the
+materialization unless executor parameters changed. The node advertises neither
+ordering nor parallel/async behavior. See [lookup joins](lookup-joins.md) for
+the SQL contract, bounds, supported topology and EXPLAIN example.
+
 ## Contract
 
 Capture all supported custom parameters on the first configured remote

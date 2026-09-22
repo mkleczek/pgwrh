@@ -135,6 +135,17 @@ prepared limits, runtime pruning, async scans and correctness barriers. See
 [LIMIT pushdown](../../pgwrh_fdw/docs/limit-pushdown.md) for its scope and planner
 setting. It runs on both majors through `make test-fdw`.
 
+The [lookup-join suite](../../pgwrh_fdw/docs/lookup-joins.md) exercises remote
+INNER/SEMI matching, retained values, generic executions, overflow, pruning,
+local leaves, virtual routing, savepoints, cancellation and conservative
+fallbacks. It runs through `make test-fdw` on both majors. After staging with
+`make testgres-ext`, run managed lookup/routing coverage with:
+
+```sh
+python3 -m pytest test/pgwrh/test_remote_lookup_join.py \
+  test/pgwrh/test_virtual_shard_routing.py test/pgwrh/test_remote_shard_aggregation.py -q
+```
+
 `pgwrh_fdw/MAJOR/run-upstream.py` runs the retained main FDW and
 query-cancellation SQL tests plus the `eval_plan_qual` isolation tests. For the
 retained SCRAM TAP test, also provide matching PostgreSQL source test modules
