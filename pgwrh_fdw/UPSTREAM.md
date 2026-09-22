@@ -14,14 +14,14 @@ comes from its matching PostgreSQL release.
 
 ## History layout
 
-The 15 functional changes form one shared graph rooted at `fdw_patch_base`,
+The 18 functional changes form one shared graph rooted at `fdw_patch_base`,
 the common upstream ancestor `f001c8a7943425e12cf4d0498a82837acf722eb6`.
 They apply to the filtered tree at the repository root, retaining upstream
 C/header filenames and regression-test paths. Each change contains its
 implementation and tests. Dependencies remain explicit; the SCRAM verifier
 change is independent of the routing changes.
 
-Each aggregate has 16 direct parents: the same 15 shared patch commits and
+Each aggregate has 19 direct parents: the same 18 shared patch commits and
 its major's pristine upstream tip. The aggregates resolve build, SQL and export
 lists, renamed regression files and version-specific APIs. PostgreSQL 19
 adaptations belong in `fdw_base_19-`; shared behavior belongs in the common
@@ -37,7 +37,7 @@ versioned FDW sources come exclusively from the move parents.
 ```mermaid
 graph TD
     B[fdw_patch_base] --> U18[Upstream 18]
-    B --> P[15 shared functional changes]
+    B --> P[18 shared functional changes]
     B --> U19[Upstream 19]
     U18 --> A18[Aggregate 18]
     P --> A18
@@ -67,6 +67,11 @@ jj diff -r fdw_base_19 --summary
 Functional patches can be reviewed or exported without removing a directory
 prefix. Proposals for PostgreSQL itself still need to select relevant changes
 and adapt the extension-specific API and tests.
+
+The lookup implementation is shared in `sqmzztxu` and `yznpkzqo`; the related
+LIMIT regression adaptation is `ynssotmk`. These are additional parents of the
+existing aggregates (`lvwzssxp` for 18 and `mqpxytlz` for 19), whose existing
+directory moves have been refreshed. No additional aggregate was created.
 
 ## Changing shared behavior
 
