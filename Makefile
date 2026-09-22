@@ -6,6 +6,7 @@ OBJS = \
 	connection.o \
 	deparse.o \
 	join.o \
+	lookup_join.o \
 	option.o \
 	transaction_context.o \
 	virtual.o \
@@ -42,3 +43,5 @@ stage: all
 	cp $(shlib) "$(STAGE_DIR)/"
 
 .PHONY: stage
+
+lookup_join.o deparse.o postgres_fdw.o: lookup_join.h

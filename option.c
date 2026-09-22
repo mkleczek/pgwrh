@@ -25,6 +25,7 @@
 #include "commands/extension.h"
 #include "libpq/libpq-be.h"
 #include "postgres_fdw.h"
+#include "lookup_join.h"
 #include "transaction_context.h"
 #include "virtual.h"
 #include "utils/guc.h"
@@ -611,5 +612,6 @@ _PG_init(void)
 							   NULL,
 							   NULL);
 
+	pgwrh_fdw_lookup_init(NULL);
 	MarkGUCPrefixReserved("pgwrh_fdw");
 }

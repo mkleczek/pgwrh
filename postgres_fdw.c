@@ -46,6 +46,7 @@
 #include "postgres_fdw.h"
 #include "virtual.h"
 #include "join.h"
+#include "lookup_join.h"
 #include "storage/latch.h"
 #include "utils/builtins.h"
 #include "utils/float.h"
@@ -165,6 +166,8 @@ typedef struct PgFdwScanState
 	FmgrInfo   *param_flinfo;	/* output conversion functions for them */
 	List	   *param_exprs;	/* executable expressions for param values */
 	const char **param_values;	/* textual values of query parameters */
+	int lookup_nparams;
+	const char **lookup_values;
 
 	/* for storing result tuples */
 	HeapTuple  *tuples;			/* array of currently-retrieved tuples */
@@ -567,6 +570,7 @@ pgwrh_fdw_handler(PG_FUNCTION_ARGS)
 	FdwRoutine *routine = makeNode(FdwRoutine);
 
 	pgwrh_fdw_join_init(postgresGetForeignJoinPaths);
+	pgwrh_fdw_lookup_init(postgresGetForeignJoinPaths);
 
 	/* Functions for scanning foreign tables */
 	routine->GetForeignRelSize = postgresGetForeignRelSize;
@@ -3803,6 +3807,10 @@ create_cursor(ForeignScanState *node)
 
 		MemoryContextSwitchTo(oldcontext);
 	}
+
+	/* Lookup arrays belong to the custom node, never to the cached plan. */
+	for (int i = 0; i < fsstate->lookup_nparams; i++)
+		values[i] = fsstate->lookup_values[i];
 
 	/* Construct the DECLARE CURSOR command */
 	initStringInfo(&buf);
@@ -8045,4 +8053,38 @@ get_batch_size_option(Relation rel)
 	}
 
 	return batch_size;
+}
+
+/* Start only a selected lookup destination, through the normal FDW lifecycle. */
+void
+pgwrh_fdw_lookup_start(ForeignScanState *node, int nparams, const char **values)
+{
+    PgFdwScanState *state;
+
+    if (!node->fdw_state)
+        postgresBeginForeignScan(node, 0);
+    state = node->fdw_state;
+    Assert(nparams <= state->numParams);
+    state->lookup_nparams = nparams;
+    state->lookup_values = values;
+}
+
+/* A changed lookup invalidates a cursor even when its SQL parameters are Consts. */
+void
+pgwrh_fdw_lookup_reset(ForeignScanState *node)
+{
+    PgFdwScanState *state = node->fdw_state;
+
+    if (!state)
+        return;
+    if (state->cursor_exists)
+        close_cursor(state->conn, state->cursor_number, state->conn_state);
+    state->cursor_exists = false;
+    state->tuples = NULL;
+    state->num_tuples = state->next_tuple = state->fetch_ct_2 = 0;
+    state->eof_reached = false;
+    state->lookup_nparams = 0;
+    state->lookup_values = NULL;
+    ExecClearTuple(node->ss.ss_ScanTupleSlot);
+    MemoryContextReset(state->batch_cxt);
 }
