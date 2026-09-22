@@ -64,8 +64,20 @@ class LimitPushdownTests(unittest.TestCase):
             yield from self.nodes(child)
 
     def remote_sql(self, query):
-        return [node['Remote SQL'] for node in self.nodes(self.plan(query))
-                if 'Remote SQL' in node]
+        def statements(node):
+            if node.get('Custom Plan Provider') == 'Pgwrh Remote Lookup Join':
+                # The custom join also keeps ordinary scans for overflow. The
+                # optimized foreign children describe the chosen remote work.
+                for child in node.get('Plans', []):
+                    sql = child.get('Remote SQL', '')
+                    if 'pg_catalog.unnest' in sql:
+                        yield sql
+                return
+            if 'Remote SQL' in node:
+                yield node['Remote SQL']
+            for child in node.get('Plans', []):
+                yield from statements(child)
+        return list(statements(self.plan(query)))
 
     def assert_limits(self, query, count=2, limited=True):
         statements = self.remote_sql(query)
