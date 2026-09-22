@@ -127,7 +127,8 @@ pgwrh_fdw_validator(PG_FUNCTION_ARGS)
 		/*
 		 * Validate option value, when we can do so without any context.
 		 */
-		if (strcmp(def->defname, "use_remote_estimate") == 0 ||
+		if (strcmp(def->defname, "lookup_join") == 0 ||
+			strcmp(def->defname, "use_remote_estimate") == 0 ||
 			strcmp(def->defname, "updatable") == 0 ||
 			strcmp(def->defname, "truncatable") == 0 ||
 			strcmp(def->defname, "async_capable") == 0 ||
@@ -261,6 +262,7 @@ InitPgFdwOptions(void)
 		{"transaction_parameters", ForeignServerRelationId, false},
 		{"schema_name", ForeignTableRelationId, false},
 		{"table_name", ForeignTableRelationId, false},
+		{"lookup_join", ForeignTableRelationId, false},
 		{"column_name", AttributeRelationId, false},
 		/* use_remote_estimate is available on both server and table */
 		{"use_remote_estimate", ForeignServerRelationId, false},

@@ -7,6 +7,7 @@
 #include "catalog/namespace.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_type_d.h"
+#include "commands/defrem.h"
 #include "commands/explain.h"
 #include "commands/explain_format.h"
 #include "optimizer/cost.h"
@@ -57,6 +58,7 @@ typedef struct LookupPath
     List *shardvars;
     List *lookupvars;
     List *shipvars;
+    List *routeoids;
     Var *lookupkey;
     Oid parentoid;
     JoinType kind;
@@ -87,6 +89,7 @@ typedef struct LookupState
     const char ***payloads;
     Tuplestorestate *store;
     TupleTableSlot *lookupslot;
+    TupleTableSlot *spoolslot;
     TupleTableSlot *shardslot;
     ExprState *joinqual;
     MemoryContext fastcxt;
@@ -192,8 +195,8 @@ child_exprs(PlannerInfo *root, RelOptInfo *parent, RelOptInfo *child, List *expr
 {
     if (child == parent)
         return copyObject(exprs);
-    return (List *) adjust_appendrel_attrs(root, (Node *) exprs, 1,
-                                          &root->append_rel_array[child->relid]);
+    return (List *) adjust_appendrel_attrs_multilevel(root, (Node *) exprs,
+                                                      child, parent);
 }
 
 static List *
@@ -228,7 +231,7 @@ consider_lookup(PlannerInfo *root, RelOptInfo *joinrel, RelOptInfo *shard,
 {
     RangeTblEntry *lrte;
     RangeTblEntry *srte;
-    List *leaves = NIL;
+    List *leaves = NIL, *routeoids = NIL;
     List *svars = NIL, *lvars = NIL, *shipvars = NIL, *unused = NIL;
     List *quals = extract_actual_clauses(extra->restrictlist, false);
     List *paths = NIL;
@@ -237,7 +240,7 @@ consider_lookup(PlannerInfo *root, RelOptInfo *joinrel, RelOptInfo *shard,
     Var *key = NULL;
     AttrNumber partatt = 0;
     Oid parentoid = InvalidOid;
-    int remotes = 0;
+    int remotes = 0, disabled_nodes = 0;
     double cost = 0, transfer = 0;
     LookupPath *result;
 
@@ -272,17 +275,40 @@ consider_lookup(PlannerInfo *root, RelOptInfo *joinrel, RelOptInfo *shard,
         for (int i = 0; i < shard->nparts; i++)
         {
             RelOptInfo *leaf = shard->part_rels[i];
+            Oid routeoid;
             if (!leaf || IS_DUMMY_REL(leaf))
                 continue;
-            /* No nested partition shapes, UNION ALL, or collapsed subtrees. */
+            routeoid = planner_rt_fetch(leaf->relid, root)->relid;
+            /* pgwrh wraps a leaf in one partitioned slot using the same key.
+             * The root routes to the slot; one leaf can be scanned directly.
+             * More general nested trees require another pruning analysis. */
+            if (leaf->part_scheme)
+            {
+                Relation slotrel = table_open(routeoid, NoLock);
+                PartitionKey slotkey = RelationGetPartitionKey(slotrel);
+                bool same = slotkey && slotkey->partnatts == 1 &&
+                    slotkey->partattrs[0] == partatt &&
+                    slotkey->parttypid[0] == shard->part_scheme->partopcintype[0];
+                table_close(slotrel, NoLock);
+                if (!same || leaf->nparts != 1 || !leaf->part_rels || !leaf->part_rels[0])
+                    return;
+                leaf = leaf->part_rels[0];
+                if (IS_DUMMY_REL(leaf))
+                    continue;
+            }
+            /* No additional nested shapes or UNION ALL inputs. */
             if (leaf->part_scheme || (planner_rt_fetch(leaf->relid, root)->relkind != RELKIND_RELATION &&
                                      planner_rt_fetch(leaf->relid, root)->relkind != RELKIND_FOREIGN_TABLE))
                 return;
             leaves = lappend(leaves, leaf);
+            routeoids = lappend_oid(routeoids, routeoid);
         }
     }
     else if (srte->relkind == RELKIND_FOREIGN_TABLE && our_foreign(shard))
+    {
         leaves = list_make1(shard);
+        routeoids = list_make1_oid(srte->relid);
+    }
     else
         return;
 
@@ -317,7 +343,9 @@ consider_lookup(PlannerInfo *root, RelOptInfo *joinrel, RelOptInfo *shard,
         if (!payload_type(((Var *) lfirst(lc))->vartype))
             return;
     lp = plain_path(lookup);
-    if (!lp || lookup->rows * (lookup->reltarget->width * 2.0 + 128) >
+    if (!lp || (lp->pathtype != T_SeqScan && lp->pathtype != T_IndexScan &&
+                lp->pathtype != T_IndexOnlyScan && lp->pathtype != T_BitmapHeapScan &&
+                lp->pathtype != T_TidScan && lp->pathtype != T_TidRangeScan) || lookup->rows * (lookup->reltarget->width * 2.0 + 128) >
                lookup_max_memory * 1024.0)
         return;
     paths = list_make1(create_projection_path(root, lookup, lp,
@@ -331,14 +359,23 @@ consider_lookup(PlannerInfo *root, RelOptInfo *joinrel, RelOptInfo *shard,
         RangeTblEntry *rte = planner_rt_fetch(leaf->relid, root);
         if (!path || rte->securityQuals || rte->tablesample)
             return;
+        disabled_nodes += path->disabled_nodes;
         if (rte->relkind == RELKIND_FOREIGN_TABLE)
         {
             PgFdwRelationInfo *fpinfo;
             if (!our_foreign(leaf))
                 return;
             fpinfo = leaf->fdw_private;
-            if (fpinfo->local_conds)
+            if (fpinfo->local_conds ||
+                (OidIsValid(leaf->userid) ? leaf->userid : GetUserId()) !=
+                (OidIsValid(lookup->userid) ? lookup->userid : GetUserId()))
                 return;
+            foreach(qc, fpinfo->table->options)
+            {
+                DefElem *option = lfirst(qc);
+                if (strcmp(option->defname, "lookup_join") == 0 && !defGetBoolean(option))
+                    return;
+            }
             foreach(qc, leafquals)
                 if (!is_foreign_expr(root, leaf, lfirst(qc)))
                     return;
@@ -365,7 +402,7 @@ consider_lookup(PlannerInfo *root, RelOptInfo *joinrel, RelOptInfo *shard,
     result->path.path.total_cost = result->path.path.startup_cost + cost +
         joinrel->rows * (transfer / remotes + cpu_tuple_cost) +
         lookup->rows * (list_length(shipvars) + remotes) * cpu_operator_cost;
-    result->path.path.disabled_nodes = lp->disabled_nodes;
+    result->path.path.disabled_nodes = lp->disabled_nodes + disabled_nodes;
     result->path.flags = CUSTOMPATH_SUPPORT_PROJECTION;
     result->path.custom_paths = paths;
     result->path.custom_restrictinfo = extra->restrictlist;
@@ -373,6 +410,7 @@ consider_lookup(PlannerInfo *root, RelOptInfo *joinrel, RelOptInfo *shard,
     result->shard = shard; result->lookup = lookup;
     result->shardvars = svars; result->lookupvars = lvars; result->shipvars = shipvars;
     result->lookupkey = key; result->parentoid = parentoid; result->kind = kind;
+    result->routeoids = routeoids;
     add_path(joinrel, &result->path.path);
 }
 
@@ -384,7 +422,7 @@ lookup_paths(PlannerInfo *root, RelOptInfo *joinrel, RelOptInfo *outer,
         previous_hook(root, joinrel, outer, inner, kind, extra);
     if (!foreign_callback || !enable_lookup_join || root->parse->commandType != CMD_SELECT ||
         root->parse->rowMarks || root->parse->hasModifyingCTE ||
-        root->parse->hasRowSecurity || root->hasLateralRTEs ||
+        root->parse->hasRowSecurity || root->hasLateralRTEs || root->query_level > 1 ||
         contain_volatile_functions((Node *) root->parse->targetList))
         return;
     if (kind == JOIN_INNER || kind == JOIN_SEMI)
@@ -411,7 +449,7 @@ pgwrh_fdw_lookup_init(GetForeignJoinPaths_function callback)
         &lookup_max_rows, 10000, 1, 1000000, PGC_USERSET, 0, NULL, NULL, NULL);
     DefineCustomIntVariable("pgwrh_fdw.lookup_join_max_memory",
         "Maximum accounted lookup and payload storage before local fallback.", NULL,
-        &lookup_max_memory, 8192, 1, 1048576, PGC_USERSET, GUC_UNIT_KB, NULL, NULL, NULL);
+        &lookup_max_memory, 8192, 1, 65536, PGC_USERSET, GUC_UNIT_KB, NULL, NULL, NULL);
     RegisterCustomScanMethods(&scan_methods);
     previous_hook = set_join_pathlist_hook;
     set_join_pathlist_hook = lookup_paths;
@@ -444,7 +482,7 @@ plan_lookup(PlannerInfo *root, RelOptInfo *rel, CustomPath *path,
     {
         Path *child = lfirst(lc);
         RelOptInfo *leaf = child->parent;
-        Oid oid = planner_rt_fetch(leaf->relid, root)->relid;
+        Oid oid = list_nth_oid(best->routeoids, ordinary - 1);
         int remote = -1;
         if (our_foreign(leaf))
         {
@@ -543,6 +581,8 @@ begin_lookup(CustomScanState *css, EState *estate, int eflags)
     }
     s->lookupslot = ExecInitExtraTupleSlot(estate,
         ExecGetResultType(linitial(css->custom_ps)), &TTSOpsHeapTuple);
+    s->spoolslot = ExecInitExtraTupleSlot(estate,
+        ExecGetResultType(linitial(css->custom_ps)), &TTSOpsMinimalTuple);
     s->joinqual = ExecInitQual(plan->custom_exprs, &css->ss.ps);
     if (OidIsValid(parentoid))
     {
@@ -619,6 +659,7 @@ materialize_lookup(LookupState *s)
     TupleTableSlot *slot;
     uint64 bound = (uint64) lookup_max_memory * 1024;
 
+    s->bytes = s->ndest * sizeof(uint64);
     s->store = tuplestore_begin_heap(true, false, work_mem);
     for (;;)
     {
@@ -640,24 +681,33 @@ materialize_lookup(LookupState *s)
         CHECK_FOR_INTERRUPTS();
         tuplestore_puttuple(s->store, flat);
         s->nrows++;
-        /* Include retained outputs, spool copy, row index and routing index. */
-        s->bytes += 2 * (MAXALIGN(flat->t_len) + HEAPTUPLESIZE) +
-                    2 * (sizeof(HeapTuple) + sizeof(int)) + 64;
+        /* Include retained outputs, spool copy and allocation overhead. */
+        s->bytes += 2 * (MAXALIGN(flat->t_len) + HEAPTUPLESIZE) + 64;
         if (dest >= 0)
             s->dest_rows[dest]++;
         if (s->nrows > lookup_max_rows || s->bytes > bound)
             s->overflow = true;
+        if (!s->overflow && s->nrows > s->capacity)
+        {
+            int capacity = s->capacity ? s->capacity * 2 : 64;
+
+            /* Charge allocated index capacity, including its unused entries. */
+            s->bytes += (capacity - s->capacity) * (sizeof(HeapTuple) + sizeof(int));
+            if (s->bytes > bound)
+                s->overflow = true;
+            else
+            {
+                MemoryContextSwitchTo(s->fastcxt);
+                s->capacity = capacity;
+                s->rows = s->rows ? repalloc(s->rows, capacity * sizeof(HeapTuple)) :
+                                   palloc(capacity * sizeof(HeapTuple));
+                s->row_dest = s->row_dest ? repalloc(s->row_dest, capacity * sizeof(int)) :
+                                           palloc(capacity * sizeof(int));
+            }
+        }
         if (!s->overflow)
         {
             MemoryContextSwitchTo(s->fastcxt);
-            if (s->nrows > s->capacity)
-            {
-                s->capacity = s->capacity ? s->capacity * 2 : 64;
-                s->rows = s->rows ? repalloc(s->rows, s->capacity * sizeof(HeapTuple)) :
-                                   palloc(s->capacity * sizeof(HeapTuple));
-                s->row_dest = s->row_dest ? repalloc(s->row_dest, s->capacity * sizeof(int)) :
-                                           palloc(s->capacity * sizeof(int));
-            }
             s->rows[s->nrows - 1] = heap_copytuple(flat);
             s->row_dest[s->nrows - 1] = dest;
         }
@@ -685,6 +735,7 @@ build_payloads(LookupState *s)
     int dest = 0;
     ListCell *lc;
 
+    s->bytes += s->ndest * (sizeof(char **) + s->nparams * sizeof(char *));
     s->payloads = palloc0(s->ndest * sizeof(char **));
     foreach(lc, destinations)
     {
@@ -700,7 +751,7 @@ build_payloads(LookupState *s)
                 bool rowno = col == list_length(positions);
                 Oid type = rowno ? INT8OID : list_nth_oid(types, col);
                 int pos = rowno ? 0 : list_nth_int(positions, col);
-                int n = 0, dims[1], lbs[1] = {1};
+                int n = 0, dims[1], lbs[1] = {1}, nestlevel;
                 int16 len;
                 bool byval, varlena;
                 char align;
@@ -721,7 +772,9 @@ build_payloads(LookupState *s)
                 array = construct_md_array(values, nulls, 1, dims, lbs,
                                            type, len, byval, align);
                 getTypeOutputInfo(get_array_type(type), &output, &varlena);
+                nestlevel = set_transmission_modes();
                 s->payloads[dest][col] = OidOutputFunctionCall(output, PointerGetDatum(array));
+                reset_transmission_modes(nestlevel);
                 /* Binary array plus textual conversion and array workspace peak. */
                 s->bytes += VARSIZE(array) + strlen(s->payloads[dest][col]) + 1 +
                             count * (sizeof(Datum) + sizeof(bool));
@@ -837,10 +890,10 @@ next_lookup(ScanState *ss)
             tuplestore_rescan(s->store);
             s->row_active = true;
         }
-        while (tuplestore_gettupleslot(s->store, true, false, s->lookupslot))
+        while (tuplestore_gettupleslot(s->store, true, false, s->spoolslot))
         {
             CHECK_FOR_INTERRUPTS();
-            combine_slots(s, s->shardslot, s->lookupslot);
+            combine_slots(s, s->shardslot, s->spoolslot);
             ss->ps.ps_ExprContext->ecxt_scantuple = out;
             if (ExecQual(s->joinqual, ss->ps.ps_ExprContext))
             {
@@ -898,6 +951,7 @@ rescan_lookup(CustomScanState *css)
             tuplestore_end(s->store);
         s->store = NULL;
         ExecClearTuple(s->lookupslot);
+        ExecClearTuple(s->spoolslot);
         MemoryContextReset(s->fastcxt);
         s->rows = NULL; s->row_dest = NULL; s->payloads = NULL;
         s->capacity = 0; s->nrows = 0; s->bytes = 0;
@@ -916,6 +970,7 @@ end_lookup(CustomScanState *css)
     ExecClearTuple(css->ss.ss_ScanTupleSlot);
     ExecClearTuple(css->ss.ps.ps_ResultTupleSlot);
     ExecClearTuple(s->lookupslot);
+    ExecClearTuple(s->spoolslot);
     if (s->store)
         tuplestore_end(s->store);
     if (s->parent)
