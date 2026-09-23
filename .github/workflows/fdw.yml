@@ -47,13 +47,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bison flex zlib1g-dev libipc-run-perl
-      - name: Build PostgreSQL ${{ matrix.release }} and stock postgres_fdw
+      - name: Build PostgreSQL ${{ matrix.release }} and FDW test dependencies
         run: |
           cd .ci/postgres-source
           ./configure --prefix="$RUNNER_TEMP/pgsql" --without-icu --without-readline --enable-cassert
           make -j2
           make install
           make -C contrib/postgres_fdw -j2 install
+          make -C contrib/citext -j2 install
           echo "PG_CONFIG=$RUNNER_TEMP/pgsql/bin/pg_config" >> "$GITHUB_ENV"
           echo "PG_SOURCE=$GITHUB_WORKSPACE/.ci/postgres-source" >> "$GITHUB_ENV"
       - name: Build, stage, and uninstall the combined and SQL-only packages

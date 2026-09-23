@@ -109,7 +109,12 @@ nix develop .#tests-18 --command python3 test/pgwrh_fdw/test_jj_layout.py
 ```
 
 No Python packages are required: tests use Python 3's standard library and the
-selected installation's libpq. Run as an ordinary OS user, not root:
+selected installation's libpq. Install the matching PostgreSQL contrib modules
+`postgres_fdw` (coexistence and shippability comparisons) and `citext` (lookup
+equality versus partition-routing semantics). The Nix test environments include
+both; source builds need `make -C contrib/postgres_fdw install` and
+`make -C contrib/citext install` from the PostgreSQL source directory.
+Run as an ordinary OS user, not root:
 
 ```sh
 export PG_CONFIG=/path/to/postgresql-18/bin/pg_config
