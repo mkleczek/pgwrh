@@ -8,8 +8,9 @@ first; [virtual-server internals](virtual-server-internals.md) covers routing.
 
 `lookup_join.c` chains the join-path hook and offers a costed CustomPath beside
 the ordinary INNER/SEMI paths. Eligibility requires an independent local scan,
-a strict same-integer-type key equality, supported partition metadata and
-shippability of every remote condition. The existing virtual join hook retains
+supported partition metadata and stock FDW shippability of every remote
+condition, including types, operators, functions and collation provenance.
+The existing virtual join hook retains
 its behavior. No user query is executed to construct the plan.
 
 The CustomScan stores only copyable planner nodes. Its children include the
@@ -21,8 +22,14 @@ at cursor creation; cached plans contain no materialized lookup data.
 
 Execution first consumes the local lookup into a spillable spool and a bounded
 row-occurrence index. It builds all parallel arrays from those same rows, using
-the FDW's transmission settings and type output machinery. PostgreSQL partition
-bound helpers assign rows to eligible destinations. Stable row IDs reconnect
+the FDW's transmission settings and type output machinery. Scalars use native
+arrays; array/composite values use per-occurrence text representations with
+remote casts to their original types, preserving shape and occurrence identity.
+Encoded values and conversion workspace count toward the runtime byte bound.
+PostgreSQL partition bound helpers assign rows to eligible destinations only
+when a strict same-type equality uses the partition operator family and
+collation. Otherwise all destinations receive the bounded lookup. Shippability
+alone never proves pruning safe. Stable row IDs reconnect
 remote INNER results with retained local output columns; SEMI SQL uses EXISTS
 and needs no IDs. Remote matching is never repeated locally on this path.
 
@@ -123,8 +130,8 @@ own pristine upstream tip as parents. Version-specific API adaptations and merge
 resolutions live in the aggregates. Each `fdw_base_MAJOR` bookmarks a separate
 directory-move change whose sole parent is its aggregate (`fdw_base_MAJOR-`).
 The move puts that exact tree, including its tests, under `pgwrh_fdw/MAJOR/`, and
-both moves are parents of `main`. A common build wrapper selects the
-matching directory using `PG_CONFIG`.
+both moves feed the project integration ancestor of `main`. A common build
+wrapper selects the matching directory using `PG_CONFIG`.
 
 The import helper advances only the pristine upstream bookmark and its
 provenance tag. Replace only the aggregate's upstream parent, retain its shared

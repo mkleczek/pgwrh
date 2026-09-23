@@ -138,7 +138,10 @@ setting. It runs on both majors through `make test-fdw`.
 The [lookup-join suite](../../pgwrh_fdw/docs/lookup-joins.md) exercises remote
 INNER/SEMI matching, retained values, generic executions, overflow, pruning,
 local leaves, virtual routing, savepoints, cancellation and conservative
-fallbacks. It runs through `make test-fdw` on both majors. After staging with
+fallbacks. Type coverage compares with stock postgres_fdw WHERE pushdown,
+including built-ins, extension types, nested array/composite transport,
+noninteger partition routing and safe broadcast when equality does not match
+the partition operator family. It runs through `make test-fdw` on both majors. After staging with
 `make testgres-ext`, run managed lookup/routing coverage with:
 
 ```sh
