@@ -210,7 +210,8 @@ static void get_relation_column_alias_ids(Var *node, RelOptInfo *foreignrel,
 /*
  * An ordinary remote result may stand in for a partial transition state only
  * for these built-in signatures.  Names (even in pg_catalog) are not identities.
- * In particular, sum(int8/numeric/interval) and avg have different states.
+ * Integer avg is the one synthesized state: an int8 array of count and sum.
+ * sum(int8/numeric/interval) and other avg signatures need different states.
  * Polymorphic min/max are deliberately outside this initial subset.
  */
 static bool
@@ -219,6 +220,8 @@ partial_aggregate_ok(Aggref *agg)
 	HeapTuple	tuple;
 	Form_pg_aggregate form;
 	bool		result;
+	bool		integer_avg = (agg->aggfnoid == F_AVG_INT2 ||
+							   agg->aggfnoid == F_AVG_INT4);
 
 	if (agg->aggsplit != AGGSPLIT_INITIAL_SERIAL ||
 		agg->aggkind != AGGKIND_NORMAL || agg->aggdistinct != NIL ||
@@ -227,6 +230,8 @@ partial_aggregate_ok(Aggref *agg)
 
 	switch (agg->aggfnoid)
 	{
+		case F_AVG_INT2:
+		case F_AVG_INT4:
 		case F_COUNT_:
 		case F_COUNT_ANY:
 		case F_SUM_INT2:
@@ -270,9 +275,10 @@ partial_aggregate_ok(Aggref *agg)
 	}
 
 	/*
-	 * No finalization or serialization may change the state's representation.
-	 * aggtype is already the partial output type; check the normal result type
-	 * as well.  The built-ins above preserve NULL/empty-input state semantics.
+	 * aggtype is already the partial output type.  Check that it matches the
+	 * state returned by our deparser, with no serialization.  Scalar states
+	 * must also be the normal result type with no finalization.  Integer avg
+	 * instead uses the exact built-in array transition/combine/final functions.
 	 */
 	tuple = SearchSysCache1(AGGFNOID, ObjectIdGetDatum(agg->aggfnoid));
 	if (!HeapTupleIsValid(tuple))
@@ -280,13 +286,22 @@ partial_aggregate_ok(Aggref *agg)
 	form = (Form_pg_aggregate) GETSTRUCT(tuple);
 	result = form->aggkind == AGGKIND_NORMAL &&
 		OidIsValid(form->aggcombinefn) &&
-		!OidIsValid(form->aggfinalfn) &&
 		!OidIsValid(form->aggserialfn) &&
 		!OidIsValid(form->aggdeserialfn) &&
 		form->aggtranstype != INTERNALOID &&
 		form->aggtranstype == agg->aggtranstype &&
-		form->aggtranstype == agg->aggtype &&
-		form->aggtranstype == get_func_rettype(agg->aggfnoid);
+		form->aggtranstype == agg->aggtype;
+	if (integer_avg)
+		result = result &&
+			form->aggtranstype == INT8ARRAYOID &&
+			form->aggtransfn == (agg->aggfnoid == F_AVG_INT2 ?
+								F_INT2_AVG_ACCUM : F_INT4_AVG_ACCUM) &&
+			form->aggcombinefn == F_INT4_AVG_COMBINE &&
+			form->aggfinalfn == F_INT8_AVG &&
+			get_func_rettype(agg->aggfnoid) == NUMERICOID;
+	else
+		result = result && !OidIsValid(form->aggfinalfn) &&
+			form->aggtranstype == get_func_rettype(agg->aggfnoid);
 	ReleaseSysCache(tuple);
 	return result;
 }
@@ -3746,6 +3761,33 @@ deparseAggref(Aggref *node, deparse_expr_cxt *context)
 
 	/* Eligible partial states use the ordinary remote aggregate syntax. */
 	Assert(node->aggsplit == AGGSPLIT_SIMPLE || partial_aggregate_ok(node));
+
+	/*
+	 * avg(int2/int4) uses int8[count, sum], not its numeric final result.
+	 * Emit one array column so the foreign tuple already has the type and
+	 * layout expected by core's partial target and int4_avg_combine.  Reuse
+	 * normal aggregate deparsing to retain the argument and FILTER on both
+	 * components, without mutating the planner's Aggref.  An empty/all-NULL
+	 * input must produce {0,0}, never an array containing a NULL sum.
+	 */
+	if (node->aggsplit == AGGSPLIT_INITIAL_SERIAL &&
+		(node->aggfnoid == F_AVG_INT2 || node->aggfnoid == F_AVG_INT4))
+	{
+		Aggref		component = *node;
+
+		component.aggsplit = AGGSPLIT_SIMPLE;
+		component.aggtype = INT8OID;
+		component.aggtranstype = INT8OID;
+		component.aggfnoid = F_COUNT_ANY;
+		appendStringInfoString(buf, "ARRAY[");
+		deparseAggref(&component, context);
+		appendStringInfoString(buf, ", COALESCE(");
+		component.aggfnoid = node->aggfnoid == F_AVG_INT2 ?
+			F_SUM_INT2 : F_SUM_INT4;
+		deparseAggref(&component, context);
+		appendStringInfoString(buf, ", 0::bigint)]");
+		return;
+	}
 
 	/* Check if need to print VARIADIC (cf. ruleutils.c) */
 	use_variadic = node->aggvariadic;
