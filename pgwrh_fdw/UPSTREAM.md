@@ -14,14 +14,14 @@ comes from its matching PostgreSQL release.
 
 ## History layout
 
-The 19 functional changes form one shared graph rooted at `fdw_patch_base`,
+The functional changes form one shared graph rooted at `fdw_patch_base`,
 the common upstream ancestor `f001c8a7943425e12cf4d0498a82837acf722eb6`.
 They apply to the filtered tree at the repository root, retaining upstream
-C/header filenames and regression-test paths. Each change contains its
-implementation and tests. Dependencies remain explicit; the SCRAM verifier
+C/header filenames and regression-test paths. Related changes may be grouped
+below a single feature merge. Dependencies remain explicit; the SCRAM verifier
 change is independent of the routing changes.
 
-Each aggregate has 20 direct parents: the same 19 shared patch commits and
+Each aggregate has the same shared patch and feature-group parents, plus
 its major's pristine upstream tip. The aggregates resolve build, SQL and export
 lists, renamed regression files and version-specific APIs. PostgreSQL 19
 adaptations belong in `fdw_base_19-`; shared behavior belongs in the common
@@ -37,7 +37,7 @@ versioned FDW sources come exclusively from the move parents.
 ```mermaid
 graph TD
     B[fdw_patch_base] --> U18[Upstream 18]
-    B --> P[19 shared functional changes]
+    B --> P[Shared patches and feature groups]
     B --> U19[Upstream 19]
     U18 --> A18[Aggregate 18]
     P --> A18
@@ -75,6 +75,34 @@ directory moves have been refreshed. No additional aggregate was created.
 The shared follow-up `ysvzmywq` removes the lookup type allowlists, reuses FDW
 shippability and proves partition routing separately; it is another parent of
 those same aggregates.
+
+## Partial aggregation feature group
+
+Issue #7 is grouped under `mymyvlul` (`codex/partial-aggregate-pushdown`).
+It contains `tvtzuoto` (planner and safe scalar-state deparsing), `zuvyxuxp`
+(regressions, managed-shard test, documentation and transfer demo), and their
+follow-up `pyxuykkk` (smallint/integer average states and coverage). The first two
+start at `fdw_patch_base`. The regression-plan update `ylzxomyk` depends on the
+shared FDW identity patch so it updates the renamed expected-output file and
+disappears cleanly when the feature is removed. All four are parents of the
+feature group. Only the feature group is an additional direct parent of
+`lvwzssxp` and `mqpxytlz`; none of its components is also a direct parent.
+The existing aggregates and directory-move changes are retained.
+
+See [supported signatures and the reproducible measurement](18/PARTIAL_AGGREGATES.md)
+([PostgreSQL 19 copy](19/PARTIAL_AGGREGATES.md)). The project test runners discover
+feature-owned `test_feature_*.py` and `managed_test_*.py` files from the selected FDW tree,
+so removing the feature also removes its tests without leaving a broken test
+command. To remove it from an unpublished aggregate and refresh its move:
+
+```sh
+jj rebase -s lvwzssxp -o 'parents(lvwzssxp) ~ mymyvlul'
+python3 pgwrh_fdw/tools/refresh-layout.py 18
+jj rebase -s mqpxytlz -o 'parents(mqpxytlz) ~ mymyvlul'
+python3 pgwrh_fdw/tools/refresh-layout.py 19
+```
+
+For already-published history, follow the duplicate-aggregate workflow below.
 
 ## Changing shared behavior
 
