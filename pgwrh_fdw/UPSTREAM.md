@@ -14,14 +14,14 @@ comes from its matching PostgreSQL release.
 
 ## History layout
 
-The 18 functional changes form one shared graph rooted at `fdw_patch_base`,
+The 19 functional changes form one shared graph rooted at `fdw_patch_base`,
 the common upstream ancestor `f001c8a7943425e12cf4d0498a82837acf722eb6`.
 They apply to the filtered tree at the repository root, retaining upstream
 C/header filenames and regression-test paths. Each change contains its
 implementation and tests. Dependencies remain explicit; the SCRAM verifier
 change is independent of the routing changes.
 
-Each aggregate has 19 direct parents: the same 18 shared patch commits and
+Each aggregate has 20 direct parents: the same 19 shared patch commits and
 its major's pristine upstream tip. The aggregates resolve build, SQL and export
 lists, renamed regression files and version-specific APIs. PostgreSQL 19
 adaptations belong in `fdw_base_19-`; shared behavior belongs in the common
@@ -30,14 +30,14 @@ branch's changes do not enter the other major.
 
 Each `fdw_base_MAJOR` bookmarks a pure directory-move change with **one parent**:
 its aggregate. It puts the aggregate's exact tree under `pgwrh_fdw/MAJOR/`.
-Both move changes are direct parents of `main`, alongside the project changes.
+Both move changes are parents of the project integration ancestor of `main`.
 The project branch contains the common wrapper, documentation and tools; the
 versioned FDW sources come exclusively from the move parents.
 
 ```mermaid
 graph TD
     B[fdw_patch_base] --> U18[Upstream 18]
-    B --> P[18 shared functional changes]
+    B --> P[19 shared functional changes]
     B --> U19[Upstream 19]
     U18 --> A18[Aggregate 18]
     P --> A18
@@ -72,6 +72,9 @@ The lookup implementation is shared in `sqmzztxu` and `yznpkzqo`; the related
 LIMIT regression adaptation is `ynssotmk`. These are additional parents of the
 existing aggregates (`lvwzssxp` for 18 and `mqpxytlz` for 19), whose existing
 directory moves have been refreshed. No additional aggregate was created.
+The shared follow-up `ysvzmywq` removes the lookup type allowlists, reuses FDW
+shippability and proves partition routing separately; it is another parent of
+those same aggregates.
 
 ## Changing shared behavior
 
