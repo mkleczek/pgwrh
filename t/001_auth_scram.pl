@@ -43,7 +43,7 @@ $node2->safe_psql('postgres', qq'CREATE DATABASE $db2');
 setup_table($node1, $db1, "t");
 setup_table($node2, $db2, "t2");
 
-$node1->safe_psql($db0, 'CREATE EXTENSION IF NOT EXISTS postgres_fdw');
+$node1->safe_psql($db0, 'CREATE EXTENSION IF NOT EXISTS pgwrh_fdw');
 setup_fdw_server($node1, $db0, $fdw_server, $node1, $db1);
 setup_fdw_server($node1, $db0, $fdw_server2, $node2, $db2);
 
@@ -178,7 +178,7 @@ sub setup_fdw_server
 	my $port = $fdw_node->port;
 
 	$node->safe_psql(
-		$db, qq'CREATE SERVER $fdw FOREIGN DATA WRAPPER postgres_fdw options (
+		$db, qq'CREATE SERVER $fdw FOREIGN DATA WRAPPER pgwrh_fdw options (
 		host \'$host\', port \'$port\', dbname \'$dbname\', use_scram_passthrough \'true\') '
 	);
 }

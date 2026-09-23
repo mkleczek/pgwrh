@@ -1,6 +1,6 @@
-# contrib/postgres_fdw/Makefile
+# Standalone pgwrh_fdw build and regression tests.
 
-MODULE_big = postgres_fdw
+MODULE_big = pgwrh_fdw
 OBJS = \
 	$(WIN32RES) \
 	connection.o \
@@ -8,25 +8,32 @@ OBJS = \
 	option.o \
 	postgres_fdw.o \
 	shippable.o
-PGFILEDESC = "postgres_fdw - foreign data wrapper for PostgreSQL"
+PGFILEDESC = "pgwrh_fdw - foreign data wrapper for PostgreSQL"
 
 PG_CPPFLAGS = -I$(libpq_srcdir)
 SHLIB_LINK_INTERNAL = $(libpq)
 
-EXTENSION = postgres_fdw
-DATA = postgres_fdw--1.0.sql postgres_fdw--1.0--1.1.sql postgres_fdw--1.1--1.2.sql
+EXTENSION = pgwrh_fdw
+DATA = pgwrh_fdw--1.0.0-alpha1.sql
 
-REGRESS = postgres_fdw query_cancel
+MODULES = context_probe
+REGRESS = pgwrh_fdw query_cancel
 TAP_TESTS = 1
 
-ifdef USE_PGXS
-PG_CONFIG = pg_config
+PG_CONFIG ?= pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
-else
-SHLIB_PREREQS = submake-libpq
-subdir = contrib/postgres_fdw
-top_builddir = ../..
-include $(top_builddir)/src/Makefile.global
-include $(top_srcdir)/contrib/contrib-global.mk
-endif
+
+# Export only PostgreSQL loader/SQL entry points; helpers also have unique names.
+PG_CFLAGS += -fvisibility=hidden
+
+$(OBJS): postgres_fdw.h namespace.h
+
+STAGE_DIR ?= $(abspath .build/testgres-ext)
+stage: all
+	mkdir -p "$(STAGE_DIR)/extension"
+	cp $(DATA) "$(STAGE_DIR)/extension/"
+	sed 's|\$$libdir/pgwrh_fdw|pgwrh_fdw|' pgwrh_fdw.control > "$(STAGE_DIR)/extension/pgwrh_fdw.control"
+	cp $(shlib) "$(STAGE_DIR)/"
+
+.PHONY: stage
