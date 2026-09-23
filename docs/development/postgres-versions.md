@@ -2,7 +2,7 @@
 
 pgwrh has one main branch and one extension version across PostgreSQL majors.
 Only `pgwrh_fdw` has a separate upstream and patched aggregate per major. Both
-aggregates share the same 15 functional patch changes, based on the latest common
+aggregates share the same functional patch changes and feature groups, based on the latest common
 18/19 upstream ancestor recorded by `fdw_patch_base`; each aggregate holds its
 version-specific adaptations. Their exact patched trees are moved into
 `pgwrh_fdw/18/` and `pgwrh_fdw/19/` by separate
@@ -98,3 +98,23 @@ source trees exactly. Tests cover refreshing shared edits, added and deleted
 files through both moves into `main`, updating one upstream without changing the
 other major, and preserving unrelated working edits. No Git subtree command is
 needed for this maintenance workflow.
+
+## Partial aggregate validation, 2026-09-23
+
+The shared partial-aggregate feature passed on PostgreSQL 18.6 and 19 Beta 3:
+13 dedicated cases (including every supported signature), 17 limit cases, 129
+context/routing/lookup cases, both upstream SQL regressions, isolation and symbol
+checks. The retained SCRAM TAP cases also pass (7 on 18, 9 on 19). The
+managed-shard case exercises both readers in a real two-host rollout. Integer
+averages are covered alongside count/sum/min/max, including unequal shard sizes,
+NULL and empty inputs, FILTER, mixed local/foreign states, and exact numeric
+results. Unsupported average signatures retain the existing execution path.
+The million-row reproduction returned 20 foreign partial rows instead of
+1,000,000 source rows on both majors, with identical ten-row final results for a
+query containing count, sum and integer average.
+See [the feature guide](../../pgwrh_fdw/18/PARTIAL_AGGREGATES.md) for signatures,
+fallback restrictions and reproduction commands.
+
+Removing the single feature parent from disposable copies of both aggregates
+restored their pre-feature trees byte for byte. Both existing directory moves
+were refreshed and checked for exact aggregate-tree identity.
