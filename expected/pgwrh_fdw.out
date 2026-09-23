@@ -466,6 +466,7 @@ EXPLAIN (VERBOSE, COSTS OFF)
    ->  Custom Scan (Pgwrh Remote Lookup Join)
          Output: t1.c1, t2."C 1"
          Lookup Join: Remote INNER
+         Lookup Routing: Single destination
          Lookup Condition Columns: 1
          ->  Seq Scan on "S 1"."T 1" t2
                Output: t2."C 1"
@@ -476,7 +477,7 @@ EXPLAIN (VERBOSE, COSTS OFF)
                Output: t1.c1
                Relations: remote lookup
                Remote SQL: SELECT r1."C 1", l.lookup_rowno FROM "S 1"."T 1" r1 JOIN ROWS FROM (pg_catalog.unnest($1::integer[]), pg_catalog.unnest($2::bigint[])) AS l(c1, lookup_rowno) ON ((r1."C 1" = l.c1))
-(15 rows)
+(16 rows)
 
 SELECT t1.c1, t2."C 1" FROM ft2 t1 JOIN "S 1"."T 1" t2 ON (t1.c1 = t2."C 1") OFFSET 100 LIMIT 10;
  c1  | C 1 

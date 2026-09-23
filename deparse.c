@@ -2966,7 +2966,11 @@ deparseVar(Var *node, deparse_expr_cxt *context)
 	if (context->lookupid && node->varno == context->lookupid &&
 		node->varlevelsup == 0)
 	{
-		appendStringInfo(context->buf, "l.c%d", node->varattno);
+		if (get_element_type(pgwrh_fdw_lookup_array_type(node->vartype)) != node->vartype)
+			appendStringInfo(context->buf, "(l.c%d::%s)", node->varattno,
+						 deparse_type_name(node->vartype, -1));
+		else
+			appendStringInfo(context->buf, "l.c%d", node->varattno);
 		return;
 	}
 
@@ -4247,7 +4251,7 @@ pgwrh_fdw_deparse_lookup(StringInfo buf, PlannerInfo *root, RelOptInfo *rel,
     *params = NIL;
     foreach(lc, shipvars)
         *params = lappend(*params, makeNullConst(
-            get_array_type(((Var *) lfirst(lc))->vartype), -1, InvalidOid));
+            pgwrh_fdw_lookup_array_type(((Var *) lfirst(lc))->vartype), -1, InvalidOid));
     if (!semi)
         *params = lappend(*params, makeNullConst(INT8ARRAYOID, -1, InvalidOid));
 
@@ -4286,7 +4290,7 @@ pgwrh_fdw_deparse_lookup(StringInfo buf, PlannerInfo *root, RelOptInfo *rel,
         if (i++)
             appendStringInfoString(buf, ", ");
         appendStringInfo(buf, "pg_catalog.unnest($%d::%s)", i,
-                         deparse_type_name(get_array_type(var->vartype), -1));
+                         deparse_type_name(pgwrh_fdw_lookup_array_type(var->vartype), -1));
     }
     if (!semi)
         appendStringInfo(buf, ", pg_catalog.unnest($%d::bigint[])", ++i);

@@ -5,6 +5,7 @@
 #include "lib/stringinfo.h"
 
 extern void pgwrh_fdw_lookup_init(GetForeignJoinPaths_function callback);
+extern Oid pgwrh_fdw_lookup_array_type(Oid type);
 extern void pgwrh_fdw_lookup_start(ForeignScanState *node, int nparams,
                                   const char **values);
 extern void pgwrh_fdw_lookup_reset(ForeignScanState *node);

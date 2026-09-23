@@ -331,9 +331,6 @@ class LookupJoinTests(unittest.TestCase):
         queries = [
             'SELECT s.id,l.label FROM items s LEFT JOIN lookup l ON s.k=l.k',
             'SELECT s.* FROM items s WHERE NOT EXISTS(SELECT FROM lookup l WHERE s.k=l.k)',
-            'SELECT s.id,l.label FROM items s JOIN lookup l ON s.k+1=l.k',
-            'SELECT s.id,l.label FROM items s JOIN lookup l ON s.k::bigint=l.k',
-            'SELECT s.id,l.label FROM items s JOIN lookup l ON s.k IS NOT DISTINCT FROM l.k',
             'SELECT s.id,l.label FROM items s JOIN lookup l ON s.k=l.k AND local_condition(s.id,l.threshold)',
             'SELECT s.* FROM items s WHERE EXISTS(SELECT FROM lookup l WHERE s.k=l.k AND local_condition(s.id,l.threshold))',
             'SELECT s.id,l.label FROM items s JOIN lookup l ON s.k=l.k WHERE random()<2',
@@ -378,6 +375,259 @@ class LookupJoinTests(unittest.TestCase):
         logs = self.cluster.log.read_text()[mark:]
         self.assertIn('EXPLAIN SELECT', logs)
         self.assertIn('DECLARE', logs)
+        self.equivalent(query)
+
+
+    def create_stock_server(self):
+        db = self.c.scalar('SELECT current_database()')
+        self.c.sql(f'''CREATE EXTENSION postgres_fdw;
+            CREATE SERVER stock FOREIGN DATA WRAPPER postgres_fdw
+              OPTIONS(host {literal(self.cluster.path)},port '{self.cluster.port}',dbname '{db}');
+            CREATE USER MAPPING FOR CURRENT_USER SERVER stock''')
+
+    def stock_where_shipped(self, table, predicate):
+        sql = [n['Remote SQL'] for n in self.nodes(self.plan(f'SELECT id FROM {table} WHERE {predicate}'))
+               if 'Remote SQL' in n]
+        return any(' WHERE ' in q for q in sql)
+
+    def typed_tables(self, name, typ, expression, op='='):
+        self.c.sql(f'''CREATE TABLE {name}_data(k {typ},id int);
+            INSERT INTO {name}_data SELECT {expression},n FROM generate_series(1,4000) n;
+            CREATE TABLE {name}_lookup(k {typ},label text);
+            INSERT INTO {name}_lookup SELECT k,'first' FROM {name}_data WHERE id=1;
+            INSERT INTO {name}_lookup SELECT k,NULL FROM {name}_lookup;
+            INSERT INTO {name}_lookup VALUES(NULL,'null-key');
+            INSERT INTO {name}_data SELECT * FROM {name}_data WHERE id=1;
+            CREATE FOREIGN TABLE {name}_foreign(k {typ},id int) SERVER s0 OPTIONS(table_name '{name}_data');
+            CREATE FOREIGN TABLE {name}_stock(k {typ},id int) SERVER stock OPTIONS(table_name '{name}_data')''')
+        self.c.sql(f'ANALYZE {name}_foreign; ANALYZE {name}_lookup')
+        value = self.c.scalar(f'SELECT k::text FROM {name}_data WHERE id=1 LIMIT 1')
+        return f'k {op} {literal(value)}::{typ}'
+
+    def test_standard_fdw_builtin_types(self):
+        self.create_stock_server()
+        cases = [
+            ('text', "'key-'||n", '='),
+            ('varchar(40)', "'key-'||n", '='),
+            ('char(40)', "'key-'||n", '='),
+            ('uuid', 'md5(n::text)::uuid', '='),
+            ('numeric', 'n::numeric/10', '='),
+            ('float8', "CASE WHEN n=1 THEN 'NaN'::float8 ELSE n::float8 END", '='),
+            ('bool', 'n=1', '='),
+            ('bytea', "decode(lpad(to_hex(n),8,'0'),'hex')", '='),
+            ('date', "DATE '2024-01-01'+n", '='),
+            ('timestamp', "TIMESTAMP '2024-01-01'+n*INTERVAL '1 day'", '='),
+            ('timestamptz', "TIMESTAMPTZ '2024-01-01 00:00:00+00'+n*INTERVAL '1 day'", '='),
+            ('time', "TIME '00:00:00'+n*INTERVAL '1 second'", '='),
+            ('timetz', "TIMETZ '00:00:00+00'+n*INTERVAL '1 second'", '='),
+            ('interval', "n*INTERVAL '1 day'", '='),
+            ('inet', "'10.0.0.0'::inet+n", '='),
+            ('bit(32)', 'n::bit(32)', '='),
+            ('jsonb', "jsonb_build_object('key',n)", '='),
+            ('int4range', 'int4range(n,n+1)', '='),
+            ('int4multirange', 'int4multirange(int4range(n,n+1))', '='),
+            ('point', 'point(n,n)', '~='),
+            ('int[]', "CASE WHEN n=1 THEN '[0:1]={1,NULL}'::int[] ELSE ARRAY[n] END", '='),
+            ('text[]', "ARRAY[n::text,'comma, quote\" and slash'||chr(92),NULL]", '='),
+        ]
+        for i, (typ, expression, op) in enumerate(cases):
+            with self.subTest(type=typ):
+                name = 'typed' + str(i)
+                predicate = self.typed_tables(name, typ, expression, op)
+                self.assertTrue(self.stock_where_shipped(name + '_stock', predicate), typ)
+                for semi in [False, True]:
+                    query = (f'SELECT s.id FROM {name}_foreign s WHERE EXISTS('
+                             f'SELECT FROM {name}_lookup l WHERE s.k {op} l.k)' if semi else
+                             f'SELECT s.id,l.label FROM {name}_foreign s JOIN {name}_lookup l ON s.k {op} l.k')
+                    plan = self.lookup_plan(query, True)
+                    self.assertEqual(plan['Remote Rows'], 2 if semi else 4)
+                    self.assertEqual(plan['Lookup Routing'], 'Single destination')
+                    sql = [n['Remote SQL'] for n in self.nodes(plan)
+                           if 'pg_catalog.unnest' in n.get('Remote SQL', '')]
+                    self.assertEqual(len(sql), 1)
+                    self.assertNotIn('label', sql[0])
+                    self.assertEqual('lookup_rowno' in sql[0], not semi)
+                    if typ == 'int[]':
+                        self.assertIn('pg_catalog.unnest($1::text[])', sql[0])
+                        self.assertIn('(l.c1::integer[])', sql[0])
+                    self.equivalent(query)
+
+    def test_shippable_nonequality_operators(self):
+        self.create_stock_server()
+        self.typed_tables('pattern', 'text', "'key-'||n")
+        self.typed_tables('regex', 'text', "'key-'||n")
+        self.c.sql("UPDATE regex_lookup SET k=k||'$'; ANALYZE regex_lookup")
+        self.typed_tables('member', 'int[]', 'ARRAY[n]')
+        for table, condition, predicate in [
+            ('pattern', 's.k LIKE l.k', "k LIKE 'key-1'"),
+            ('regex', 's.k ~ l.k', "k ~ 'key-1$'"),
+            ('member', 's.id=ANY(l.k)', 'id=ANY(ARRAY[1])'),
+            ('member', 's.k && l.k', 'k && ARRAY[1]'),
+        ]:
+            with self.subTest(condition=condition):
+                self.assertTrue(self.stock_where_shipped(table + '_stock', predicate))
+                for semi in [False, True]:
+                    query = (f'SELECT s.id FROM {table}_foreign s WHERE EXISTS('
+                             f'SELECT FROM {table}_lookup l WHERE {condition})' if semi else
+                             f'SELECT s.id,l.label FROM {table}_foreign s JOIN {table}_lookup l ON {condition}')
+                    self.assertEqual(self.lookup_plan(query, True)['Remote Rows'], 2 if semi else 4)
+                    self.equivalent(query)
+        # Like stock WHERE pushdown, a collatable function using only local
+        # values has no foreign-derived collation provenance.
+        self.assertFalse(self.stock_where_shipped('pattern_stock',
+            "k ~ ((SELECT k FROM pattern_lookup LIMIT 1)||'$')"))
+        for semi in [False, True]:
+            condition = "s.k ~ (l.k||'$')"
+            query = (f'SELECT s.id FROM pattern_foreign s WHERE EXISTS('
+                     f'SELECT FROM pattern_lookup l WHERE {condition})' if semi else
+                     f'SELECT s.id,l.label FROM pattern_foreign s JOIN pattern_lookup l ON {condition}')
+            self.assertFalse(any('Custom Plan Provider' in n for n in self.nodes(self.plan(query))))
+            self.equivalent(query)
+
+    def test_extension_types_follow_server_shippability(self):
+        self.create_stock_server()
+        # Model extension-owned types, including quoted identifiers. There is
+        # no named transport composite installed on the remote server.
+        self.c.sql('''CREATE SCHEMA "lookup types";
+            CREATE TYPE "lookup types"."Status" AS ENUM('yes','no');
+            CREATE DOMAIN "lookup types"."Number" AS numeric CHECK(VALUE>=0);
+            CREATE TYPE "lookup types"."Pair" AS (n int,txt text);
+            CREATE DOMAIN "lookup types"."Array" AS int[];
+            ALTER EXTENSION pgwrh_fdw ADD TYPE "lookup types"."Status";
+            ALTER EXTENSION pgwrh_fdw ADD DOMAIN "lookup types"."Number";
+            ALTER EXTENSION pgwrh_fdw ADD TYPE "lookup types"."Pair";
+            ALTER EXTENSION pgwrh_fdw ADD DOMAIN "lookup types"."Array"''')
+        cases = [
+            ('Status', "CASE WHEN n=1 THEN 'yes' ELSE 'no' END::\"lookup types\".\"Status\""),
+            ('Number', 'n::numeric'),
+            ('Pair', "ROW(CASE WHEN n=1 THEN NULL ELSE n END,'quote,\" slash'||chr(92))::\"lookup types\".\"Pair\""),
+            ('Array', "CASE WHEN n=1 THEN ARRAY[]::int[] ELSE ARRAY[n,NULL] END"),
+        ]
+        for i, (typ, expression) in enumerate(cases):
+            with self.subTest(type=typ):
+                name = 'extension' + str(i)
+                predicate = self.typed_tables(name, '"lookup types"."' + typ + '"', expression)
+                # A domain-literal cast introduces CoerceToDomain, which stock
+                # postgres_fdw intentionally keeps local. The comparison to a
+                # base-type value still checks shippability of the column type.
+                if typ in ('Number', 'Array'):
+                    predicate = predicate.replace('::"lookup types"."' + typ + '"',
+                                                  '::numeric' if typ == 'Number' else '::int[]')
+                query = f'SELECT s.id,l.label FROM {name}_foreign s JOIN {name}_lookup l ON s.k=l.k'
+                self.assertFalse(self.stock_where_shipped(name + '_stock', predicate))
+                self.assertFalse(any('Custom Plan Provider' in n for n in self.nodes(self.plan(query))))
+                for server in ['s0', 'stock']:
+                    self.c.sql(f"ALTER SERVER {server} OPTIONS(ADD extensions 'pgwrh_fdw')")
+                self.assertTrue(self.stock_where_shipped(name + '_stock', predicate))
+                self.assertEqual(self.lookup_plan(query, True)['Remote Rows'], 4)
+                self.equivalent(query)
+                semi = f'SELECT s.id FROM {name}_foreign s WHERE EXISTS(SELECT FROM {name}_lookup l WHERE s.k=l.k)'
+                self.lookup_plan(semi, True)
+                self.equivalent(semi)
+                for server in ['s0', 'stock']:
+                    self.c.sql(f'ALTER SERVER {server} OPTIONS(DROP extensions)')
+
+    def test_noninteger_partition_routing(self):
+        cases = [('text', "lpad({n}::text,5,'0')"),
+                 ('uuid', "lpad(to_hex({n}),32,'0')::uuid"),
+                 ('numeric', '{n}::numeric/10'),
+                 ('date', "DATE '2024-01-01'+{n}"),
+                 ('int[]', 'ARRAY[{n}]')]
+        for typ, expression in cases:
+            for strategy in ['RANGE', 'LIST', 'HASH']:
+                with self.subTest(type=typ, strategy=strategy):
+                    a = literal(self.c.scalar(f'SELECT ({expression.format(n=1)})::text'))
+                    middle = literal(self.c.scalar(f'SELECT ({expression.format(n=2001)})::text'))
+                    bounds = ([f'FROM(MINVALUE) TO({middle})', f'FROM({middle}) TO(MAXVALUE)'] if strategy == 'RANGE'
+                              else [f'IN ({a})', None] if strategy == 'LIST'
+                              else ['WITH(MODULUS 2,REMAINDER 0)', 'WITH(MODULUS 2,REMAINDER 1)'])
+                    collate = ''
+                    self.c.sql(f'''CREATE TABLE routed_data(k {typ}{collate},id int) PARTITION BY {strategy}(k);
+                        CREATE TABLE routed_items(k {typ}{collate},id int) PARTITION BY {strategy}(k);
+                        CREATE TABLE routed_lookup(k {typ},label text)''')
+                    for i, bound in enumerate(bounds):
+                        clause = 'DEFAULT' if bound is None else 'FOR VALUES ' + bound
+                        self.c.sql(f'CREATE TABLE routed_data{i} PARTITION OF routed_data {clause}; '
+                                   f'CREATE FOREIGN TABLE routed_f{i} PARTITION OF routed_items {clause} SERVER s{i} '
+                                   f"OPTIONS(table_name 'routed_data{i}')")
+                    self.c.sql(f'''INSERT INTO routed_data SELECT {expression.format(n='n')},n FROM generate_series(1,4000) n;
+                        INSERT INTO routed_lookup SELECT k,'first' FROM routed_data WHERE id=1;
+                        INSERT INTO routed_lookup SELECT k,NULL FROM routed_lookup;
+                        INSERT INTO routed_lookup VALUES(NULL,'null-key');
+                        INSERT INTO routed_data SELECT * FROM routed_data WHERE id=1''')
+                    self.c.sql('ANALYZE routed_f0; ANALYZE routed_f1; ANALYZE routed_lookup')
+                    self.c.sql('SELECT pgwrh_fdw_disconnect_all()')
+                    for semi in [False, True]:
+                        query = ('SELECT s.id FROM routed_items s WHERE EXISTS(SELECT FROM routed_lookup l WHERE s.k=l.k)'
+                                 if semi else 'SELECT s.id,l.label FROM routed_items s JOIN routed_lookup l ON s.k=l.k')
+                        plan = self.lookup_plan(query, True)
+                        self.assertEqual(plan['Lookup Routing'], 'Partition equality')
+                        self.assertEqual(plan['Remote Executions'], 1)
+                        self.assertEqual(plan['Skipped Shards'], 1)
+                        self.assertEqual(plan['Remote Rows'], 2 if semi else 4)
+                        self.assertEqual(self.c.scalar('SELECT count(*) FROM pgwrh_fdw_get_connections()'), '1')
+                        self.equivalent(query)
+                        self.c.sql('SELECT pgwrh_fdw_disconnect_all()')
+                    self.c.sql('DROP TABLE routed_items,routed_data,routed_lookup CASCADE')
+
+    def test_shippable_conditions_without_routing_proof(self):
+        conditions = ['s.k+1=l.k', 's.k::bigint=l.k', 's.k IS NOT DISTINCT FROM l.k',
+                      's.k=l.k OR s.k+1=l.k']
+        for condition in conditions:
+            for semi in [False, True]:
+                query = (f'SELECT s.id FROM items s WHERE EXISTS(SELECT FROM lookup l WHERE {condition} AND l.enabled)'
+                         if semi else f'SELECT s.id,l.label FROM items s JOIN lookup l ON {condition} WHERE l.enabled')
+                plan = self.lookup_plan(query, True)
+                self.assertEqual(plan['Lookup Routing'], 'All destinations')
+                self.assertEqual(plan['Remote Executions'], 2)
+                self.equivalent(query)
+        self.c.sql('SET plan_cache_mode=force_generic_plan; PREPARE broadcast AS ' + query)
+        self.lookup_plan('EXECUTE broadcast', True)
+        self.c.sql('SET pgwrh_fdw.lookup_join_max_rows=1')
+        self.assertEqual(self.lookup_plan('EXECUTE broadcast', True)['Lookup Execution'], 'Local overflow fallback')
+        self.assertCountEqual(self.c.sql('EXECUTE broadcast'), self.c.sql(query))
+
+    def test_array_occurrences_dimensions_and_generic_fallback(self):
+        self.create_stock_server()
+        self.typed_tables('arrays', 'int[]', 'ARRAY[n]')
+        self.c.sql('''TRUNCATE arrays_lookup;
+            INSERT INTO arrays_lookup VALUES(ARRAY[]::int[],'empty'),(ARRAY[[1,2],[3,4]],'matrix'),
+              ('[0:1]={1,NULL}'::int[],'bounds'),(NULL,'null'),(ARRAY[]::int[],NULL);
+            INSERT INTO arrays_data SELECT k,0 FROM arrays_lookup;
+            ANALYZE arrays_lookup''')
+        query = 'SELECT s.id,l.label FROM arrays_foreign s JOIN arrays_lookup l ON s.k IS NOT DISTINCT FROM l.k'
+        self.c.sql('SET plan_cache_mode=force_generic_plan; PREPARE arrays_query AS ' + query)
+        self.lookup_plan('EXECUTE arrays_query', True)
+        self.equivalent(query)
+        self.c.sql("UPDATE arrays_lookup SET k=ARRAY[[9,8],[7,6]] WHERE label='matrix'")
+        self.assertCountEqual(self.c.sql('EXECUTE arrays_query'), self.c.sql(query))
+        self.c.sql('SET pgwrh_fdw.lookup_join_max_memory=1')
+        self.assertEqual(self.lookup_plan('EXECUTE arrays_query', True)['Lookup Execution'], 'Local overflow fallback')
+        self.assertCountEqual(self.c.sql('EXECUTE arrays_query'), self.c.sql(query))
+
+    def test_equality_must_match_partition_operator_family(self):
+        # Case-insensitive equality matches both ranges; routing the lowercase
+        # input through text partition bounds would lose the uppercase match.
+        self.c.sql('CREATE EXTENSION citext; DROP TABLE items; '
+                   'CREATE TABLE items(k text,id int,value text) PARTITION BY RANGE(k); '
+                   'CREATE TABLE family_lookup(k text,label text); '
+                   "INSERT INTO family_lookup VALUES('apple','first'),('apple',NULL),(NULL,'null')")
+        for i, bounds, key in [(0,"FROM(MINVALUE) TO('a')",'APPLE'),(1,"FROM('a') TO(MAXVALUE)",'apple')]:
+            self.c.sql(f"ALTER SERVER s{i} OPTIONS(ADD extensions 'citext'); "
+                       f'CREATE TABLE family_data{i}(k text,id int,value text); '
+                       f"INSERT INTO family_data{i} SELECT {literal('Z' if i == 0 else 'z')}||n,n,NULL FROM generate_series(1,4000) n; "
+                       f"INSERT INTO family_data{i} VALUES({literal(key)},0,NULL); "
+                       f'CREATE FOREIGN TABLE family_f{i} PARTITION OF items FOR VALUES {bounds} SERVER s{i} '
+                       f"OPTIONS(table_name 'family_data{i}')")
+        self.c.sql('ANALYZE family_f0; ANALYZE family_f1; ANALYZE family_lookup')
+        query = 'SELECT s.k,l.label FROM items s JOIN family_lookup l ON s.k::citext=l.k::citext'
+        plan = self.lookup_plan(query, True)
+        self.assertEqual(plan['Lookup Routing'], 'All destinations')
+        self.assertEqual(plan['Remote Executions'], 2)
+        self.assertEqual(plan['Remote Rows'], 4)
+        self.equivalent(query)
+        query = 'SELECT s.k,l.label FROM items s JOIN family_lookup l ON s.k=(l.k COLLATE "C")'
+        self.assertFalse(any('Custom Plan Provider' in n for n in self.nodes(self.plan(query))))
         self.equivalent(query)
 
 

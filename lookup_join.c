@@ -3,6 +3,7 @@
 #include "postgres.h"
 
 #include "access/heaptoast.h"
+#include "access/stratnum.h"
 #include "access/table.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_class.h"
@@ -49,6 +50,8 @@ static GetForeignJoinPaths_function foreign_callback;
 enum { LKind, LParent, LKey, LShardCols, LShipCols, LShipTypes, LDestinations };
 /* Destination: ordinary child index, remote child index (-1 for local), OID. */
 enum { DOrdinary, DRemote, DOid };
+/* No routing proof: send this occurrence to every eligible destination. */
+#define LOOKUP_ALL_DESTINATIONS (-2)
 
 typedef struct LookupPath
 {
@@ -118,28 +121,30 @@ static const CustomExecMethods exec_methods = {
     .ReScanCustomScan = rescan_lookup, .ExplainCustomScan = explain_lookup
 };
 
-static bool
-integer_type(Oid type)
+/*
+ * Arrays of arrays are flattened by unnest, and composite results expand into
+ * fields in FROM. Preserve one value per lookup occurrence for those types by
+ * transporting their ordinary text representation and casting each element
+ * remotely. The condition itself still passes the stock FDW shippability check.
+ */
+Oid
+pgwrh_fdw_lookup_array_type(Oid type)
 {
-    return type == INT2OID || type == INT4OID || type == INT8OID;
+    Oid array = get_array_type(type);
+
+    if (!OidIsValid(array) || OidIsValid(get_element_type(getBaseType(type))) ||
+        type_is_rowtype(type))
+        return TEXTARRAYOID;
+    return array;
 }
 
-/* Output-only values never need to pass this test. No OID-bearing user types. */
-static bool
-payload_type(Oid type)
+static Var *
+lookup_var(Node *node)
 {
-    switch (type)
-    {
-        case BOOLOID: case INT2OID: case INT4OID: case INT8OID:
-        case FLOAT4OID: case FLOAT8OID: case NUMERICOID:
-        case TEXTOID: case VARCHAROID: case BPCHAROID: case BYTEAOID:
-        case DATEOID: case TIMEOID: case TIMETZOID: case TIMESTAMPOID:
-        case TIMESTAMPTZOID: case INTERVALOID: case UUIDOID:
-        case JSONOID: case JSONBOID: case BITOID: case VARBITOID:
-            return true;
-        default:
-            return false;
-    }
+    /* Only binary-compatible relabels preserve the partition key datum. */
+    while (IsA(node, RelabelType))
+        node = (Node *) ((RelabelType *) node)->arg;
+    return IsA(node, Var) ? (Var *) node : NULL;
 }
 
 static Path *
@@ -167,7 +172,7 @@ our_foreign(RelOptInfo *rel)
         rel->fdwroutine->GetForeignJoinPaths == foreign_callback && rel->fdw_private;
 }
 
-/* Collect only ordinary scalar Vars; placeholders/whole rows require more work. */
+/* Collect column Vars; placeholders and whole-row references require more work. */
 static bool
 collect_vars(Node *expr, Index shardid, Index lookupid, List **svars, List **lvars)
 {
@@ -240,6 +245,8 @@ consider_lookup(PlannerInfo *root, RelOptInfo *joinrel, RelOptInfo *shard,
     Var *key = NULL;
     AttrNumber partatt = 0;
     Oid parentoid = InvalidOid;
+    Oid parttype = InvalidOid, partfamily = InvalidOid, partcollation = InvalidOid;
+    char partstrategy = 0;
     int remotes = 0, disabled_nodes = 0;
     double cost = 0, transfer = 0;
     LookupPath *result;
@@ -263,11 +270,15 @@ consider_lookup(PlannerInfo *root, RelOptInfo *joinrel, RelOptInfo *shard,
     {
         Relation rel = table_open(srte->relid, NoLock);
         PartitionKey pk = RelationGetPartitionKey(rel);
-        bool supported = pk && pk->partnatts == 1 && pk->partattrs[0] > 0 &&
-            integer_type(pk->parttypid[0]) &&
-            pk->partopfamily[0] < FirstGenbkiObjectId;
+        bool supported = pk && pk->partnatts == 1 && pk->partattrs[0] > 0;
         if (supported)
+        {
             partatt = pk->partattrs[0];
+            parttype = pk->parttypid[0];
+            partfamily = pk->partopfamily[0];
+            partcollation = pk->partcollation[0];
+            partstrategy = pk->strategy;
+        }
         table_close(rel, NoLock);
         if (!supported || !shard->part_scheme || !shard->part_rels)
             return;
@@ -288,7 +299,7 @@ consider_lookup(PlannerInfo *root, RelOptInfo *joinrel, RelOptInfo *shard,
                 PartitionKey slotkey = RelationGetPartitionKey(slotrel);
                 bool same = slotkey && slotkey->partnatts == 1 &&
                     slotkey->partattrs[0] == partatt &&
-                    slotkey->parttypid[0] == shard->part_scheme->partopcintype[0];
+                    slotkey->parttypid[0] == parttype;
                 table_close(slotrel, NoLock);
                 if (!same || leaf->nparts != 1 || !leaf->part_rels || !leaf->part_rels[0])
                     return;
@@ -316,21 +327,31 @@ consider_lookup(PlannerInfo *root, RelOptInfo *joinrel, RelOptInfo *shard,
     {
         OpExpr *op = lfirst(lc);
         Var *a, *b;
-        if (!IsA(op, OpExpr) || list_length(op->args) != 2)
+        Oid keyop;
+        if (!OidIsValid(parentoid) || !IsA(op, OpExpr) || list_length(op->args) != 2)
             continue;
-        a = linitial(op->args); b = lsecond(op->args);
-        if (!IsA(a, Var) || !IsA(b, Var))
+        a = lookup_var(linitial(op->args)); b = lookup_var(lsecond(op->args));
+        if (!a || !b)
             continue;
+        keyop = op->opno;
         if (a->varno == lookup->relid)
-        { Var *swap = a; a = b; b = swap; }
+        {
+            Var *swap = a; a = b; b = swap;
+            keyop = get_commutator(keyop);
+        }
+        /* Shippable does not imply safe for pruning. Use only the partition
+         * family's equality, matching its datum type and input collation. */
         if (a->varno == shard->relid && b->varno == lookup->relid &&
-            a->vartype == b->vartype && integer_type(a->vartype) &&
-            (!partatt || a->varattno == partatt) &&
-            op->opno == lookup_type_cache(a->vartype, TYPECACHE_EQ_OPR)->eq_opr &&
+            a->vartype == parttype && b->vartype == parttype &&
+            a->varattno == partatt && op->inputcollid == partcollation &&
+            OidIsValid(keyop) &&
+            get_op_opfamily_strategy(keyop, partfamily) ==
+                (partstrategy == PARTITION_STRATEGY_HASH ? HTEqualStrategyNumber : BTEqualStrategyNumber) &&
             op_strict(op->opno))
             key = b;
     }
-    if (!key || !collect_vars((Node *) quals, shard->relid, lookup->relid, &svars, &shipvars) ||
+    if (!collect_vars((Node *) quals, shard->relid, lookup->relid, &svars, &shipvars) ||
+        !svars || !shipvars ||
         !collect_vars((Node *) joinrel->reltarget->exprs, shard->relid, lookup->relid,
                       &svars, &lvars))
         return;
@@ -339,9 +360,6 @@ consider_lookup(PlannerInfo *root, RelOptInfo *joinrel, RelOptInfo *shard,
     if (kind == JOIN_SEMI &&
         !collect_vars((Node *) joinrel->reltarget->exprs, shard->relid, 0, &unused, &unused))
         return;
-    foreach(lc, shipvars)
-        if (!payload_type(((Var *) lfirst(lc))->vartype))
-            return;
     lp = plain_path(lookup);
     if (!lp || (lp->pathtype != T_SeqScan && lp->pathtype != T_IndexScan &&
                 lp->pathtype != T_IndexOnlyScan && lp->pathtype != T_BitmapHeapScan &&
@@ -401,7 +419,7 @@ consider_lookup(PlannerInfo *root, RelOptInfo *joinrel, RelOptInfo *shard,
     result->path.path.startup_cost = lp->total_cost + lookup->rows * cpu_tuple_cost;
     result->path.path.total_cost = result->path.path.startup_cost + cost +
         joinrel->rows * (transfer / remotes + cpu_tuple_cost) +
-        lookup->rows * (list_length(shipvars) + remotes) * cpu_operator_cost;
+        lookup->rows * (list_length(shipvars) * (key ? 1 : remotes) + remotes) * cpu_operator_cost;
     result->path.path.disabled_nodes = lp->disabled_nodes + disabled_nodes;
     result->path.flags = CUSTOMPATH_SUPPORT_PROJECTION;
     result->path.custom_paths = paths;
@@ -409,7 +427,9 @@ consider_lookup(PlannerInfo *root, RelOptInfo *joinrel, RelOptInfo *shard,
     result->path.methods = &path_methods;
     result->shard = shard; result->lookup = lookup;
     result->shardvars = svars; result->lookupvars = lvars; result->shipvars = shipvars;
-    result->lookupkey = key; result->parentoid = parentoid; result->kind = kind;
+    result->lookupkey = key;
+    result->parentoid = key ? parentoid : InvalidOid;
+    result->kind = kind;
     result->routeoids = routeoids;
     add_path(joinrel, &result->path.path);
 }
@@ -523,7 +543,7 @@ plan_lookup(PlannerInfo *root, RelOptInfo *rel, CustomPath *path,
     }
     scan->custom_plans = plans;
     scan->custom_private = list_make5(makeInteger(best->kind), makeInteger(best->parentoid),
-        makeInteger(var_position(best->lookupvars, best->lookupkey) + 1),
+        makeInteger(best->lookupkey ? var_position(best->lookupvars, best->lookupkey) + 1 : 0),
         makeInteger(list_length(best->shardvars)), shipcols);
     scan->custom_private = lappend(scan->custom_private, shiptypes);
     scan->custom_private = lappend(scan->custom_private, destinations);
@@ -605,7 +625,7 @@ route_row(LookupState *s, Datum value, bool isnull)
     int dest = 0;
 
     if (!s->parent)
-        return 0;
+        return LOOKUP_ALL_DESTINATIONS;
     if (isnull)
         return -1;                  /* the required equality is strict */
     bounds = s->partdesc->boundinfo;
@@ -665,8 +685,8 @@ materialize_lookup(LookupState *s)
     {
         MemoryContext old;
         HeapTuple tuple, flat;
-        bool isnull;
-        Datum key;
+        bool isnull = true;
+        Datum key = (Datum) 0;
         int dest;
 
         slot = ExecProcNode(lookup);
@@ -675,7 +695,8 @@ materialize_lookup(LookupState *s)
         old = MemoryContextSwitchTo(scratch);
         tuple = ExecCopySlotHeapTuple(slot);
         flat = toast_flatten_tuple(tuple, desc);
-        key = heap_getattr(flat, keypos, desc, &isnull);
+        if (keypos)
+            key = heap_getattr(flat, keypos, desc, &isnull);
         dest = route_row(s, key, isnull);
 
         CHECK_FOR_INTERRUPTS();
@@ -683,7 +704,10 @@ materialize_lookup(LookupState *s)
         s->nrows++;
         /* Include retained outputs, spool copy and allocation overhead. */
         s->bytes += 2 * (MAXALIGN(flat->t_len) + HEAPTUPLESIZE) + 64;
-        if (dest >= 0)
+        if (dest == LOOKUP_ALL_DESTINATIONS)
+            for (int i = 0; i < s->ndest; i++)
+                s->dest_rows[i]++;
+        else if (dest >= 0)
             s->dest_rows[dest]++;
         if (s->nrows > lookup_max_rows || s->bytes > bound)
             s->overflow = true;
@@ -750,6 +774,9 @@ build_payloads(LookupState *s)
             {
                 bool rowno = col == list_length(positions);
                 Oid type = rowno ? INT8OID : list_nth_oid(types, col);
+                Oid arraytype = pgwrh_fdw_lookup_array_type(type);
+                Oid element = get_element_type(arraytype);
+                bool text_transport = element != type;
                 int pos = rowno ? 0 : list_nth_int(positions, col);
                 int n = 0, dims[1], lbs[1] = {1}, nestlevel;
                 int16 len;
@@ -757,27 +784,43 @@ build_payloads(LookupState *s)
                 char align;
                 Oid output;
                 ArrayType *array;
+                uint64 conversion_bytes = 0;
+
+                nestlevel = set_transmission_modes();
+                if (text_transport)
+                    getTypeOutputInfo(type, &output, &varlena);
                 for (uint64 row = 0; row < s->nrows; row++)
                 {
-                    if (s->row_dest[row] != dest)
+                    if (s->row_dest[row] != dest &&
+                        s->row_dest[row] != LOOKUP_ALL_DESTINATIONS)
                         continue;
                     nulls[n] = false;
                     values[n] = rowno ? Int64GetDatum(row + 1) :
                         heap_getattr(s->rows[row], pos, desc, &nulls[n]);
+                    if (text_transport && !nulls[n])
+                    {
+                        char *external = OidOutputFunctionCall(output, values[n]);
+                        values[n] = CStringGetTextDatum(external);
+                        conversion_bytes += 2 * (MAXALIGN(VARSIZE_ANY(DatumGetPointer(values[n]))) + 32);
+                        pfree(external);
+                    }
                     n++;
                 }
                 Assert(n == count);
                 dims[0] = n;
-                get_typlenbyvalalign(type, &len, &byval, &align);
+                get_typlenbyvalalign(element, &len, &byval, &align);
                 array = construct_md_array(values, nulls, 1, dims, lbs,
-                                           type, len, byval, align);
-                getTypeOutputInfo(get_array_type(type), &output, &varlena);
-                nestlevel = set_transmission_modes();
+                                           element, len, byval, align);
+                getTypeOutputInfo(arraytype, &output, &varlena);
                 s->payloads[dest][col] = OidOutputFunctionCall(output, PointerGetDatum(array));
                 reset_transmission_modes(nestlevel);
                 /* Binary array plus textual conversion and array workspace peak. */
                 s->bytes += VARSIZE(array) + strlen(s->payloads[dest][col]) + 1 +
-                            count * (sizeof(Datum) + sizeof(bool));
+                            count * (sizeof(Datum) + sizeof(bool)) + conversion_bytes;
+                if (text_transport)
+                    for (int n = 0; n < count; n++)
+                        if (!nulls[n])
+                            pfree(DatumGetPointer(values[n]));
                 pfree(array);
                 if (s->bytes > (uint64) lookup_max_memory * 1024)
                 {
@@ -880,7 +923,8 @@ next_lookup(ScanState *ss)
                     int64 row = DatumGetInt64(slot_getattr(fs->ss.ss_ScanTupleSlot,
                                                          s->nshard + 1, &isnull));
                     if (isnull || row < 1 || row > s->nrows ||
-                        s->row_dest[row - 1] != s->destination)
+                        (s->row_dest[row - 1] != s->destination &&
+                         s->row_dest[row - 1] != LOOKUP_ALL_DESTINATIONS))
                         elog(ERROR, "invalid remote lookup row identifier");
                     ExecStoreHeapTuple(s->rows[row - 1], s->lookupslot, false);
                 }
@@ -983,6 +1027,8 @@ explain_lookup(CustomScanState *css, List *ancestors, ExplainState *es)
 {
     LookupState *s = (LookupState *) css;
     ExplainPropertyText("Lookup Join", s->semi ? "Remote EXISTS" : "Remote INNER", es);
+    ExplainPropertyText("Lookup Routing", s->parent ? "Partition equality" :
+                        (s->ndest == 1 ? "Single destination" : "All destinations"), es);
     ExplainPropertyInteger("Lookup Condition Columns", NULL,
                             s->nparams - (s->semi ? 0 : 1), es);
     if (es->analyze)
