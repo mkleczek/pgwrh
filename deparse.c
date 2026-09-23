@@ -55,6 +55,7 @@
 #include "parser/parsetree.h"
 #include "postgres_fdw.h"
 #include "utils/builtins.h"
+#include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
@@ -205,6 +206,90 @@ static bool is_subquery_var(Var *node, RelOptInfo *foreignrel,
 static void get_relation_column_alias_ids(Var *node, RelOptInfo *foreignrel,
 										  int *relno, int *colno);
 
+
+/*
+ * An ordinary remote result may stand in for a partial transition state only
+ * for these built-in signatures.  Names (even in pg_catalog) are not identities.
+ * In particular, sum(int8/numeric/interval) and avg have different states.
+ * Polymorphic min/max are deliberately outside this initial subset.
+ */
+static bool
+partial_aggregate_ok(Aggref *agg)
+{
+	HeapTuple	tuple;
+	Form_pg_aggregate form;
+	bool		result;
+
+	if (agg->aggsplit != AGGSPLIT_INITIAL_SERIAL ||
+		agg->aggkind != AGGKIND_NORMAL || agg->aggdistinct != NIL ||
+		agg->aggorder != NIL || agg->aggdirectargs != NIL || agg->aggvariadic)
+		return false;
+
+	switch (agg->aggfnoid)
+	{
+		case F_COUNT_:
+		case F_COUNT_ANY:
+		case F_SUM_INT2:
+		case F_SUM_INT4:
+		case F_SUM_FLOAT4:
+		case F_SUM_FLOAT8:
+		case F_SUM_MONEY:
+		case F_MIN_INT2:
+		case F_MIN_INT4:
+		case F_MIN_INT8:
+		case F_MIN_FLOAT4:
+		case F_MIN_FLOAT8:
+		case F_MIN_NUMERIC:
+		case F_MIN_TEXT:
+		case F_MIN_BPCHAR:
+		case F_MIN_DATE:
+		case F_MIN_TIME:
+		case F_MIN_TIMETZ:
+		case F_MIN_TIMESTAMP:
+		case F_MIN_TIMESTAMPTZ:
+		case F_MIN_INTERVAL:
+		case F_MIN_MONEY:
+		case F_MAX_INT2:
+		case F_MAX_INT4:
+		case F_MAX_INT8:
+		case F_MAX_FLOAT4:
+		case F_MAX_FLOAT8:
+		case F_MAX_NUMERIC:
+		case F_MAX_TEXT:
+		case F_MAX_BPCHAR:
+		case F_MAX_DATE:
+		case F_MAX_TIME:
+		case F_MAX_TIMETZ:
+		case F_MAX_TIMESTAMP:
+		case F_MAX_TIMESTAMPTZ:
+		case F_MAX_INTERVAL:
+		case F_MAX_MONEY:
+			break;
+		default:
+			return false;
+	}
+
+	/*
+	 * No finalization or serialization may change the state's representation.
+	 * aggtype is already the partial output type; check the normal result type
+	 * as well.  The built-ins above preserve NULL/empty-input state semantics.
+	 */
+	tuple = SearchSysCache1(AGGFNOID, ObjectIdGetDatum(agg->aggfnoid));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for aggregate %u", agg->aggfnoid);
+	form = (Form_pg_aggregate) GETSTRUCT(tuple);
+	result = form->aggkind == AGGKIND_NORMAL &&
+		OidIsValid(form->aggcombinefn) &&
+		!OidIsValid(form->aggfinalfn) &&
+		!OidIsValid(form->aggserialfn) &&
+		!OidIsValid(form->aggdeserialfn) &&
+		form->aggtranstype != INTERNALOID &&
+		form->aggtranstype == agg->aggtranstype &&
+		form->aggtranstype == agg->aggtype &&
+		form->aggtranstype == get_func_rettype(agg->aggfnoid);
+	ReleaseSysCache(tuple);
+	return result;
+}
 
 /*
  * Examine each qual clause in input_conds, and classify them into two groups,
@@ -909,8 +994,10 @@ foreign_expr_walker(Node *node,
 				if (!IS_UPPER_REL(glob_cxt->foreignrel))
 					return false;
 
-				/* Only non-split aggregates are pushable. */
-				if (agg->aggsplit != AGGSPLIT_SIMPLE)
+				/* Partial states need an ordinary SQL representation. */
+				if (agg->aggsplit != AGGSPLIT_SIMPLE &&
+					(fpinfo->stage != UPPERREL_PARTIAL_GROUP_AGG ||
+					 !partial_aggregate_ok(agg)))
 					return false;
 
 				/* As usual, it must be shippable. */
@@ -3657,8 +3744,8 @@ deparseAggref(Aggref *node, deparse_expr_cxt *context)
 	StringInfo	buf = context->buf;
 	bool		use_variadic;
 
-	/* Only basic, non-split aggregation accepted. */
-	Assert(node->aggsplit == AGGSPLIT_SIMPLE);
+	/* Eligible partial states use the ordinary remote aggregate syntax. */
+	Assert(node->aggsplit == AGGSPLIT_SIMPLE || partial_aggregate_ok(node));
 
 	/* Check if need to print VARIADIC (cf. ruleutils.c) */
 	use_variadic = node->aggvariadic;

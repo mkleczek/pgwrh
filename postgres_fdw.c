@@ -6525,6 +6525,27 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel,
 	if (query->groupingSets)
 		return false;
 
+	/*
+	 * The partial target can omit redundant GROUP BY entries.  Our deparser
+	 * emits the original clause (also preserving empty-input semantics for a
+	 * constant grouping key), so leave such shapes to local aggregation.
+	 */
+	if (fpinfo->stage == UPPERREL_PARTIAL_GROUP_AGG)
+	{
+		foreach(lc, query->groupClause)
+		{
+			SortGroupClause *grp = lfirst_node(SortGroupClause, lc);
+			bool		found = false;
+
+			for (i = 0; i < list_length(grouping_target->exprs); i++)
+				if (get_pathtarget_sortgroupref(grouping_target, i) ==
+					grp->tleSortGroupRef)
+					found = true;
+			if (!found)
+				return false;
+		}
+	}
+
 	/* Get the fpinfo of the underlying scan relation. */
 	ofpinfo = (PgFdwRelationInfo *) fpinfo->outerrel->fdw_private;
 
@@ -6766,6 +6787,7 @@ postgresGetForeignUpperPaths(PlannerInfo *root, UpperRelationKind stage,
 
 	/* Ignore stages we don't support; and skip any duplicate calls. */
 	if ((stage != UPPERREL_GROUP_AGG &&
+		 stage != UPPERREL_PARTIAL_GROUP_AGG &&
 		 stage != UPPERREL_ORDERED &&
 		 stage != UPPERREL_FINAL) ||
 		output_rel->fdw_private)
@@ -6779,6 +6801,7 @@ postgresGetForeignUpperPaths(PlannerInfo *root, UpperRelationKind stage,
 	switch (stage)
 	{
 		case UPPERREL_GROUP_AGG:
+		case UPPERREL_PARTIAL_GROUP_AGG:
 			add_foreign_grouping_paths(root, input_rel, output_rel,
 									   (GroupPathExtraData *) extra);
 			break;
@@ -6822,7 +6845,13 @@ add_foreign_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 		!root->hasHavingQual)
 		return;
 
-	Assert(extra->patype == PARTITIONWISE_AGGREGATE_NONE ||
+	/* Only core-requested partial partitionwise aggregation is supported. */
+	if (fpinfo->stage == UPPERREL_PARTIAL_GROUP_AGG &&
+		extra->patype != PARTITIONWISE_AGGREGATE_PARTIAL)
+		return;
+
+	Assert(fpinfo->stage == UPPERREL_PARTIAL_GROUP_AGG ||
+		   extra->patype == PARTITIONWISE_AGGREGATE_NONE ||
 		   extra->patype == PARTITIONWISE_AGGREGATE_FULL);
 
 	/* save the input_rel as outerrel in fpinfo */
@@ -6843,7 +6872,14 @@ add_foreign_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	 * Use HAVING qual from extra. In case of child partition, it will have
 	 * translated Vars.
 	 */
-	if (!foreign_grouping_ok(root, grouped_rel, extra->havingQual))
+	/*
+	 * Core's partial target already includes the partial Aggrefs needed by
+	 * HAVING.  Evaluate HAVING only after combining all partitions, never on
+	 * the remote results or as a local qual of this partial ForeignScan.
+	 */
+	if (!foreign_grouping_ok(root, grouped_rel,
+							 fpinfo->stage == UPPERREL_PARTIAL_GROUP_AGG ?
+							 NULL : extra->havingQual))
 		return;
 
 	/*
