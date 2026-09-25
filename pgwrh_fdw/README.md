@@ -39,6 +39,29 @@ no migration or upgrade scripts. Existing experimental installations need a
 planned recreation of the extension and dependent foreign objects. Installing
 new files alone does not update extensions already enabled in a database.
 
+## Pipelined async scans
+
+Set `pipeline_depth` on an ordinary server to let async scans queue cursor
+creation and FETCH operations on its connection:
+
+```sql
+ALTER SERVER replica_a OPTIONS (ADD pipeline_depth '8', ADD async_capable 'true');
+```
+
+The default depth is **0** (disabled); the supported range is 0–1024. The planner
+must choose an async Append. With virtual servers, set `async_capable` on the
+virtual server or foreign table, and `pipeline_depth` on the selected ordinary
+member. Connections still use the existing user-mapping and routing rules.
+
+Pipelining saves network round trips while sharing one remote transaction and
+snapshot. Remote commands on that connection execute serially. It retains SQL
+cursors; cursor-free streaming is separate work. Local workloads can pay extra
+protocol overhead, so benchmark before enabling it broadly. `fetch_size` controls
+rows per batch; the pipeline depth is not a byte-based memory limit.
+
+See [details, tests and benchmark](18/PIPELINING.md)
+([PostgreSQL 19 copy](19/PIPELINING.md)).
+
 ## Configuration
 
 The SQL helper `pgwrh_fdw_scram_verifier(password text)` returns a freshly salted
