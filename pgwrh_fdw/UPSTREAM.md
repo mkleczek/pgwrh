@@ -104,6 +104,39 @@ python3 pgwrh_fdw/tools/refresh-layout.py 19
 
 For already-published history, follow the duplicate-aggregate workflow below.
 
+## Pipelining feature group
+
+`lqyysrzn` (`codex/fdw-pipelining`) groups the implementation for both versions:
+
+| Change | Purpose | Parent |
+| --- | --- | --- |
+| `vvxupymt` | Connection-owned operation model and AGPL notice | `fdw_patch_base` |
+| `ynqntoyx` | Bounded, nonblocking libpq transport and depth option | `vvxupymt` |
+| `lxotrnym` | Transaction barriers, cancellation, rollback and result lifetime | `ynqntoyx` |
+| `ruunxnzr` | Pipelined cursor creation and async FETCH scheduling | `lxotrnym` |
+| `lyysrxol` | pgwrh namespace mappings | FDW identity change `sqylzvly` |
+| `uyymlztr` | Feature-owned tests, documentation and benchmark | `fdw_patch_base` |
+
+The feature group's parents are `ruunxnzr`, `lyysrxol` and `uyymlztr`. Only the
+group is an additional direct parent of the existing `lvwzssxp` (18) and
+`mqpxytlz` (19) aggregates. Runtime changes 1–4 do not depend on pgwrh routing,
+transaction-context propagation, lookup joins or other pgwrh features. The
+existing `myrzuoso`/`pozuquuz` directory moves remain directly above their
+respective aggregates. PostgreSQL 19's result wrappers and changed error API
+are adapted in its aggregate; PG18 and PG19 regression expectations stay separate.
+
+All new code is AGPL-3.0-only. An upstream submission would require a separate,
+explicit relicensing decision. This group implements cursor pipelining only.
+
+To remove the unpublished feature, drop `codex/fdw-pipelining` from an
+aggregate's direct parents, resolve its integration conflicts, and refresh its
+pure directory move. The removal check found conflicts in `Makefile` and
+`option.c` for both versions, and additionally `pipeline.c` and `postgres_fdw.c`
+for PG19: remove the pipeline-specific compatibility code along with the feature.
+The feature's tests and benchmark then disappear with its source files. Do not
+remove existing parents or copy one major's source over the other. Disposable
+removal builds were checked against both pre-feature trees and their async tests.
+
 ## Changing shared behavior
 
 Edit the relevant unpublished shared change once. jj rebases both descendant
