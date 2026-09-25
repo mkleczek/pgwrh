@@ -1,3 +1,8 @@
+/*
+ * pgwrh_fdw modifications Copyright (c) 2026, pgwrh_fdw contributors.
+ * Licensed under GNU AGPL version 3 only; see LICENSE and LICENSING.md.
+ * Original PostgreSQL notices and permissions are retained below.
+ */
 /*-------------------------------------------------------------------------
  *
  * postgres_fdw.c
@@ -168,6 +173,8 @@ typedef struct PgFdwScanState
 
 	/* for asynchronous execution */
 	bool		async_capable;	/* engage asynchronous-capable logic? */
+	PgFdwPendingOperation *declare_operation;
+	PgFdwPendingOperation *fetch_operation;
 
 	/* working memory contexts */
 	MemoryContext batch_cxt;	/* context holding current batch of tuples */
@@ -451,6 +458,8 @@ static void adjust_foreign_grouping_path_cost(PlannerInfo *root,
 static bool ec_member_matches_foreign(PlannerInfo *root, RelOptInfo *rel,
 									  EquivalenceClass *ec, EquivalenceMember *em,
 									  void *arg);
+static bool scan_uses_pipeline(ForeignScanState *node);
+static bool pipeline_fetch_ready(AsyncRequest *areq);
 static void create_cursor(ForeignScanState *node);
 static void fetch_more_data(ForeignScanState *node);
 static void close_cursor(PGconn *conn, unsigned int cursor_number,
@@ -1653,6 +1662,10 @@ postgresReScanForeignScan(ForeignScanState *node)
 	char		sql[64];
 	PGresult   *res;
 
+	/* Settle this generation before reusing the cursor or its parameters. */
+	if (fsstate->fetch_operation)
+		fetch_more_data(node);
+
 	/* If we haven't created the cursor yet, nothing to do. */
 	if (!fsstate->cursor_exists)
 		return;
@@ -1732,6 +1745,18 @@ postgresEndForeignScan(ForeignScanState *node)
 	/* if fsstate is NULL, we are in EXPLAIN; nothing to do */
 	if (fsstate == NULL)
 		return;
+
+	/* Release queued results without calling tuple input functions at shutdown. */
+	if (fsstate->declare_operation)
+	{
+		PQclear(pgfdw_pipeline_take(fsstate->declare_operation));
+		fsstate->declare_operation = NULL;
+	}
+	if (fsstate->fetch_operation)
+	{
+		PQclear(pgfdw_pipeline_take(fsstate->fetch_operation));
+		fsstate->fetch_operation = NULL;
+	}
 
 	/* Close the cursor if open, to prevent accumulation of cursors */
 	if (fsstate->cursor_exists)
@@ -3742,6 +3767,19 @@ ec_member_matches_foreign(PlannerInfo *root, RelOptInfo *rel,
 	return true;
 }
 
+/* Only ordinary asynchronous reads participate; writes and row locks are barriers. */
+static bool
+scan_uses_pipeline(ForeignScanState *node)
+{
+	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
+	PlannedStmt *stmt = node->ss.ps.state->es_plannedstmt;
+
+	return fsstate->async_capable && fsstate->conn_state &&
+		fsstate->conn_state->pipeline_depth > 0 &&
+		stmt->commandType == CMD_SELECT && !stmt->hasModifyingCTE &&
+		stmt->rowMarks == NIL;
+}
+
 /*
  * Create cursor for node's query with current parameter values.
  */
@@ -3791,20 +3829,32 @@ create_cursor(ForeignScanState *node)
 	 * the desired result.  This allows us to avoid assuming that the remote
 	 * server has the same OIDs we do for the parameters' types.
 	 */
-	if (!PQsendQueryParams(conn, buf.data, numParams,
-						   NULL, values, NULL, NULL, 0))
-		pgfdw_report_error(ERROR, NULL, conn, false, buf.data);
+	if (scan_uses_pipeline(node))
+	{
+		/* Parameter evaluation above may have run another foreign subplan. */
+		if (!pgfdw_pipeline_has_room(fsstate->conn_state))
+			pgfdw_pipeline_drain(fsstate->conn_state);
+		fsstate->declare_operation = pgfdw_pipeline_submit(conn,
+			fsstate->conn_state, buf.data, numParams, values, PGRES_COMMAND_OK, fsstate->query);
+	}
+	else
+	{
+		pgfdw_finish_pipeline(conn);
+		if (!PQsendQueryParams(conn, buf.data, numParams,
+							   NULL, values, NULL, NULL, 0))
+			pgfdw_report_error(ERROR, NULL, conn, false, buf.data);
 
-	/*
-	 * Get the result, and check for success.
-	 *
-	 * We don't use a PG_TRY block here, so be careful not to throw error
-	 * without releasing the PGresult.
-	 */
-	res = pgfdw_get_result(conn);
-	if (PQresultStatus(res) != PGRES_COMMAND_OK)
-		pgfdw_report_error(ERROR, res, conn, true, fsstate->query);
-	PQclear(res);
+		/*
+		 * Get the result, and check for success.
+		 *
+		 * We don't use a PG_TRY block here, so be careful not to throw error
+		 * without releasing the PGresult.
+		 */
+		res = pgfdw_get_result(conn);
+		if (PQresultStatus(res) != PGRES_COMMAND_OK)
+			pgfdw_report_error(ERROR, res, conn, true, fsstate->query);
+		PQclear(res);
+	}
 
 	/* Mark the cursor as created, and show no tuples have been retrieved */
 	fsstate->cursor_exists = true;
@@ -3843,7 +3893,17 @@ fetch_more_data(ForeignScanState *node)
 		int			numrows;
 		int			i;
 
-		if (fsstate->async_capable)
+		if (fsstate->fetch_operation)
+		{
+			if (fsstate->declare_operation)
+			{
+				PQclear(pgfdw_pipeline_take(fsstate->declare_operation));
+				fsstate->declare_operation = NULL;
+			}
+			res = pgfdw_pipeline_take(fsstate->fetch_operation);
+			fsstate->fetch_operation = NULL;
+		}
+		else if (fsstate->async_capable)
 		{
 			Assert(fsstate->conn_state->pendingAreq);
 
@@ -4185,6 +4245,7 @@ execute_foreign_modify(EState *estate,
 	/*
 	 * Execute the prepared statement.
 	 */
+	pgfdw_finish_pipeline(fmstate->conn);
 	if (!PQsendQueryPrepared(fmstate->conn,
 							 fmstate->p_name,
 							 fmstate->p_nums * (*numSlots),
@@ -4257,6 +4318,7 @@ prepare_foreign_modify(PgFdwModifyState *fmstate)
 	 * the prepared statements we use in this module are simple enough that
 	 * the remote server will make the right choices.
 	 */
+	pgfdw_finish_pipeline(fmstate->conn);
 	if (!PQsendPrepare(fmstate->conn,
 					   p_name,
 					   fmstate->query,
@@ -4602,6 +4664,7 @@ execute_dml_stmt(ForeignScanState *node)
 	 * the desired result.  This allows us to avoid assuming that the remote
 	 * server has the same OIDs we do for the parameters' types.
 	 */
+	pgfdw_finish_pipeline(dmstate->conn);
 	if (!PQsendQueryParams(dmstate->conn, dmstate->query, numParams,
 						   NULL, values, NULL, NULL, 0))
 		pgfdw_report_error(ERROR, NULL, dmstate->conn, false, dmstate->query);
@@ -7324,6 +7387,51 @@ postgresForeignAsyncConfigureWait(AsyncRequest *areq)
 	/* This should not be called unless callback_pending */
 	Assert(areq->callback_pending);
 
+	if (scan_uses_pipeline(node))
+	{
+		int i = -1;
+
+		/*
+		 * Only the first waiting child for this connection configures its
+		 * socket. Do not consume its readiness in a later child's callback.
+		 * No executor pointers are retained by the connection queue.
+		 */
+		while ((i = bms_next_member(requestor->as_asyncplans, i)) >= 0)
+		{
+			AsyncRequest *other = requestor->as_asyncrequests[i];
+			ForeignScanState *othernode;
+			PgFdwScanState *otherstate;
+
+			if (other == areq)
+				break;
+			if (!other->callback_pending || !IsA(other->requestee, ForeignScanState))
+				continue;
+			othernode = (ForeignScanState *) other->requestee;
+			if (othernode->fdwroutine->ForeignAsyncConfigureWait !=
+				postgresForeignAsyncConfigureWait)
+				continue;
+			otherstate = (PgFdwScanState *) othernode->fdw_state;
+			if (otherstate->conn == fsstate->conn)
+				return;
+		}
+
+		if (pipeline_fetch_ready(areq))
+		{
+			complete_pending_request(areq);
+			if (areq->request_complete)
+				return;
+			fetch_more_data_begin(areq);
+		}
+		/*
+		 * Append dispatches reads only. A writable event also wakes its
+		 * wait loop, whose next ConfigureWait call resumes PQflush here.
+		 */
+		if (pgfdw_pipeline_events(fsstate->conn_state))
+			AddWaitEventToSet(set, pgfdw_pipeline_events(fsstate->conn_state),
+				PQsocket(fsstate->conn), NULL, areq);
+		return;
+	}
+
 	/*
 	 * If process_pending_request() has been invoked on the given request
 	 * before we get here, we might have some tuples already; in which case
@@ -7397,6 +7505,15 @@ postgresForeignAsyncNotify(AsyncRequest *areq)
 
 	/* The core code would have initialized the callback_pending flag */
 	Assert(!areq->callback_pending);
+
+	if (scan_uses_pipeline(node))
+	{
+		if (pipeline_fetch_ready(areq))
+			produce_tuple_asynchronously(areq, true);
+		else
+			ExecAsyncRequestPending(areq);
+		return;
+	}
 
 	/*
 	 * If process_pending_request() has been invoked on the given request
@@ -7505,6 +7622,25 @@ fetch_more_data_begin(AsyncRequest *areq)
 	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
 	char		sql[64];
 
+	if (scan_uses_pipeline(node))
+	{
+		if (fsstate->fetch_operation)
+			return;
+		if (fsstate->conn_state->pendingAreq)
+			process_pending_request(fsstate->conn_state->pendingAreq);
+		if (!pgfdw_pipeline_has_room(fsstate->conn_state))
+			return;
+		if (!fsstate->cursor_exists)
+			create_cursor(node);
+		snprintf(sql, sizeof(sql), "FETCH %d FROM c%u",
+				 fsstate->fetch_size, fsstate->cursor_number);
+		fsstate->fetch_operation = pgfdw_pipeline_submit(fsstate->conn,
+			fsstate->conn_state, sql, 0, NULL, PGRES_TUPLES_OK, fsstate->query);
+		/* Flush a logical job, preserving a recovery boundary after it. */
+		pgfdw_pipeline_sync(fsstate->conn, fsstate->conn_state);
+		return;
+	}
+
 	Assert(!fsstate->conn_state->pendingAreq);
 
 	/* Create the cursor synchronously. */
@@ -7515,11 +7651,32 @@ fetch_more_data_begin(AsyncRequest *areq)
 	snprintf(sql, sizeof(sql), "FETCH %d FROM c%u",
 			 fsstate->fetch_size, fsstate->cursor_number);
 
+	pgfdw_finish_pipeline(fsstate->conn);
 	if (!PQsendQuery(fsstate->conn, sql))
 		pgfdw_report_error(ERROR, NULL, fsstate->conn, false, fsstate->query);
 
 	/* Remember that the request is in process */
 	fsstate->conn_state->pendingAreq = areq;
+}
+
+/* Pump the shared wire, but materialize only the requesting scan's batch. */
+static bool
+pipeline_fetch_ready(AsyncRequest *areq)
+{
+	ForeignScanState *node = (ForeignScanState *) areq->requestee;
+	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
+
+	pgfdw_pipeline_process(fsstate->conn_state);
+	if (fsstate->next_tuple < fsstate->num_tuples || fsstate->eof_reached)
+		return true;
+	if (!fsstate->fetch_operation)
+		fetch_more_data_begin(areq);
+	pgfdw_pipeline_process(fsstate->conn_state);
+	if (!fsstate->fetch_operation ||
+		!pgfdw_pipeline_ready(fsstate->fetch_operation))
+		return false;
+	fetch_more_data(node);
+	return true;
 }
 
 /*
