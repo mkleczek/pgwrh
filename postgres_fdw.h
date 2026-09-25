@@ -1,3 +1,8 @@
+/*
+ * pgwrh_fdw modifications Copyright (c) 2026, pgwrh_fdw contributors.
+ * Licensed under GNU AGPL version 3 only; see LICENSE and LICENSING.md.
+ * Original PostgreSQL notices and permissions are retained below.
+ */
 /*-------------------------------------------------------------------------
  *
  * postgres_fdw.h
@@ -131,12 +136,21 @@ typedef struct PgFdwRelationInfo
 	int			relation_index;
 } PgFdwRelationInfo;
 
+/* Opaque connection-owned protocol state, independent of executor nodes. */
+typedef struct PgFdwPipeline PgFdwPipeline;
+typedef struct PgFdwPendingOperation PgFdwPendingOperation;
+
 /*
  * Extra control information relating to a connection.
+ *
+ * pendingAreq belongs to the legacy single-request path.  Pipelined operations
+ * have separate ownership: wire completion never invokes an executor callback.
  */
 typedef struct PgFdwConnState
 {
-	AsyncRequest *pendingAreq;	/* pending async request */
+	AsyncRequest *pendingAreq;	/* pending legacy async request */
+	int			pipeline_depth; /* maximum in-flight fetches; zero disables */
+	PgFdwPipeline *pipeline; /* transaction-owned operation queue */
 } PgFdwConnState;
 
 /*
