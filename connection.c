@@ -1,3 +1,8 @@
+/*
+ * pgwrh_fdw modifications Copyright (c) 2026, pgwrh_fdw contributors.
+ * Licensed under GNU AGPL version 3 only; see LICENSE and LICENSING.md.
+ * Original PostgreSQL notices and permissions are retained below.
+ */
 /*-------------------------------------------------------------------------
  *
  * connection.c
@@ -286,6 +291,9 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 		/* Process a pending asynchronous request if any. */
 		if (entry->state.pendingAreq)
 			process_pending_request(entry->state.pendingAreq);
+		/* No queued command may cross a remote savepoint boundary. */
+		if (entry->xact_depth < GetCurrentTransactionNestLevel())
+			pgfdw_pipeline_drain(&entry->state);
 		/* Start a new transaction or subtransaction if needed. */
 		begin_remote_xact(entry);
 	}
@@ -403,6 +411,7 @@ make_new_connection(ConnCacheEntry *entry, UserMapping *user)
 	entry->keep_connections = true;
 	entry->parallel_commit = false;
 	entry->parallel_abort = false;
+	entry->state.pipeline_depth = 0;
 	foreach(lc, server->options)
 	{
 		DefElem    *def = (DefElem *) lfirst(lc);
@@ -411,6 +420,8 @@ make_new_connection(ConnCacheEntry *entry, UserMapping *user)
 			entry->keep_connections = defGetBoolean(def);
 		else if (strcmp(def->defname, "parallel_commit") == 0)
 			entry->parallel_commit = defGetBoolean(def);
+		else if (strcmp(def->defname, "pipeline_depth") == 0)
+			entry->state.pipeline_depth = strtol(defGetString(def), NULL, 10);
 		else if (strcmp(def->defname, "parallel_abort") == 0)
 			entry->parallel_abort = defGetBoolean(def);
 	}
@@ -654,6 +665,7 @@ disconnect_pg_server(ConnCacheEntry *entry)
 {
 	if (entry->conn != NULL)
 	{
+		pgfdw_pipeline_disconnect(&entry->state);
 		libpqsrv_disconnect(entry->conn);
 		entry->conn = NULL;
 	}
@@ -811,6 +823,7 @@ do_sql_command(PGconn *conn, const char *sql)
 static void
 do_sql_command_begin(PGconn *conn, const char *sql)
 {
+	pgfdw_finish_pipeline(conn);
 	if (!PQsendQuery(conn, sql))
 		pgfdw_report_error(ERROR, NULL, conn, false, sql);
 }
@@ -929,6 +942,31 @@ GetPrepStmtNumber(PGconn *conn)
 }
 
 /*
+ * A barrier for synchronous users, including callers without a state pointer.
+ * Draining stores results for their owners; it never calls the executor.
+ * Newly established connections are not in the cache yet and have no queue.
+ */
+void
+pgfdw_finish_pipeline(PGconn *conn)
+{
+	HASH_SEQ_STATUS scan;
+	ConnCacheEntry *entry;
+
+	if (!ConnectionHash)
+		return;
+	hash_seq_init(&scan, ConnectionHash);
+	while ((entry = (ConnCacheEntry *) hash_seq_search(&scan)))
+	{
+		if (entry->conn == conn)
+		{
+			hash_seq_term(&scan);
+			pgfdw_pipeline_drain(&entry->state);
+			return;
+		}
+	}
+}
+
+/*
  * Submit a query and wait for the result.
  *
  * Since we don't use non-blocking mode, this can't process interrupts while
@@ -944,6 +982,7 @@ pgfdw_exec_query(PGconn *conn, const char *query, PgFdwConnState *state)
 	if (state && state->pendingAreq)
 		process_pending_request(state->pendingAreq);
 
+	pgfdw_finish_pipeline(conn);
 	if (!PQsendQuery(conn, query))
 		return NULL;
 	return pgfdw_get_result(conn);
@@ -1070,6 +1109,8 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 					 * we can't issue any more commands against it.
 					 */
 					pgfdw_reject_incomplete_xact_state_change(entry);
+
+					pgfdw_pipeline_drain(&entry->state);
 
 					/* Commit all remote transactions during pre-commit */
 					entry->changing_xact_state = true;
@@ -1228,6 +1269,7 @@ pgfdw_subxact_callback(SubXactEvent event, SubTransactionId mySubid,
 			pgfdw_reject_incomplete_xact_state_change(entry);
 
 			/* Commit all remote subtransactions during pre-commit */
+			pgfdw_pipeline_drain(&entry->state);
 			snprintf(sql, sizeof(sql), "RELEASE SAVEPOINT s%d", curlevel);
 			entry->changing_xact_state = true;
 			if (entry->parallel_commit)
@@ -1238,6 +1280,7 @@ pgfdw_subxact_callback(SubXactEvent event, SubTransactionId mySubid,
 			}
 			do_sql_command(entry->conn, sql);
 			entry->changing_xact_state = false;
+			pgfdw_pipeline_subcommit(&entry->state);
 		}
 		else
 		{
@@ -1750,6 +1793,9 @@ pgfdw_abort_cleanup(ConnCacheEntry *entry, bool toplevel)
 	 */
 	entry->changing_xact_state = true;
 
+	if (!pgfdw_pipeline_abort(&entry->state))
+		return;
+
 	/* Assume we might have lost track of prepared statements */
 	entry->have_error = true;
 
@@ -1785,8 +1831,7 @@ pgfdw_abort_cleanup(ConnCacheEntry *entry, bool toplevel)
 	 * successfully and thus the per-connection state was not reset in
 	 * fetch_more_data(); in that case reset the per-connection state here.
 	 */
-	if (entry->state.pendingAreq)
-		memset(&entry->state, 0, sizeof(entry->state));
+	entry->state.pendingAreq = NULL;
 
 	/* Disarm changing_xact_state if it all worked */
 	entry->changing_xact_state = false;
@@ -1822,6 +1867,9 @@ pgfdw_abort_cleanup_begin(ConnCacheEntry *entry, bool toplevel,
 	 * Mark this connection as in the process of changing transaction state.
 	 */
 	entry->changing_xact_state = true;
+
+	if (!pgfdw_pipeline_abort(&entry->state))
+		return false;
 
 	/* Assume we might have lost track of prepared statements */
 	entry->have_error = true;
@@ -1958,6 +2006,7 @@ pgfdw_finish_pre_subcommit_cleanup(List *pending_entries, int curlevel)
 		 */
 		do_sql_command_end(entry->conn, sql, true);
 		entry->changing_xact_state = false;
+		pgfdw_pipeline_subcommit(&entry->state);
 
 		pgfdw_reset_xact_state(entry, false);
 	}
@@ -2076,8 +2125,7 @@ pgfdw_finish_abort_cleanup(List *pending_entries, List *cancel_requested,
 		}
 
 		/* Reset the per-connection state if needed */
-		if (entry->state.pendingAreq)
-			memset(&entry->state, 0, sizeof(entry->state));
+		entry->state.pendingAreq = NULL;
 
 		/* We're done with this entry; unset the changing_xact_state flag */
 		entry->changing_xact_state = false;
@@ -2121,8 +2169,7 @@ pgfdw_finish_abort_cleanup(List *pending_entries, List *cancel_requested,
 		entry->have_error = false;
 
 		/* Reset the per-connection state if needed */
-		if (entry->state.pendingAreq)
-			memset(&entry->state, 0, sizeof(entry->state));
+		entry->state.pendingAreq = NULL;
 
 		/* We're done with this entry; unset the changing_xact_state flag */
 		entry->changing_xact_state = false;

@@ -174,6 +174,7 @@ extern void process_pending_request(AsyncRequest *areq);
 extern PGconn *GetConnection(UserMapping *user, bool will_prep_stmt,
 							 PgFdwConnState **state);
 extern void ReleaseConnection(PGconn *conn);
+extern void pgfdw_finish_pipeline(PGconn *conn);
 extern unsigned int GetCursorNumber(PGconn *conn);
 extern unsigned int GetPrepStmtNumber(PGconn *conn);
 extern void do_sql_command(PGconn *conn, const char *sql);
@@ -194,6 +195,7 @@ extern bool pgfdw_pipeline_ready(PgFdwPendingOperation *op);
 extern uint32 pgfdw_pipeline_events(PgFdwConnState *state);
 extern PGresult *pgfdw_pipeline_take(PgFdwPendingOperation *op);
 extern void pgfdw_pipeline_drain(PgFdwConnState *state);
+extern void pgfdw_pipeline_subcommit(PgFdwConnState *state);
 extern bool pgfdw_pipeline_abort(PgFdwConnState *state);
 extern void pgfdw_pipeline_disconnect(PgFdwConnState *state);
 

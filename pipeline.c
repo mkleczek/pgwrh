@@ -421,6 +421,25 @@ pgfdw_pipeline_abort(PgFdwConnState *state)
 	return true;
 }
 
+/* Completed requests and their owners survive release of their savepoint. */
+void
+pgfdw_pipeline_subcommit(PgFdwConnState *state)
+{
+	dlist_iter iter;
+	int level = GetCurrentTransactionNestLevel();
+
+	if (!state->pipeline)
+		return;
+	dlist_foreach(iter, &state->pipeline->operations)
+	{
+		PgFdwPendingOperation *op =
+			dlist_container(PgFdwPendingOperation, all_node, iter.cur);
+
+		if (op->nestlevel == level)
+			op->nestlevel--;
+	}
+}
+
 /* Drop protocol state before disconnect; outstanding owners must fail. */
 void
 pgfdw_pipeline_disconnect(PgFdwConnState *state)
