@@ -18,6 +18,12 @@
 #ifndef POSTGRES_FDW_H
 #define POSTGRES_FDW_H
 
+#include "namespace.h"
+
+#if PG_VERSION_NUM < 180000 || PG_VERSION_NUM >= 190000
+#error "pgwrh_fdw supports PostgreSQL 18 only"
+#endif
+
 #include "foreign/foreign.h"
 #include "lib/stringinfo.h"
 #include "libpq-fe.h"

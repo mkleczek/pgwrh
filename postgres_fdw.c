@@ -55,7 +55,7 @@
 #include "utils/selfuncs.h"
 
 PG_MODULE_MAGIC_EXT(
-					.name = "postgres_fdw",
+					.name = "pgwrh_fdw",
 					.version = PG_VERSION
 );
 
@@ -328,7 +328,7 @@ typedef struct
 /*
  * SQL functions
  */
-PG_FUNCTION_INFO_V1(postgres_fdw_handler);
+PG_FUNCTION_INFO_V1(pgwrh_fdw_handler);
 
 /*
  * FDW callback routines
@@ -562,7 +562,7 @@ static int	get_batch_size_option(Relation rel);
  * to my callback routines.
  */
 Datum
-postgres_fdw_handler(PG_FUNCTION_ARGS)
+pgwrh_fdw_handler(PG_FUNCTION_ARGS)
 {
 	FdwRoutine *routine = makeNode(FdwRoutine);
 
@@ -1565,10 +1565,10 @@ postgresBeginForeignScan(ForeignScanState *node, int eflags)
 
 	/* Create contexts for batches of tuples and per-tuple temp workspace. */
 	fsstate->batch_cxt = AllocSetContextCreate(estate->es_query_cxt,
-											   "postgres_fdw tuple data",
+											   "pgwrh_fdw tuple data",
 											   ALLOCSET_DEFAULT_SIZES);
 	fsstate->temp_cxt = AllocSetContextCreate(estate->es_query_cxt,
-											  "postgres_fdw temporary data",
+											  "pgwrh_fdw temporary data",
 											  ALLOCSET_SMALL_SIZES);
 
 	/*
@@ -2758,7 +2758,7 @@ postgresBeginDirectModify(ForeignScanState *node, int eflags)
 
 	/* Create context for per-tuple temp workspace. */
 	dmstate->temp_cxt = AllocSetContextCreate(estate->es_query_cxt,
-											  "postgres_fdw temporary data",
+											  "pgwrh_fdw temporary data",
 											  ALLOCSET_SMALL_SIZES);
 
 	/* Prepare for input conversion of RETURNING results. */
@@ -4105,7 +4105,7 @@ create_foreign_modify(EState *estate,
 
 	/* Create context for per-tuple temp workspace. */
 	fmstate->temp_cxt = AllocSetContextCreate(estate->es_query_cxt,
-											  "postgres_fdw temporary data",
+											  "pgwrh_fdw temporary data",
 											  ALLOCSET_SMALL_SIZES);
 
 	/* Prepare for input conversion of RETURNING results. */
@@ -5181,7 +5181,7 @@ postgresAcquireSampleRowsFunc(Relation relation, int elevel,
 	/* Remember ANALYZE context, and create a per-tuple temp context */
 	astate.anl_cxt = CurrentMemoryContext;
 	astate.temp_cxt = AllocSetContextCreate(CurrentMemoryContext,
-											"postgres_fdw temporary data",
+											"pgwrh_fdw temporary data",
 											ALLOCSET_SMALL_SIZES);
 
 	/*
