@@ -6,6 +6,7 @@ OBJS = \
 	connection.o \
 	deparse.o \
 	option.o \
+	pipeline.o \
 	postgres_fdw.o \
 	shippable.o
 PGFILEDESC = "postgres_fdw - foreign data wrapper for PostgreSQL"

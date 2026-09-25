@@ -1,3 +1,8 @@
+/*
+ * pgwrh_fdw modifications Copyright (c) 2026, pgwrh_fdw contributors.
+ * Licensed under GNU AGPL version 3 only; see LICENSE and LICENSING.md.
+ * Original PostgreSQL notices and permissions are retained below.
+ */
 /*-------------------------------------------------------------------------
  *
  * option.c
@@ -161,6 +166,19 @@ postgres_fdw_validator(PG_FUNCTION_ARGS)
 			/* check list syntax, warn about uninstalled extensions */
 			(void) ExtractExtensionList(defGetString(def), true);
 		}
+		else if (strcmp(def->defname, "pipeline_depth") == 0)
+		{
+			long depth;
+			char *end;
+
+			errno = 0;
+			depth = strtol(defGetString(def), &end, 10);
+			if (errno || end == defGetString(def) || *end != '\0' ||
+				depth < 0 || depth > 1024)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("pipeline_depth must be an integer between 0 and 1024")));
+		}
 		else if (strcmp(def->defname, "fetch_size") == 0 ||
 				 strcmp(def->defname, "batch_size") == 0)
 		{
@@ -269,6 +287,7 @@ InitPgFdwOptions(void)
 		{"batch_size", ForeignTableRelationId, false},
 		/* async_capable is available on both server and table */
 		{"async_capable", ForeignServerRelationId, false},
+		{"pipeline_depth", ForeignServerRelationId, false},
 		{"async_capable", ForeignTableRelationId, false},
 		{"parallel_commit", ForeignServerRelationId, false},
 		{"parallel_abort", ForeignServerRelationId, false},

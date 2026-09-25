@@ -183,6 +183,20 @@ extern PGresult *pgfdw_exec_query(PGconn *conn, const char *query,
 extern void pgfdw_report_error(int elevel, PGresult *res, PGconn *conn,
 							   bool clear, const char *sql);
 
+/* in pipeline.c: results are owned until taken by the submitting scan */
+extern PgFdwPendingOperation *pgfdw_pipeline_submit(PGconn *conn,
+    PgFdwConnState *state, const char *sql, int nparams,
+    const char *const *values, ExecStatusType expected, const char *error_sql);
+extern void pgfdw_pipeline_sync(PGconn *conn, PgFdwConnState *state);
+extern void pgfdw_pipeline_process(PgFdwConnState *state);
+extern bool pgfdw_pipeline_has_room(PgFdwConnState *state);
+extern bool pgfdw_pipeline_ready(PgFdwPendingOperation *op);
+extern uint32 pgfdw_pipeline_events(PgFdwConnState *state);
+extern PGresult *pgfdw_pipeline_take(PgFdwPendingOperation *op);
+extern void pgfdw_pipeline_drain(PgFdwConnState *state);
+extern bool pgfdw_pipeline_abort(PgFdwConnState *state);
+extern void pgfdw_pipeline_disconnect(PgFdwConnState *state);
+
 /* in option.c */
 extern int	ExtractConnectionOptions(List *defelems,
 									 const char **keywords,
