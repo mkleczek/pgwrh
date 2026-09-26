@@ -78,6 +78,13 @@ including the optional wait API.
 
 ## Configure PostgreSQL and enable extensions
 
+Append `pgwrh` to `shared_preload_libraries` on controllers and replicas, then
+restart PostgreSQL. Its supervisor discovers pgwrh databases and repairs drop
+protection, and restarts enabled sync daemons after server or worker failure.
+It uses `postgres` to discover databases; set `pgwrh.supervisor_database` to
+another connectable database before restart if `postgres` is absent. Allow two
+worker slots for discovery in addition to the sync and replication workers.
+
 Enable `pgwrh` in the controller and each replica database. In logical
 replication, the source is the publisher and the receiver is a subscriber; see
 [cluster concepts](overview.md) for these roles.

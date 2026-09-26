@@ -112,6 +112,7 @@ def postgres_node_factory():
             install_extension: bool = True,
             dbname: str | None = None,
             installation: PostgresInstallation | None = None,
+            preload: bool = True,
         ):
             bin_dir = installation.bin_dir if installation else os.environ.get(POSTGRES_BIN_DIR_ENV)
             extension_paths = installation.extension_root if installation else _extension_paths()
@@ -137,6 +138,8 @@ def postgres_node_factory():
                     "extension_control_path = "
                     + _quote_conf_value(f"{extension_paths}:$system")
                 )
+            if preload:
+                node.append_conf("shared_preload_libraries = 'pgwrh'")
             node.start()
             if installation is not None:
                 actual_major = int(node.execute("SHOW server_version_num")[0][0]) // 10000

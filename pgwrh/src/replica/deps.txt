@@ -1,5 +1,8 @@
 tables          helpers
 helpers         sync
+helpers         index
+fdw             index
+index           sync
 helpers         aggregation
 fdw             aggregation
 aggregation     sync

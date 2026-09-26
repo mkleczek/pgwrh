@@ -174,8 +174,9 @@ connections use `pgwrh_fdw`; the stock `postgres_fdw` extension is not required.
 When building with `WITH_FDW=0`, provide `pgwrh_fdw` separately in the target
 PostgreSQL installation. The test staging target includes the bundled FDW's SQL
 and library so integration tests use the implementation being developed.
-Preloading `pgwrh_wait` remains an explicit server configuration step; it must
-happen before relying on the wait API.
+Preload `pgwrh` for daemon restart supervision on controllers and replicas.
+Preloading `pgwrh_wait` remains an explicit server configuration step before
+relying on the wait API. Native packages do not change server settings.
 
 Release archives must contain `pgwrh/`, `pgwrh_ui/`, `pgwrh_wait/`,
 `pgwrh_fdw/`, and `pgwrh_gist_extra/`, together with the root Makefile. Include `test/` to run the
@@ -186,15 +187,16 @@ rather than assembling sources from independent checkouts at package-build time.
 ## Build variants
 
 `WITH_FDW`, `WITH_LSN_WAIT`, and `WITH_GIST_EXTRA` default to `1` in the PGXS build. Set any
-to `0` to omit that component. To install only the SQL extensions, `pgwrh` and
-`pgwrh_ui` (provide the required PostgreSQL 18 FDW separately):
+to `0` to omit that component. To install the core (including its supervisor) and `pgwrh_ui` while providing
+the required PostgreSQL 18 FDW separately:
 
 ```sh
 make WITH_FDW=0 WITH_LSN_WAIT=0 WITH_GIST_EXTRA=0 install PG_CONFIG=/path/to/pg_config
 ```
 
-`NO_PGXS=1` defaults all native components to `0` and supports staged SQL-only
-installation and uninstallation. Explicitly requesting a native component with
+`NO_PGXS=1` defaults the optional native components to `0` and supports staged
+SQL-only installation and uninstallation. Supply a matching native `pgwrh`
+supervisor library separately when using this mode; it cannot build that library. Explicitly requesting a native component with
 `NO_PGXS=1` fails. The [Nix package](nix.md) builds the complete PostgreSQL 18
 bundle. Use the same component options when building, installing, and
 uninstalling. Run `make clean` before changing the PostgreSQL installation used

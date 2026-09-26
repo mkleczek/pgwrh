@@ -1,3 +1,4 @@
+usr/lib/postgresql/18/lib/pgwrh.so
 usr/lib/postgresql/18/lib/pgwrh_fdw.so
 usr/lib/postgresql/18/lib/pgwrh_wait.so
 usr/lib/postgresql/18/lib/pgwrh_gist_extra.so

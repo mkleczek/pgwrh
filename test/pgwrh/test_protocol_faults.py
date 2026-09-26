@@ -16,8 +16,6 @@ def crash_and_restart(cluster, victim):
     node = cluster.master.node if victim == 'controller' else cluster.replicas[0].node
     node.stop(['-m', 'immediate'])
     node.start()
-    if victim != 'controller':
-        node.execute('SELECT pgwrh.start_sync_daemon(0.1)')
 
 
 def assert_rows(cluster):

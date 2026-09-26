@@ -2,6 +2,7 @@
 -- requires: replica-tables
 -- requires: replica-helpers
 -- requires: replica-fdw
+-- requires: replica-index
 
 -- pgwrh
 -- Copyright (C) 2024  Michal Kleczek
@@ -266,26 +267,10 @@ owned_subscription AS (
     WHERE s.subdbid = (SELECT oid FROM pg_database WHERE datname = current_database())
 ),
 shard_index AS (
-    SELECT
-        reg_class,
-        rel_id,
-        si.*
-    FROM
-        fdw_shard_index si
-            JOIN local_rel lr ON (si.schema_name, si.table_name) = ((rel_id).schema_name, (rel_id).table_name)
+    SELECT * FROM desired_local_index
 ),
 missing_index AS (
-    SELECT
-        *
-    FROM
-        shard_index si
-    WHERE
-        NOT EXISTS (
-            SELECT 1 FROM pg_index i JOIN pg_class ic ON i.indexrelid = ic.oid
-            WHERE
-                i.indrelid = si.reg_class AND
-                ic.relname = si.index_name
-        )
+    SELECT * FROM missing_local_index
 ),
 missing_required_index AS (
     SELECT
@@ -668,35 +653,6 @@ scripts (async, transactional, description, commands) AS (
         s.subname, s.subpublications
 
     UNION ALL
-    -- create missing indexes
-    SELECT * FROM
-    (
-        SELECT
-            TRUE,
-            TRUE,
-            format('Creating missing index [%s] ON [%s]', index_name, reg_class),
-            ARRAY[
-                format('CREATE INDEX IF NOT EXISTS %I ON %s %s',
-                    index_name,
-                    reg_class,
-                    index_template
-                ),
-                add_ext_dependency(((rel_id).schema_name, index_name)::rel_id)
-            ]
-        FROM
-            missing_index
-        WHERE
-            -- there is no way to find out what index is being created
-            -- so we only allow one concurrent indexing for any given table
-            NOT EXISTS (
-                SELECT 1 FROM pg_stat_progress_create_index WHERE relid = reg_class
-            )
-        LIMIT
-            -- make sure no more than max_worker_processes/2 indexing operations at the same time
-            greatest(0, current_setting('max_worker_processes')::int/2 - (SELECT count(*) FROM pg_stat_progress_create_index))
-    ) AS sub
-
-    UNION ALL
     -- DROP indexes not defined in index_template
     -- make sure we do not drop constraint indexes
     SELECT
@@ -710,7 +666,12 @@ scripts (async, transactional, description, commands) AS (
         pg_index i
             JOIN pg_class ic ON ic.oid = i.indexrelid
             JOIN shard_assignment sa ON sa.reg_class = i.indrelid
+            JOIN owned_obj o ON o.classid = 'pg_class'::regclass AND o.objid = i.indexrelid
     WHERE
+        NOT EXISTS (SELECT FROM index_build_tasks() task
+            WHERE task.datid = (SELECT oid FROM pg_database WHERE datname = current_database())
+              AND task.relid = i.indrelid)
+        AND
             NOT EXISTS (SELECT 1 FROM
                 shard_index t
                 WHERE ic.relname = t.index_name AND i.indrelid = reg_class

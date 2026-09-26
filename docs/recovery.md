@@ -37,7 +37,7 @@ replication origins or continuity with existing replica data.
 ## Logical restore into a fresh controller
 
 Fence the old controller first: stop application writes, management jobs and
-replica daemons, and prevent clients or replicas from connecting to the new
+replica daemons (`SELECT pgwrh.stop_sync_daemon()` on each replica), and prevent clients or replicas from connecting to the new
 host. Never run two writable controllers for the same cluster. Keep the restored
 controller isolated until recovery checks and replica rebuilding are complete.
 
@@ -59,7 +59,7 @@ pg_restore --exit-on-error --single-transaction --dbname=restored_controller \
 pg_restore --exit-on-error --single-transaction --dbname=restored_controller \
   --section=post-data --no-publications --no-subscriptions controller.dump
 psql -X --set=ON_ERROR_STOP=1 --dbname=restored_controller \
-  -c 'SELECT pgwrh.sync_publications();'
+  -c 'SELECT pgwrh.sync_publications(); SELECT pgwrh.repair_managed_objects();'
 psql -X --set=ON_ERROR_STOP=1 --dbname=restored_controller \
   --file=docs/recovery-quarantine.sql
 ```
@@ -123,3 +123,39 @@ Before admitting traffic, compare application row counts and checksums against
 the restored controller, confirm required shards and indexes on every serving
 replica, verify roles and UI grants, and exercise the application's consistency
 checks. Use [LSN barriers](lsn-wait.md) when reads must observe a known write.
+
+## In-place PostgreSQL major upgrades
+
+Install this registry-based pgwrh build for both PostgreSQL majors and preload
+`pgwrh` in the new cluster. This alpha has no migration from the earlier
+marker-only installation. The managed-object registry must exist before the
+backup or server upgrade; repair cannot infer ownership after its inventory
+has been lost.
+
+Follow PostgreSQL's [logical replication upgrade prerequisites](https://www.postgresql.org/docs/18/logical-replication-upgrade.html).
+Subscriber state and logical slots require an old cluster of PostgreSQL 17 or
+newer. For a controller upgrade, stop management writes, pause replica daemons
+with `pgwrh.stop_sync_daemon()`, and ensure logical slots have caught up before
+disabling subscriptions and shutting down the old controller. Preserve the
+endpoint. For a replica upgrade, first drain it from peer routes by setting its
+`pgwrh.shard_host.online` false, and remove it from application traffic. Other
+replicas can serve reads throughout maintenance when every required shard has
+another available copy.
+
+After `pg_upgrade`, before resuming management, run in every pgwrh database:
+
+```sql
+SELECT pgwrh.repair_managed_objects();
+```
+
+This idempotently rebuilds normal extension dependency markers from the durable
+registry, restoring `DROP EXTENSION` protection (blocked without `CASCADE`,
+managed-object cleanup with it). Reconciliation reads the registry directly.
+The preloaded supervisor also repairs markers and restarts enabled daemons;
+performing the explicit repair makes completion independent of its next scan.
+Re-enable subscriptions after checking their ready states and origin/slot
+continuity. Restart intentionally paused daemons with
+`SELECT pgwrh.start_sync_daemon(20)` (use the desired refresh interval), verify
+read results and a subsequent rollout, then return the upgraded replica to
+traffic. An in-place upgrade should resume its existing subscriptions without
+an initial copy; fresh-node replacement follows the rebuild procedure above.

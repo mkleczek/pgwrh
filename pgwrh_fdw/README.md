@@ -11,7 +11,7 @@ servers; for cluster operations, start with [cluster
 concepts](../docs/overview.md).
 
 The extension is based on PostgreSQL's `postgres_fdw`. Without the
-`transaction_parameters` and `members` options described below, it retains that
+optional features described below, it retains that
 wrapper's query, connection and transaction behavior. Both wrappers can be
 enabled in the same database.
 
@@ -55,12 +55,34 @@ member. Connections still use the existing user-mapping and routing rules.
 
 Pipelining saves network round trips while sharing one remote transaction and
 snapshot. Remote commands on that connection execute serially. It retains SQL
-cursors; cursor-free streaming is separate work. Local workloads can pay extra
+cursors; the optional streaming mode below retrieves rows without them. Local workloads can pay extra
 protocol overhead, so benchmark before enabling it broadly. `fetch_size` controls
 rows per batch; the pipeline depth is not a byte-based memory limit.
 
 See [details, tests and benchmark](18/PIPELINING.md)
 ([PostgreSQL 19 copy](19/PIPELINING.md)).
+
+## Cursor-free streaming
+
+Enable `streaming_fetch` on the ordinary or virtual server, or on an individual
+foreign table. It defaults to false; the table option overrides the server:
+
+```sql
+ALTER SERVER replica_a OPTIONS (ADD streaming_fetch 'true');
+```
+
+Eligible reads use plain SELECTs with libpq row chunks, allowing the remote
+planner to choose parallel plans and avoiding FETCH round trips. This also works
+for standalone scans; async Append is optional. `fetch_size` sets chunk rows.
+With virtual servers, configure streaming on the virtual server/table and
+`pipeline_depth` on the actual member. Depth zero permits one streamed query at
+a time, while a positive depth allows queued queries on the shared connection.
+
+Overlapping streams save unread results and can spill beyond `work_mem` per
+stream. Early termination drains remaining rows, so a local LIMIT can transfer
+more data than cursor mode. Writes and row-locking reads keep their existing
+execution paths. See [configuration, lifecycle and measurements](18/STREAMING.md)
+([PostgreSQL 19 copy](19/STREAMING.md)).
 
 ## Configuration
 

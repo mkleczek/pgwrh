@@ -318,6 +318,17 @@ WHERE
         json_to_recordset(connected_local_shards) AS c(schema_name text, table_name text)
                 WHERE (schema_name, table_name) = (a.schema_name, a.table_name)
     )
+    OR EXISTS (
+        -- An already-serving shard keeps its route while a target index is
+        -- built. That does not make the target configuration ready to commit.
+        SELECT FROM shard_index_definition i
+        WHERE (i.replication_group_id, i.version, i.schema_name, i.table_name) =
+              (a.replication_group_id, a.version, a.schema_name, a.table_name)
+          AND NOT EXISTS (
+              SELECT FROM json_to_recordset(indexes) AS ready(schema_name text, index_name text)
+              WHERE (ready.schema_name, ready.index_name) = (i.schema_name, i.index_name)
+          )
+    )
 ;
 
 -- Allowed concrete destinations for each retained controller configuration.

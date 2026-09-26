@@ -67,7 +67,7 @@
             enable = true;
             package = self.packages.${config.nixpkgs.hostPlatform.system}.postgresql;
             settings = {
-              shared_preload_libraries = "pgwrh_wait";
+              shared_preload_libraries = "pgwrh,pgwrh_wait";
               wal_level = "logical";
               max_worker_processes = lib.mkDefault 32;
               max_replication_slots = lib.mkDefault 32;

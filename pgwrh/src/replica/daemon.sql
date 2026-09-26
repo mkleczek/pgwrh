@@ -169,20 +169,44 @@ $$
 SELECT "@extschema@".bg_submit_detached('CAll "@extschema@".sync_replica_worker();')
 $$;
 
+-- Durable intent, also carried through pg_upgrade and logical restore. Empty on
+-- controllers: creating the extension alone must not start replica sync.
+CREATE TABLE sync_daemon_config (
+    singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+    enabled boolean NOT NULL,
+    refresh_seconds real NOT NULL CHECK (refresh_seconds > 0 AND refresh_seconds < 'Infinity'::real),
+    application_name text NOT NULL
+);
+SELECT pg_catalog.pg_extension_config_dump('sync_daemon_config', '');
+
 CREATE OR REPLACE PROCEDURE sync_daemon(seconds real, _application_name text DEFAULT 'pgwrh_sync_daemon') LANGUAGE plpgsql AS
 $$
 DECLARE
     err text;
 BEGIN
     IF pg_try_advisory_lock(517384732) THEN
+        -- The launching transaction may not have committed its saved intent.
+        -- Wait for writers of the settings so the loop sees commit or rollback.
+        LOCK TABLE "@extschema@".sync_daemon_config IN SHARE MODE;
+        PERFORM "@extschema@".repair_managed_objects();
+        -- Release repair's locks before waiting on separately committed workers.
+        COMMIT;
+        -- Read the saved settings in a fresh transaction after waiting. The
+        -- launch arguments may belong to a start request that was rolled back.
+        SELECT c.refresh_seconds, c.application_name INTO seconds, _application_name
+        FROM "@extschema@".sync_daemon_config c WHERE c.enabled;
+        IF NOT FOUND THEN
+            RETURN;
+        END IF;
         PERFORM set_config('application_name', _application_name, FALSE);
         LOOP
+            EXIT WHEN NOT EXISTS (SELECT FROM "@extschema@".sync_daemon_config WHERE enabled);
             BEGIN
-                CAll "@extschema@".sync_replica_worker();
+                CALL "@extschema@".sync_replica_worker();
             EXCEPTION
                 WHEN OTHERS THEN
                     GET STACKED DIAGNOSTICS err = MESSAGE_TEXT;
-                    raise WARNING '%', err;
+                    RAISE WARNING '%', err;
             END;
             COMMIT;
             PERFORM pg_sleep(seconds);
@@ -192,12 +216,60 @@ BEGIN
 END
 $$;
 
-CREATE OR REPLACE FUNCTION start_sync_daemon(seconds real, application_name text DEFAULT 'pgwrh_sync_daemon') RETURNS void LANGUAGE sql AS
+-- pg_background copies the launching session's settings into the daemon and
+-- its workers. A statement_timeout from the caller, role or database would
+-- cancel the long-running daemon, so both launchers clear it.
+CREATE OR REPLACE FUNCTION start_sync_daemon(seconds real, application_name text DEFAULT 'pgwrh_sync_daemon')
+RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog SET statement_timeout = 0 AS
 $$
-SELECT "@extschema@".bg_submit_detached(format('
-        CALL "@extschema@".sync_daemon(%s, %L);
-    ', seconds, application_name))
+BEGIN
+    INSERT INTO "@extschema@".sync_daemon_config VALUES (true, true, seconds, application_name)
+    ON CONFLICT (singleton) DO UPDATE SET enabled = true,
+        refresh_seconds = EXCLUDED.refresh_seconds, application_name = EXCLUDED.application_name;
+    PERFORM "@extschema@".bg_submit_detached(format('CALL "@extschema@".sync_daemon(%s, %L)', seconds, application_name));
+END
 $$;
+REVOKE ALL ON FUNCTION start_sync_daemon(real, text) FROM PUBLIC;
+
+CREATE FUNCTION stop_sync_daemon() RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog AS
+$$
+BEGIN
+    UPDATE "@extschema@".sync_daemon_config SET enabled = false;
+    -- Only terminate the daemon holding our session lock in this database.
+    PERFORM pg_terminate_backend(l.pid) FROM pg_catalog.pg_locks l
+    JOIN pg_catalog.pg_stat_activity a ON a.pid = l.pid
+    WHERE l.locktype = 'advisory' AND l.database = (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database())
+      AND l.classid = 0 AND l.objid = 517384732 AND l.objsubid = 1 AND l.granted
+      AND a.backend_type = 'pg_background' AND l.pid <> pg_backend_pid();
+END
+$$;
+REVOKE ALL ON FUNCTION stop_sync_daemon() FROM PUBLIC;
+
+-- Called by the preloaded supervisor and the replication ping. These entry
+-- points respect saved intent; only start_sync_daemon enables a stopped daemon.
+CREATE FUNCTION supervise_sync_daemon() RETURNS void LANGUAGE plpgsql
+SET search_path = pg_catalog SET statement_timeout = 0 AS
+$$
+DECLARE
+    config "@extschema@".sync_daemon_config;
+BEGIN
+    IF EXISTS (SELECT FROM "@extschema@".owned_obj o WHERE NOT EXISTS (
+        SELECT FROM pg_catalog.pg_depend d JOIN pg_catalog.pg_extension e ON e.oid = d.refobjid
+        WHERE e.extname = 'pgwrh' AND d.refclassid = 'pg_extension'::regclass
+          AND d.classid = o.classid AND d.objid = o.objid AND d.deptype = 'n'
+          AND d.objsubid = 0 AND d.refobjsubid = 0)) THEN
+        PERFORM "@extschema@".repair_managed_objects();
+    END IF;
+    SELECT * INTO config FROM "@extschema@".sync_daemon_config WHERE enabled;
+    IF FOUND AND NOT EXISTS (SELECT FROM pg_catalog.pg_locks
+        WHERE locktype = 'advisory' AND database = (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database())
+          AND classid = 0 AND objid = 517384732 AND objsubid = 1 AND granted) THEN
+        PERFORM "@extschema@".bg_submit_detached(format('CALL "@extschema@".sync_daemon(%s, %L)',
+            config.refresh_seconds, config.application_name));
+    END IF;
+END
+$$;
+REVOKE ALL ON FUNCTION supervise_sync_daemon() FROM PUBLIC;
 
 CREATE OR REPLACE FUNCTION exec_script(script text) RETURNS boolean LANGUAGE plpgsql AS
 $$
@@ -271,7 +343,15 @@ BEGIN
                 END IF;
             END IF;
         END LOOP;
-        RETURN FOUND;
+        -- Index admission is separate from the synchronous plan: an active or
+        -- capacity-limited build must not keep the pass loop busy or suppress
+        -- reports about healthy shards. The launcher commits durable intent
+        -- before its workers start catalog work.
+        DECLARE had_commands boolean := FOUND;
+        BEGIN
+            PERFORM "@extschema@".bg_exec_wait('SELECT "@extschema@".schedule_index_builds()::text');
+            RETURN had_commands;
+        END;
     ELSE
         RETURN FALSE;
     END IF;
@@ -287,9 +367,14 @@ $$;
 CREATE OR REPLACE PROCEDURE sync_replica_worker() LANGUAGE plpgsql AS
 $$
 BEGIN
-    WHILE "@extschema@".bg_query_bool('SELECT "@extschema@".sync_step()') LOOP
+    LOOP
+        DECLARE again boolean;
+        BEGIN
+            again := "@extschema@".bg_query_bool('SELECT "@extschema@".sync_step()');
+            PERFORM "@extschema@".bg_exec_wait('SELECT ''ignored'' FROM "@extschema@".report_state()');
+            EXIT WHEN NOT again;
+        END;
     END LOOP;
-    PERFORM "@extschema@".bg_exec_wait('SELECT ''ignored'' FROM "@extschema@".report_state()');
     PERFORM "@extschema@".bg_exec_wait('SELECT ''ignored'' FROM "@extschema@".cleanup_analyzed_pg_class()');
 END
 $$;

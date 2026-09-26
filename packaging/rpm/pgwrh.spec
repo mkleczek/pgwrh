@@ -125,12 +125,15 @@ PATH=%{pginstdir}/bin:$PATH %{__make} test-packaging \
 %{pginstdir}/share/extension/pgwrh_fdw--%{upstream_version}.sql
 %{pginstdir}/share/extension/pgwrh_gist_extra.control
 %{pginstdir}/share/extension/pgwrh_gist_extra--%{upstream_version}.sql
+%{pginstdir}/lib/pgwrh.so
 %{pginstdir}/lib/pgwrh_wait.so
 %{pginstdir}/lib/pgwrh_fdw.so
 %{pginstdir}/lib/pgwrh_gist_extra.so
 
 %if %llvm
 %files llvmjit
+%{pginstdir}/lib/bitcode/pgwrh.index.bc
+%{pginstdir}/lib/bitcode/pgwrh/
 %{pginstdir}/lib/bitcode/pgwrh_wait.index.bc
 %{pginstdir}/lib/bitcode/pgwrh_wait/
 %{pginstdir}/lib/bitcode/pgwrh_fdw.index.bc

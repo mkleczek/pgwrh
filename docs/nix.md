@@ -34,7 +34,7 @@ when the tag is published. No third-party binary cache is required or
 configured.
 
 When running the bundle outside NixOS, set `wal_level = logical`, append
-`pgwrh_wait` to `shared_preload_libraries`, and restart PostgreSQL. The NixOS
+`pgwrh` (and `pgwrh_wait` when using its API) to `shared_preload_libraries`, and restart PostgreSQL. The NixOS
 module supplies these settings. See [native installation](packages.md) for
 worker capacity and database configuration.
 

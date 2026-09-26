@@ -74,7 +74,7 @@ Configure options at the level that owns them:
 | Server | Options |
 | --- | --- |
 | Ordinary member | Endpoint, database, authentication, `transaction_parameters`, `keep_connections`, `parallel_commit`, `parallel_abort`, `load_balance_weight` |
-| Virtual server | `members`, `use_remote_estimate`, cost settings, `extensions`, `fetch_size`, `batch_size`, `async_capable`, `analyze_sampling`, `updatable`, `truncatable` |
+| Virtual server | `members`, `use_remote_estimate`, cost settings, `extensions`, `fetch_size`, `batch_size`, `async_capable`, `streaming_fetch`, `analyze_sampling`, `updatable`, `truncatable` |
 
 Connection and transaction options are rejected on virtual servers. Virtual user
 mappings with options are rejected when accessed. Query options belong to the

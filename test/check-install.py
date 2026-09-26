@@ -59,7 +59,9 @@ def check_install(stage, log, extensions, options):
         assert not files(support), "UI support files installed without pgwrh_ui"
 
     libraries = {p.name for p in libdir.glob("*") if p.suffix in (".so", ".dylib")}
-    expected = set(extensions) - {"pgwrh", "pgwrh_ui"}
+    expected = set(extensions) - {"pgwrh_ui"}
+    if "NO_PGXS=1" in options:
+        expected.discard("pgwrh")
     assert {Path(p).stem for p in libraries} == expected, libraries
 
     # Uninstall must remove exactly the package payload, including LLVM files,
@@ -88,7 +90,7 @@ def main():
                       ["WITH_LSN_WAIT=0", "WITH_GIST_EXTRA=0"])
         check_install(directory / "gist-stage", log, ["pgwrh", "pgwrh_ui", "pgwrh_gist_extra"],
                       ["WITH_LSN_WAIT=0", "WITH_FDW=0"])
-        check_install(directory / "sql pgxs stage", log, ["pgwrh", "pgwrh_ui"],
+        check_install(directory / "core-pgxs-stage", log, ["pgwrh", "pgwrh_ui"],
                       ["WITH_LSN_WAIT=0", "WITH_FDW=0", "WITH_GIST_EXTRA=0"])
         check_install(directory / "sql no-pgxs stage", log, ["pgwrh", "pgwrh_ui"],
                       ["NO_PGXS=1"])

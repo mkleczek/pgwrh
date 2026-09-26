@@ -27,4 +27,4 @@ COPY packaging/container/init.sql /docker-entrypoint-initdb.d/10-pgwrh.sql
 COPY test/packaging /tmp/pgwrh-packaging-test
 RUN gosu postgres bash /tmp/pgwrh-packaging-test/installed.sh \
     && rm -rf /tmp/pgwrh-packaging-test
-CMD ["postgres", "-c", "shared_preload_libraries=pgwrh_wait", "-c", "wal_level=logical", "-c", "max_worker_processes=32", "-c", "max_replication_slots=32", "-c", "max_wal_senders=32", "-c", "max_logical_replication_workers=16"]
+CMD ["postgres", "-c", "shared_preload_libraries=pgwrh,pgwrh_wait", "-c", "wal_level=logical", "-c", "max_worker_processes=32", "-c", "max_replication_slots=32", "-c", "max_wal_senders=32", "-c", "max_logical_replication_workers=16"]

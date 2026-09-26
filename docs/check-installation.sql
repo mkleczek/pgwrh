@@ -17,6 +17,8 @@ BEGIN
                     ('pg_background_launch_v2', 'pg_background_submit_v2', 'pg_background_result_v2', 'pg_background_detach_v2'))),
             ('pgwrh_wait preloaded after server restart', EXISTS
                 (SELECT FROM pg_settings WHERE name = 'pgwrh.max_tracked_subscriptions')),
+            ('pgwrh supervisor preloaded after server restart', EXISTS
+                (SELECT FROM pg_settings WHERE name = 'pgwrh.supervisor_database')),
             ('logical WAL enabled', current_setting('wal_level') = 'logical')
         ) AS checks(description, ok)
     LOOP

@@ -105,14 +105,17 @@ def assert_routes_and_schema(cluster):
         assert local + remote == 6
         # The initial copy must have created physical leaves with their replica
         # identity, not merely transported the controller's definitions.
-        assert replica.execute("""
+        # Route handoff precedes subscription cleanup. Wait for the obsolete
+        # copies to be unsubscribed before comparing with the connected leaves.
+        wait_until(lambda: replica.execute("""
             SELECT count(*), bool_and(EXISTS (
                 SELECT 1 FROM pg_constraint c WHERE c.conrelid = srrelid AND contype = 'p'
             )), bool_and(srsubstate = 'r')
             FROM pg_subscription_rel
             JOIN pg_class ON oid = srrelid
             WHERE relnamespace = 'data'::regnamespace
-        """) == [(local, True, True)]
+        """) == [(local, True, True)], timeout=60,
+                   message=f"{replica.name}: subscriptions did not converge to connected leaves")
         plan = replica.execute("EXPLAIN (ANALYZE, FORMAT JSON) " + ROWS)[0][0][0]["Plan"]
 
         def plans(node):

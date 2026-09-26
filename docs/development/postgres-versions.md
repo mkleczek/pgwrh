@@ -118,3 +118,20 @@ fallback restrictions and reproduction commands.
 Removing the single feature parent from disposable copies of both aggregates
 restored their pre-feature trees byte for byte. Both existing directory moves
 were refreshed and checked for exact aggregate-tree identity.
+
+## Cursor-free streaming validation, 2026-09-26
+
+The shared streaming group passed on PostgreSQL 18.6 and 19beta3:
+
+- 236 FDW Python tests per major, including 66 streaming tests covering
+  lifecycle, spills, lookup joins, routing and transaction context.
+- Symbol isolation and the retained `pgwrh_fdw`, `query_cancel` and
+  `eval_plan_qual` SQL/isolation regressions.
+- A remote-only auto_explain check of actual parallel workers, plus wire tests
+  proving plain SELECTs share one connection and deliver chunks before EOF.
+- Disposable removals of streaming alone and of both streaming and pipelining;
+  resolved trees match their respective pre-feature baselines byte for byte.
+  Both-feature removal builds passed ordinary/shared-connection async checks.
+
+The three-mode benchmark records latency, wire rows/bytes, spill bytes and
+connections, including early-stop transfer. See [measurements and limitations](../../pgwrh_fdw/18/STREAMING.md). The runtime remains opt-in and AGPL-3.0-only.

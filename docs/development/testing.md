@@ -32,7 +32,7 @@ nix develop .#tests-mixed --command bash test/run-mixed-versions.sh
 ```
 
 The runner builds and stages both FDWs independently under
-`.build/mixed-versions/18` and `.build/mixed-versions/19`. Its eight tests cover
+`.build/mixed-versions/18` and `.build/mixed-versions/19`. Its eight topology tests cover
 all six heterogeneous triples of an 18/19 controller and two replicas, plus
 scale-out from two same-major replicas to a third replica on the other major
 in both directions. They check actual server majors, partition/bootstrap keys,
@@ -57,8 +57,40 @@ This suite is excluded from recursive pytest discovery so single-major test
 environments still work. Selecting its directory explicitly requires both
 installations and fails if either is missing. Functional CI, including release
 source validation, runs it in a separate job and rejects skipped cases. This
-tests live heterogeneous clusters; it does not perform `pg_upgrade` or
-cross-major physical replication.
+tests live heterogeneous clusters and the maintenance cases below; it does not
+test cross-major physical replication.
+
+`test_upgrade.py` adds real 18-to-19 `pg_upgrade` operations for a replica and
+controller, and fresh-node replacement for both roles. Continuous read oracles,
+subscription/origin and slot checks, and copy-worker logs distinguish read
+availability and replication continuity from reconciliation. All four paths must
+pass. The replica daemon must return while subscriptions are still disabled,
+without a wake-up ping or test-only marker repair. See the
+[upgrade analysis](upgrade-reconciliation.md) for the original failure evidence
+and the implemented registry/supervisor design. Focused lifecycle checks live in
+`test_managed_objects.py` and `test_daemon_supervisor.py`.
+
+## Concurrent replica indexes
+
+Run `test/pgwrh/test_concurrent_indexes.py` in both `tests-18` and `tests-19`
+after staging the matching extensions. Tests reserve more jobs than capacity
+across two databases, hold launcher transactions and writer waits, and exercise
+cancellation, termination, server restart and exhausted background-worker slots.
+They check invalid-index recovery, unrelated-name protection and partitioned
+layouts. The rollout test adds indexes to serving shards and compares replica
+rows with a publisher oracle after inserts, updates and deletes while a build
+remains active.
+
+`index_build.c` executes each CREATE/DROP CONCURRENTLY in a top-level portal.
+A worker-local object-creation hook records ownership in the first index
+catalog transaction, before PostgreSQL commits its invalid index entry. Thus
+even an interrupted build has durable provenance; no reconciliation pass
+adopts an object merely because its name matches a queued job. Final status
+bookkeeping is a separate transaction and can be repeated after interruption.
+Named DSM stores only live reservations, with generation fencing for delayed
+workers. Durable job intent and retry diagnostics are extension configuration
+data and survive upgrade or restore. The admission mechanism also works without
+the supervisor preload.
 
 ## Controller backup and restore
 

@@ -68,6 +68,11 @@ BEGIN
     );
     IF start_daemon THEN
         PERFORM "@extschema@".start_sync_daemon(refresh_seconds);
+    ELSE
+        INSERT INTO "@extschema@".sync_daemon_config
+            VALUES (true, false, refresh_seconds, 'pgwrh_sync_daemon')
+            ON CONFLICT (singleton) DO UPDATE SET enabled = false,
+                refresh_seconds = EXCLUDED.refresh_seconds;
     END IF;
 END
 $$;
