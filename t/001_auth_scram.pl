@@ -27,6 +27,18 @@ my $node2 = PostgreSQL::Test::Cluster->new('node2');
 $node1->init;
 $node2->init;
 
+# Standalone PGXS development can stage files without a system-wide install.
+if (my $stage = $ENV{PGWRH_FDW_TEST_STAGE})
+{
+	$stage =~ s/'/''/g;
+	for my $node ($node1, $node2)
+	{
+		$node->append_conf('postgresql.conf',
+			"extension_control_path = '$stage:\$system'\n"
+			. "dynamic_library_path = '$stage:\$libdir'\n");
+	}
+}
+
 $node1->start;
 $node2->start;
 
@@ -43,7 +55,7 @@ $node2->safe_psql('postgres', qq'CREATE DATABASE $db2');
 setup_table($node1, $db1, "t");
 setup_table($node2, $db2, "t2");
 
-$node1->safe_psql($db0, 'CREATE EXTENSION IF NOT EXISTS postgres_fdw');
+$node1->safe_psql($db0, 'CREATE EXTENSION IF NOT EXISTS pgwrh_fdw');
 setup_fdw_server($node1, $db0, $fdw_server, $node1, $db1);
 setup_fdw_server($node1, $db0, $fdw_server2, $node2, $db2);
 
@@ -178,7 +190,7 @@ sub setup_fdw_server
 	my $port = $fdw_node->port;
 
 	$node->safe_psql(
-		$db, qq'CREATE SERVER $fdw FOREIGN DATA WRAPPER postgres_fdw options (
+		$db, qq'CREATE SERVER $fdw FOREIGN DATA WRAPPER pgwrh_fdw options (
 		host \'$host\', port \'$port\', dbname \'$dbname\', use_scram_passthrough \'true\') '
 	);
 }

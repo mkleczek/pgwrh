@@ -1,3 +1,8 @@
+/*
+ * pgwrh_fdw modifications Copyright (c) 2026, pgwrh_fdw contributors.
+ * Licensed under GNU AGPL version 3 only; see LICENSE and LICENSING.md.
+ * Original PostgreSQL notices and permissions are retained below.
+ */
 /*-------------------------------------------------------------------------
  *
  * deparse.c
@@ -54,6 +59,9 @@
 #include "optimizer/tlist.h"
 #include "parser/parsetree.h"
 #include "postgres_fdw.h"
+#include "lookup_join.h"
+#include "nodes/makefuncs.h"
+#include "optimizer/restrictinfo.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
@@ -103,6 +111,7 @@ typedef struct deparse_expr_cxt
 								 * a base relation. */
 	StringInfo	buf;			/* output buffer to append to */
 	List	  **params_list;	/* exprs that will become remote Params */
+	Index lookupid;             /* zero outside a lookup join */
 } deparse_expr_cxt;
 
 #define REL_ALIAS_PREFIX	"r"
@@ -1233,7 +1242,7 @@ deparseSelectStmtForRel(StringInfo buf, PlannerInfo *root, RelOptInfo *rel,
 						bool has_final_sort, bool has_limit, bool is_subquery,
 						List **retrieved_attrs, List **params_list)
 {
-	deparse_expr_cxt context;
+	deparse_expr_cxt context = {0};
 	PgFdwRelationInfo *fpinfo = (PgFdwRelationInfo *) rel->fdw_private;
 	List	   *quals;
 
@@ -1854,7 +1863,7 @@ deparseFromExprForRel(StringInfo buf, PlannerInfo *root, RelOptInfo *foreignrel,
 			 */
 			if (fpinfo->jointype == JOIN_SEMI)
 			{
-				deparse_expr_cxt context;
+				deparse_expr_cxt context = {0};
 				StringInfoData str;
 
 				/* Construct deparsed condition from this SEMI-JOIN */
@@ -1935,7 +1944,7 @@ deparseFromExprForRel(StringInfo buf, PlannerInfo *root, RelOptInfo *foreignrel,
 			/* Append join clause; (TRUE) if no join clause */
 			if (fpinfo->joinclauses)
 			{
-				deparse_expr_cxt context;
+				deparse_expr_cxt context = {0};
 
 				context.buf = buf;
 				context.foreignrel = foreignrel;
@@ -2281,7 +2290,7 @@ deparseDirectUpdateSql(StringInfo buf, PlannerInfo *root,
 					   List *returningList,
 					   List **retrieved_attrs)
 {
-	deparse_expr_cxt context;
+	deparse_expr_cxt context = {0};
 	int			nestlevel;
 	bool		first;
 	RangeTblEntry *rte = planner_rt_fetch(rtindex, root);
@@ -2394,7 +2403,7 @@ deparseDirectDeleteSql(StringInfo buf, PlannerInfo *root,
 					   List *returningList,
 					   List **retrieved_attrs)
 {
-	deparse_expr_cxt context;
+	deparse_expr_cxt context = {0};
 	List	   *additional_conds = NIL;
 
 	/* Set up context struct for recursion */
@@ -2951,7 +2960,15 @@ deparseVar(Var *node, deparse_expr_cxt *context)
 	int			colno;
 
 	/* Qualify columns when multiple relations are involved. */
-	bool		qualify_col = (bms_membership(relids) == BMS_MULTIPLE);
+	bool		qualify_col = (context->lookupid != 0 ||
+							   bms_membership(relids) == BMS_MULTIPLE);
+
+	if (context->lookupid && node->varno == context->lookupid &&
+		node->varlevelsup == 0)
+	{
+		appendStringInfo(context->buf, "l.c%d", node->varattno);
+		return;
+	}
 
 	/*
 	 * If the Var belongs to the foreign relation that is deparsed as a
@@ -4203,4 +4220,92 @@ get_relation_column_alias_ids(Var *node, RelOptInfo *foreignrel,
 
 	/* Shouldn't get here */
 	elog(ERROR, "unexpected expression in subquery output");
+}
+
+/*
+ * Parallel, typed arrays describe a relation without a remotely installed
+ * composite type. Only condition columns appear here; retained output belongs
+ * to the coordinator. Stable row numbers survive per-partition filtering.
+ */
+void
+pgwrh_fdw_deparse_lookup(StringInfo buf, PlannerInfo *root, RelOptInfo *rel,
+                        Index lookupid, List *shipvars, List *tlist,
+                        List *quals, bool semi, List **params)
+{
+    deparse_expr_cxt context = {0};
+    PgFdwRelationInfo *fpinfo = rel->fdw_private;
+    List *basequals = extract_actual_clauses(fpinfo->remote_conds, false);
+    Relation table;
+    ListCell *lc;
+    int i = 0;
+
+    context.root = root;
+    context.foreignrel = context.scanrel = rel;
+    context.buf = buf;
+    context.params_list = params;
+    context.lookupid = lookupid;
+    *params = NIL;
+    foreach(lc, shipvars)
+        *params = lappend(*params, makeNullConst(
+            get_array_type(((Var *) lfirst(lc))->vartype), -1, InvalidOid));
+    if (!semi)
+        *params = lappend(*params, makeNullConst(INT8ARRAYOID, -1, InvalidOid));
+
+    appendStringInfoString(buf, "SELECT ");
+    foreach(lc, tlist)
+    {
+        if (lc != list_head(tlist))
+            appendStringInfoString(buf, ", ");
+        deparseExpr(((TargetEntry *) lfirst(lc))->expr, &context);
+    }
+    if (tlist == NIL)
+        appendStringInfoString(buf, "NULL");
+    if (!semi)
+        appendStringInfoString(buf, ", l.lookup_rowno");
+    appendStringInfoString(buf, " FROM ");
+    table = table_open(planner_rt_fetch(rel->relid, root)->relid, NoLock);
+    deparseRelation(buf, table);
+    table_close(table, NoLock);
+    appendStringInfo(buf, " r%d", rel->relid);
+    if (semi)
+    {
+        appendStringInfoString(buf, " WHERE ");
+        if (basequals)
+        {
+            appendConditions(basequals, &context);
+            appendStringInfoString(buf, " AND ");
+        }
+        appendStringInfoString(buf, "EXISTS (SELECT 1 FROM ");
+    }
+    else
+        appendStringInfoString(buf, " JOIN ");
+    appendStringInfoString(buf, "ROWS FROM (");
+    foreach(lc, shipvars)
+    {
+        Var *var = lfirst(lc);
+        if (i++)
+            appendStringInfoString(buf, ", ");
+        appendStringInfo(buf, "pg_catalog.unnest($%d::%s)", i,
+                         deparse_type_name(get_array_type(var->vartype), -1));
+    }
+    if (!semi)
+        appendStringInfo(buf, ", pg_catalog.unnest($%d::bigint[])", ++i);
+    appendStringInfoString(buf, ") AS l(");
+    foreach(lc, shipvars)
+    {
+        if (lc != list_head(shipvars))
+            appendStringInfoString(buf, ", ");
+        appendStringInfo(buf, "c%d", ((Var *) lfirst(lc))->varattno);
+    }
+    if (!semi)
+        appendStringInfoString(buf, ", lookup_rowno");
+    appendStringInfoString(buf, semi ? ") WHERE " : ") ON ");
+    appendConditions(quals, &context);
+    if (semi)
+        appendStringInfoChar(buf, ')');
+    else if (basequals)
+    {
+        appendStringInfoString(buf, " WHERE ");
+        appendConditions(basequals, &context);
+    }
 }

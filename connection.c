@@ -32,6 +32,8 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "postgres_fdw.h"
+#include "transaction_context.h"
+#include "virtual.h"
 #include "storage/latch.h"
 #include "utils/builtins.h"
 #include "utils/hsearch.h"
@@ -132,10 +134,10 @@ enum pgfdwVersion
 /*
  * SQL functions
  */
-PG_FUNCTION_INFO_V1(postgres_fdw_get_connections);
-PG_FUNCTION_INFO_V1(postgres_fdw_get_connections_1_2);
-PG_FUNCTION_INFO_V1(postgres_fdw_disconnect);
-PG_FUNCTION_INFO_V1(postgres_fdw_disconnect_all);
+PG_FUNCTION_INFO_V1(pgwrh_fdw_get_connections);
+PG_FUNCTION_INFO_V1(pgwrh_fdw_get_connections_1_2);
+PG_FUNCTION_INFO_V1(pgwrh_fdw_disconnect);
+PG_FUNCTION_INFO_V1(pgwrh_fdw_disconnect_all);
 
 /* prototypes of private functions */
 static void make_new_connection(ConnCacheEntry *entry, UserMapping *user);
@@ -191,6 +193,25 @@ static int	pgfdw_conn_check(PGconn *conn);
 static bool pgfdw_conn_checkable(void);
 static bool pgfdw_has_required_scram_options(const char **keywords, const char **values);
 
+/* Inspect only: never connect to, initialize, or drain unselected members. */
+PgwrhFdwConnectionRank
+pgwrh_fdw_rank_cached_connection(Oid umid)
+{
+	ConnCacheEntry *entry = ConnectionHash ?
+		hash_search(ConnectionHash, &umid, HASH_FIND, NULL) : NULL;
+
+	if (entry == NULL || entry->conn == NULL)
+		return PGWRH_FDW_CONNECTION_NEW;
+	if (entry->changing_xact_state ||
+		(entry->xact_depth > 0 &&
+		 (entry->invalidated || PQstatus(entry->conn) != CONNECTION_OK)))
+		return PGWRH_FDW_CONNECTION_UNUSABLE;
+	if (entry->invalidated || PQstatus(entry->conn) != CONNECTION_OK)
+		return PGWRH_FDW_CONNECTION_NEW;
+	return entry->xact_depth > 0 ?
+		PGWRH_FDW_CONNECTION_ACTIVE : PGWRH_FDW_CONNECTION_IDLE;
+}
+
 /*
  * Get a PGconn which can be used to execute queries on the remote PostgreSQL
  * server with the user's authorization.  A new connection is established
@@ -212,6 +233,7 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 	ConnCacheEntry *entry;
 	ConnCacheKey key;
 	MemoryContext ccxt = CurrentMemoryContext;
+	PgwrhFdwVirtualBinding *binding;
 
 	/* First time through, initialize connection cache hashtable */
 	if (ConnectionHash == NULL)
@@ -220,11 +242,11 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 
 		if (pgfdw_we_get_result == 0)
 			pgfdw_we_get_result =
-				WaitEventExtensionNew("PostgresFdwGetResult");
+				WaitEventExtensionNew("PgwrhFdwGetResult");
 
 		ctl.keysize = sizeof(ConnCacheKey);
 		ctl.entrysize = sizeof(ConnCacheEntry);
-		ConnectionHash = hash_create("postgres_fdw connections", 8,
+		ConnectionHash = hash_create("pgwrh_fdw connections", 8,
 									 &ctl,
 									 HASH_ELEM | HASH_BLOBS);
 
@@ -243,6 +265,9 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 	/* Set flag that we did GetConnection during the current transaction */
 	xact_got_connection = true;
 
+	/* Resolve aliases before entering the unchanged physical connection cache. */
+	user = pgwrh_fdw_resolve_virtual_mapping(user, pgwrh_fdw_rank_cached_connection, &binding);
+
 	/* Create hash key for the entry.  Assume no pad bytes in key struct */
 	key = user->umid;
 
@@ -260,6 +285,8 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 	}
 
 	/* Reject further use of connections which failed abort cleanup. */
+	pgwrh_fdw_check_virtual_connection(binding, entry->conn,
+									 entry->conn ? entry->xact_depth : 0);
 	pgfdw_reject_incomplete_xact_state_change(entry);
 
 	/*
@@ -363,6 +390,7 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 	if (state)
 		*state = &entry->state;
 
+	pgwrh_fdw_virtual_connected(binding, entry->conn);
 	return entry->conn;
 }
 
@@ -429,7 +457,7 @@ make_new_connection(ConnCacheEntry *entry, UserMapping *user)
 	/* Now try to make the connection */
 	entry->conn = connect_pg_server(server, user);
 
-	elog(DEBUG3, "new postgres_fdw connection %p for server \"%s\" (user mapping oid %u, userid %u)",
+	elog(DEBUG3, "new pgwrh_fdw connection %p for server \"%s\" (user mapping oid %u, userid %u)",
 		 entry->conn, server->servername, user->umid, user->userid);
 }
 
@@ -568,9 +596,9 @@ connect_pg_server(ForeignServer *server, UserMapping *user)
 			}
 		}
 
-		/* Use "postgres_fdw" as fallback_application_name */
+		/* Use "pgwrh_fdw" as fallback_application_name */
 		keywords[n] = "fallback_application_name";
-		values[n] = "postgres_fdw";
+		values[n] = "pgwrh_fdw";
 		n++;
 
 		/* Set client_encoding so that libpq can convert encoding properly. */
@@ -622,7 +650,7 @@ connect_pg_server(ForeignServer *server, UserMapping *user)
 
 		/* first time, allocate or get the custom wait event */
 		if (pgfdw_we_connect == 0)
-			pgfdw_we_connect = WaitEventExtensionNew("PostgresFdwConnect");
+			pgfdw_we_connect = WaitEventExtensionNew("PgwrhFdwConnect");
 
 		/* OK to make connection */
 		conn = libpqsrv_connect_params(keywords, values,
@@ -866,6 +894,7 @@ begin_remote_xact(ConnCacheEntry *entry)
 	if (entry->xact_depth <= 0)
 	{
 		const char *sql;
+		List	   *parameters = pgwrh_fdw_transaction_parameters(entry->serverid);
 
 		elog(DEBUG3, "starting remote transaction on connection %p",
 			 entry->conn);
@@ -877,6 +906,16 @@ begin_remote_xact(ConnCacheEntry *entry)
 		entry->changing_xact_state = true;
 		do_sql_command(entry->conn, sql);
 		entry->xact_depth = 1;
+		/*
+		 * Apply at top level, before snapshot-taking commands AND before
+		 * mirrored savepoints. Rollback of a first-use subtransaction must
+		 * not undo this context. Keep changing_xact_state armed on failure:
+		 * a partially initialized transaction must never be reused/committed.
+		 * Both the normal path and the reconnect retry call this function on
+		 * the actual selected connection.
+		 */
+		pgwrh_fdw_apply_parameters(entry->conn, parameters);
+		list_free(parameters);
 		entry->changing_xact_state = false;
 	}
 
@@ -1160,7 +1199,7 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 					 */
 					ereport(ERROR,
 							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-							 errmsg("cannot PREPARE a transaction that has operated on postgres_fdw foreign tables")));
+							 errmsg("cannot PREPARE a transaction that has operated on pgwrh_fdw foreign tables")));
 					break;
 				case XACT_EVENT_PARALLEL_COMMIT:
 				case XACT_EVENT_COMMIT:
@@ -1715,7 +1754,7 @@ pgfdw_get_cleanup_result(PGconn *conn, TimestampTz endtime,
 
 				/* first time, allocate or get the custom wait event */
 				if (pgfdw_we_cleanup_result == 0)
-					pgfdw_we_cleanup_result = WaitEventExtensionNew("PostgresFdwCleanupResult");
+					pgfdw_we_cleanup_result = WaitEventExtensionNew("PgwrhFdwCleanupResult");
 
 				/* Sleep until there's something to do */
 				wc = WaitLatchOrSocket(MyLatch,
@@ -2183,7 +2222,7 @@ pgfdw_finish_abort_cleanup(List *pending_entries, List *cancel_requested,
 #define POSTGRES_FDW_GET_CONNECTIONS_COLS	6	/* maximum of above */
 
 /*
- * Internal function used by postgres_fdw_get_connections variants.
+ * Internal function used by pgwrh_fdw_get_connections variants.
  *
  * For API version 1.1, this function takes no input parameter and
  * returns a set of records with the following values:
@@ -2361,7 +2400,7 @@ postgres_fdw_get_connections_internal(FunctionCallInfo fcinfo,
  * we continue to support the older API versions.
  */
 Datum
-postgres_fdw_get_connections_1_2(PG_FUNCTION_ARGS)
+pgwrh_fdw_get_connections_1_2(PG_FUNCTION_ARGS)
 {
 	postgres_fdw_get_connections_internal(fcinfo, PGFDW_V1_2);
 
@@ -2369,7 +2408,7 @@ postgres_fdw_get_connections_1_2(PG_FUNCTION_ARGS)
 }
 
 Datum
-postgres_fdw_get_connections(PG_FUNCTION_ARGS)
+pgwrh_fdw_get_connections(PG_FUNCTION_ARGS)
 {
 	postgres_fdw_get_connections_internal(fcinfo, PGFDW_V1_1);
 
@@ -2389,7 +2428,7 @@ postgres_fdw_get_connections(PG_FUNCTION_ARGS)
  * foreign server with the given name is found, an error is reported.
  */
 Datum
-postgres_fdw_disconnect(PG_FUNCTION_ARGS)
+pgwrh_fdw_disconnect(PG_FUNCTION_ARGS)
 {
 	ForeignServer *server;
 	char	   *servername;
@@ -2410,7 +2449,7 @@ postgres_fdw_disconnect(PG_FUNCTION_ARGS)
  * returns true if it disconnects at least one connection, otherwise false.
  */
 Datum
-postgres_fdw_disconnect_all(PG_FUNCTION_ARGS)
+pgwrh_fdw_disconnect_all(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_BOOL(disconnect_cached_connections(InvalidOid));
 }

@@ -25,6 +25,9 @@
 #include "commands/extension.h"
 #include "libpq/libpq-be.h"
 #include "postgres_fdw.h"
+#include "lookup_join.h"
+#include "transaction_context.h"
+#include "virtual.h"
 #include "utils/guc.h"
 #include "utils/varlena.h"
 
@@ -70,10 +73,10 @@ static bool is_libpq_option(const char *keyword);
  *
  * Raise an ERROR if the option or its value is considered invalid.
  */
-PG_FUNCTION_INFO_V1(postgres_fdw_validator);
+PG_FUNCTION_INFO_V1(pgwrh_fdw_validator);
 
 Datum
-postgres_fdw_validator(PG_FUNCTION_ARGS)
+pgwrh_fdw_validator(PG_FUNCTION_ARGS)
 {
 	List	   *options_list = untransformRelOptions(PG_GETARG_DATUM(0));
 	Oid			catalog = PG_GETARG_OID(1);
@@ -162,6 +165,10 @@ postgres_fdw_validator(PG_FUNCTION_ARGS)
 						 errmsg("\"%s\" must be a floating point value greater than or equal to zero",
 								def->defname)));
 		}
+		else if (strcmp(def->defname, "transaction_parameters") == 0)
+		{
+			list_free_deep(pgwrh_fdw_parse_parameters(defGetString(def)));
+		}
 		else if (strcmp(def->defname, "extensions") == 0)
 		{
 			/* check list syntax, warn about uninstalled extensions */
@@ -248,6 +255,7 @@ postgres_fdw_validator(PG_FUNCTION_ARGS)
 		}
 	}
 
+	pgwrh_fdw_validate_virtual_options(options_list, catalog);
 	PG_RETURN_VOID();
 }
 
@@ -263,6 +271,8 @@ InitPgFdwOptions(void)
 
 	/* non-libpq FDW-specific FDW options */
 	static const PgFdwOption non_libpq_options[] = {
+		{"members", ForeignServerRelationId, false},
+		{"transaction_parameters", ForeignServerRelationId, false},
 		{"schema_name", ForeignTableRelationId, false},
 		{"table_name", ForeignTableRelationId, false},
 		{"column_name", AttributeRelationId, false},
@@ -598,15 +608,17 @@ process_pgfdw_appname(const char *appname)
 void
 _PG_init(void)
 {
+	pgwrh_fdw_context_init();
+
 	/*
 	 * Unlike application_name GUC, don't set GUC_IS_NAME flag nor check_hook
-	 * to allow postgres_fdw.application_name to be any string more than
+	 * to allow pgwrh_fdw.application_name to be any string more than
 	 * NAMEDATALEN characters and to include non-ASCII characters. Instead,
 	 * remote server truncates application_name of remote connection to less
 	 * than NAMEDATALEN and replaces any non-ASCII characters in it with a '?'
 	 * character.
 	 */
-	DefineCustomStringVariable("postgres_fdw.application_name",
+	DefineCustomStringVariable("pgwrh_fdw.application_name",
 							   "Sets the application name to be used on the remote server.",
 							   NULL,
 							   &pgfdw_application_name,
@@ -617,5 +629,6 @@ _PG_init(void)
 							   NULL,
 							   NULL);
 
-	MarkGUCPrefixReserved("postgres_fdw");
+	pgwrh_fdw_lookup_init(NULL);
+	MarkGUCPrefixReserved("pgwrh_fdw");
 }
