@@ -128,6 +128,7 @@ postgres_fdw_validator(PG_FUNCTION_ARGS)
 			strcmp(def->defname, "updatable") == 0 ||
 			strcmp(def->defname, "truncatable") == 0 ||
 			strcmp(def->defname, "async_capable") == 0 ||
+			strcmp(def->defname, "streaming_fetch") == 0 ||
 			strcmp(def->defname, "parallel_commit") == 0 ||
 			strcmp(def->defname, "parallel_abort") == 0 ||
 			strcmp(def->defname, "keep_connections") == 0)
@@ -289,6 +290,8 @@ InitPgFdwOptions(void)
 		{"async_capable", ForeignServerRelationId, false},
 		{"pipeline_depth", ForeignServerRelationId, false},
 		{"async_capable", ForeignTableRelationId, false},
+		{"streaming_fetch", ForeignServerRelationId, false},
+		{"streaming_fetch", ForeignTableRelationId, false},
 		{"parallel_commit", ForeignServerRelationId, false},
 		{"parallel_abort", ForeignServerRelationId, false},
 		{"keep_connections", ForeignServerRelationId, false},

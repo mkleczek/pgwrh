@@ -83,6 +83,8 @@ enum FdwScanPrivateIndex
 	FdwScanPrivateRetrievedAttrs,
 	/* Integer representing the desired fetch_size */
 	FdwScanPrivateFetchSize,
+	/* Boolean selecting plain queries with chunked results */
+	FdwScanPrivateStreamingFetch,
 
 	/*
 	 * String describing join i.e. names of relations being joined and types
@@ -156,7 +158,9 @@ typedef struct PgFdwScanState
 	PGconn	   *conn;			/* connection for the scan */
 	PgFdwConnState *conn_state; /* extra per-connection state */
 	unsigned int cursor_number; /* quasi-unique ID for my cursor */
-	bool		cursor_exists;	/* have we created the cursor? */
+	bool		cursor_exists;	/* have we started the remote scan? */
+	bool		streaming_fetch;
+	PgFdwPendingOperation *stream_operation;
 	int			numParams;		/* number of parameters passed to query */
 	FmgrInfo   *param_flinfo;	/* output conversion functions for them */
 	List	   *param_exprs;	/* executable expressions for param values */
@@ -664,6 +668,7 @@ postgresGetForeignRelSize(PlannerInfo *root,
 	fpinfo->shippable_extensions = NIL;
 	fpinfo->fetch_size = 100;
 	fpinfo->async_capable = false;
+	fpinfo->streaming_fetch = false;
 
 	apply_server_options(fpinfo);
 	apply_table_options(fpinfo);
@@ -1426,9 +1431,10 @@ postgresGetForeignPlan(PlannerInfo *root,
 	 * Build the fdw_private list that will be available to the executor.
 	 * Items in the list must match order in enum FdwScanPrivateIndex.
 	 */
-	fdw_private = list_make3(makeString(sql.data),
+	fdw_private = list_make4(makeString(sql.data),
 							 retrieved_attrs,
-							 makeInteger(fpinfo->fetch_size));
+							 makeInteger(fpinfo->fetch_size),
+							 makeBoolean(fpinfo->streaming_fetch));
 	if (IS_JOIN_REL(foreignrel) || IS_UPPER_REL(foreignrel))
 		fdw_private = lappend(fdw_private,
 							  makeString(fpinfo->relation_name));
@@ -1563,6 +1569,13 @@ postgresBeginForeignScan(ForeignScanState *node, int eflags)
 	fsstate->fetch_size = intVal(list_nth(fsplan->fdw_private,
 										  FdwScanPrivateFetchSize));
 
+	/* Writes, modifying CTEs and row locks retain cursor semantics. */
+	fsstate->streaming_fetch = boolVal(list_nth(fsplan->fdw_private,
+												 FdwScanPrivateStreamingFetch)) &&
+		estate->es_plannedstmt->commandType == CMD_SELECT &&
+		!estate->es_plannedstmt->hasModifyingCTE &&
+		estate->es_plannedstmt->rowMarks == NIL;
+
 	/* Create contexts for batches of tuples and per-tuple temp workspace. */
 	fsstate->batch_cxt = AllocSetContextCreate(estate->es_query_cxt,
 											   "postgres_fdw tuple data",
@@ -1662,6 +1675,27 @@ postgresReScanForeignScan(ForeignScanState *node)
 	char		sql[64];
 	PGresult   *res;
 
+	if (fsstate->streaming_fetch)
+	{
+		if (!fsstate->cursor_exists)
+			return;
+		/* The first batch can be replayed without restarting the query. */
+		if (node->ss.ps.chgParam == NULL && fsstate->fetch_ct_2 <= 1 &&
+			fsstate->num_tuples > 0)
+		{
+			fsstate->next_tuple = 0;
+			return;
+		}
+		if (fsstate->stream_operation)
+			pgfdw_pipeline_stream_release(fsstate->stream_operation);
+		fsstate->stream_operation = NULL;
+		fsstate->cursor_exists = false;
+		fsstate->tuples = NULL;
+		fsstate->num_tuples = fsstate->next_tuple = fsstate->fetch_ct_2 = 0;
+		fsstate->eof_reached = false;
+		return;
+	}
+
 	/* Settle this generation before reusing the cursor or its parameters. */
 	if (fsstate->fetch_operation)
 		fetch_more_data(node);
@@ -1746,6 +1780,12 @@ postgresEndForeignScan(ForeignScanState *node)
 	if (fsstate == NULL)
 		return;
 
+	if (fsstate->stream_operation)
+	{
+		pgfdw_pipeline_stream_release(fsstate->stream_operation);
+		fsstate->stream_operation = NULL;
+	}
+
 	/* Release queued results without calling tuple input functions at shutdown. */
 	if (fsstate->declare_operation)
 	{
@@ -1759,7 +1799,7 @@ postgresEndForeignScan(ForeignScanState *node)
 	}
 
 	/* Close the cursor if open, to prevent accumulation of cursors */
-	if (fsstate->cursor_exists)
+	if (fsstate->cursor_exists && !fsstate->streaming_fetch)
 		close_cursor(fsstate->conn, fsstate->cursor_number,
 					 fsstate->conn_state);
 
@@ -3767,17 +3807,23 @@ ec_member_matches_foreign(PlannerInfo *root, RelOptInfo *rel,
 	return true;
 }
 
-/* Only ordinary asynchronous reads participate; writes and row locks are barriers. */
+/*
+ * Cursor-free execution follows Rafia Sabih's streaming_fetch proposal (v18,
+ * September 2026), based on an idea by Bernd Helmle.  Our adaptation preserves
+ * async execution and uses connection-owned raw buffering.  See STREAMING.md.
+ * Writes and row locks retain the cursor path.
+ */
 static bool
 scan_uses_pipeline(ForeignScanState *node)
 {
 	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
 	PlannedStmt *stmt = node->ss.ps.state->es_plannedstmt;
 
-	return fsstate->async_capable && fsstate->conn_state &&
+	return fsstate->streaming_fetch ||
+		(fsstate->async_capable && fsstate->conn_state &&
 		fsstate->conn_state->pipeline_depth > 0 &&
 		stmt->commandType == CMD_SELECT && !stmt->hasModifyingCTE &&
-		stmt->rowMarks == NIL;
+		stmt->rowMarks == NIL);
 }
 
 /*
@@ -3815,6 +3861,18 @@ create_cursor(ForeignScanState *node)
 							 values);
 
 		MemoryContextSwitchTo(oldcontext);
+	}
+
+	if (fsstate->streaming_fetch)
+	{
+		/* Parameter evaluation may itself have used this connection. */
+		if (!pgfdw_pipeline_stream_has_room(fsstate->conn_state))
+			pgfdw_pipeline_drain(fsstate->conn_state);
+		fsstate->stream_operation = pgfdw_pipeline_stream_submit(conn,
+			fsstate->conn_state, fsstate->query, numParams, values,
+			fsstate->fetch_size);
+		fsstate->cursor_exists = true;
+		return;
 	}
 
 	/* Construct the DECLARE CURSOR command */
@@ -3893,7 +3951,18 @@ fetch_more_data(ForeignScanState *node)
 		int			numrows;
 		int			i;
 
-		if (fsstate->fetch_operation)
+		if (fsstate->streaming_fetch)
+		{
+			res = pgfdw_pipeline_stream_take(fsstate->stream_operation);
+			if (res == NULL)
+			{
+				pgfdw_pipeline_stream_release(fsstate->stream_operation);
+				fsstate->stream_operation = NULL;
+				fsstate->num_tuples = fsstate->next_tuple = 0;
+				fsstate->eof_reached = true;
+			}
+		}
+		else if (fsstate->fetch_operation)
 		{
 			if (fsstate->declare_operation)
 			{
@@ -3957,7 +4026,8 @@ fetch_more_data(ForeignScanState *node)
 			fsstate->fetch_ct_2++;
 
 		/* Must be EOF if we didn't get as many tuples as we asked for. */
-		fsstate->eof_reached = (numrows < fsstate->fetch_size);
+		if (!fsstate->streaming_fetch)
+			fsstate->eof_reached = (numrows < fsstate->fetch_size);
 	}
 	PG_FINALLY();
 	{
@@ -6331,6 +6401,8 @@ apply_server_options(PgFdwRelationInfo *fpinfo)
 			(void) parse_int(defGetString(def), &fpinfo->fetch_size, 0, NULL);
 		else if (strcmp(def->defname, "async_capable") == 0)
 			fpinfo->async_capable = defGetBoolean(def);
+		else if (strcmp(def->defname, "streaming_fetch") == 0)
+			fpinfo->streaming_fetch = defGetBoolean(def);
 	}
 }
 
@@ -6354,6 +6426,8 @@ apply_table_options(PgFdwRelationInfo *fpinfo)
 			(void) parse_int(defGetString(def), &fpinfo->fetch_size, 0, NULL);
 		else if (strcmp(def->defname, "async_capable") == 0)
 			fpinfo->async_capable = defGetBoolean(def);
+		else if (strcmp(def->defname, "streaming_fetch") == 0)
+			fpinfo->streaming_fetch = defGetBoolean(def);
 	}
 }
 
@@ -6389,6 +6463,7 @@ merge_fdw_options(PgFdwRelationInfo *fpinfo,
 	fpinfo->use_remote_estimate = fpinfo_o->use_remote_estimate;
 	fpinfo->fetch_size = fpinfo_o->fetch_size;
 	fpinfo->async_capable = fpinfo_o->async_capable;
+	fpinfo->streaming_fetch = fpinfo_o->streaming_fetch;
 
 	/* Merge the table level options from either side of the join. */
 	if (fpinfo_i)
@@ -6420,6 +6495,8 @@ merge_fdw_options(PgFdwRelationInfo *fpinfo,
 		 */
 		fpinfo->async_capable = fpinfo_o->async_capable ||
 			fpinfo_i->async_capable;
+		fpinfo->streaming_fetch = fpinfo_o->streaming_fetch ||
+			fpinfo_i->streaming_fetch;
 	}
 }
 
@@ -7622,6 +7699,18 @@ fetch_more_data_begin(AsyncRequest *areq)
 	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
 	char		sql[64];
 
+	if (fsstate->streaming_fetch)
+	{
+		if (fsstate->cursor_exists)
+			return;
+		if (fsstate->conn_state->pendingAreq)
+			process_pending_request(fsstate->conn_state->pendingAreq);
+		if (!pgfdw_pipeline_stream_has_room(fsstate->conn_state))
+			return;
+		create_cursor(node);
+		return;
+	}
+
 	if (scan_uses_pipeline(node))
 	{
 		if (fsstate->fetch_operation)
@@ -7665,6 +7754,27 @@ pipeline_fetch_ready(AsyncRequest *areq)
 {
 	ForeignScanState *node = (ForeignScanState *) areq->requestee;
 	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
+
+	if (fsstate->streaming_fetch)
+	{
+		if (fsstate->next_tuple < fsstate->num_tuples || fsstate->eof_reached)
+			return true;
+		if (!fsstate->cursor_exists)
+		{
+			fetch_more_data_begin(areq);
+			if (!fsstate->cursor_exists)
+			{
+				/* Advance predecessors to make admission possible. */
+				pgfdw_pipeline_process(fsstate->conn_state);
+				fetch_more_data_begin(areq);
+			}
+		}
+		if (!fsstate->stream_operation ||
+			!pgfdw_pipeline_stream_ready(fsstate->stream_operation))
+			return false;
+		fetch_more_data(node);
+		return true;
+	}
 
 	pgfdw_pipeline_process(fsstate->conn_state);
 	if (fsstate->next_tuple < fsstate->num_tuples || fsstate->eof_reached)
