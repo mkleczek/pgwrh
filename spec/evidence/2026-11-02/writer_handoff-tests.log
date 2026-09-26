@@ -1,0 +1,15 @@
+
+  writer_handoff
+    ok crashBeforeFlushTest passed 1 test(s)
+    ok duplicateDeliveryTest passed 1 test(s)
+    ok earlyFeedbackCounterexampleTest passed 1 test(s)
+    ok announcementPositionCounterexampleTest passed 1 test(s)
+    ok inheritedBoundCounterexampleTest passed 1 test(s)
+    ok offlineHandoffTest passed 1 test(s)
+    ok missingSlotReinitializesTest passed 1 test(s)
+    ok crashAfterInstallationTest passed 1 test(s)
+    ok drainBeforeSealTest passed 1 test(s)
+    ok cannotSealUnflushedTest passed 1 test(s)
+    ok cannotPromoteBehindTest passed 1 test(s)
+
+  11 passing (398ms)

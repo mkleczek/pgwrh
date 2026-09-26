@@ -137,6 +137,36 @@ The feature's tests and benchmark then disappear with its source files. Do not
 remove existing parents or copy one major's source over the other. Disposable
 removal builds were checked against both pre-feature trees and their async tests.
 
+## Cursor-free streaming feature group
+
+`tkrwonls` (`codex/fdw-cursor-free-streaming`) builds on pipelining:
+
+| Change | Purpose | Parents |
+| --- | --- | --- |
+| `qxyrnpyo` | Chunked SELECT operations and spillable raw-result storage | `ruunxnzr` |
+| `zslvuyns` | Streaming option, scan lifecycle and async execution | `qxyrnpyo` |
+| `qsrmlkvz` | Isolated pgwrh names for streaming helpers | `lyysrxol` |
+| `vutoskvv` | Virtual options, lookup parameters and lookup rescans | `zslvuyns`, `qsrmlkvz`, `sqmzztxu`, `rvzxtrto` |
+| `zowutmnp` | Feature-owned tests, benchmark, usage and attribution | `uyymlztr` |
+
+The group's parents are `vutoskvv`, `zowutmnp` and `lqyysrzn`. Only the group
+is added to the existing version aggregates. The two generic runtime changes
+have no dependency on pgwrh routing or lookup joins. PG19 result wrappers,
+TupleDesc finalization and error API differences remain in its aggregate.
+All additions remain AGPL-3.0-only; upstream provenance is in
+[STREAMING.md](18/STREAMING.md).
+
+To remove streaming, drop its group from an aggregate's parents and resolve
+integration conflicts, retaining the pipeline implementation. Disposable checks
+restored both pre-streaming trees byte for byte; the integration files were
+`Makefile`, `lookup_join.c`, `postgres_fdw.c`, and PG19's `pipeline.c`.
+To remove pipelining too, drop **both groups**, remove its build object and
+resolve the version-specific pipeline adaptations described above. Both
+pre-pipelining trees were restored byte for byte and their ordinary and
+shared-connection async scans passed. Refresh the existing directory moves
+after either operation. Removing only pipelining's direct parent while keeping
+streaming cannot remove pipelining: it remains an explicit dependency.
+
 ## Changing shared behavior
 
 Edit the relevant unpublished shared change once. jj rebases both descendant

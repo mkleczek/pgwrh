@@ -1,0 +1,410 @@
+{
+  "recorded_at": "2026-11-02T09:01:28.736389+00:00",
+  "quint": "0.32.0",
+  "backend": "rust",
+  "sources": {
+    "spec/writer_handoff.qnt": "9feffc07bc226e239178fdb03260cf49100dcabf7f6bbf54209bcaa880249185",
+    "spec/obligation_frontiers.qnt": "4906aee5f18ce94131f6730154b8adc4822a593e5a6fbbbcafc70e2af75ffdf6",
+    "spec/controller_handoff.qnt": "31b41ddbfaf35b775a5a3b30f824f7934dadcb975c099abd55d02483cde1b3f1",
+    "spec/check.py": "ddcc117cfde84148bc481c78eaa820baed2ad139947723b7039c8f58d96e67df",
+    "spec/tlc.json": "68f469c821d16c3760137d98a9958e89d20a618d0264850542f4962e3d0db51d"
+  },
+  "checks": [
+    {
+      "name": "writer_handoff-types",
+      "arguments": [
+        "typecheck",
+        "spec/writer_handoff.qnt"
+      ],
+      "started_at": "2026-11-02T09:01:28.738000+00:00",
+      "returncode": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "witnesses": {},
+      "passed": true
+    },
+    {
+      "name": "writer_handoff-tests",
+      "arguments": [
+        "test",
+        "spec/writer_handoff.qnt",
+        "--backend=rust",
+        "--max-samples=1"
+      ],
+      "started_at": "2026-11-02T09:01:29.584781+00:00",
+      "returncode": 0,
+      "log_sha256": "3aa44f9715b20f53e0b8f2ac327a684e8167deee2c4801cec24541ed1bba4b7d",
+      "witnesses": {},
+      "tests_passed": 11,
+      "passed": true
+    },
+    {
+      "name": "obligation_frontiers-types",
+      "arguments": [
+        "typecheck",
+        "spec/obligation_frontiers.qnt"
+      ],
+      "started_at": "2026-11-02T09:01:30.903788+00:00",
+      "returncode": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "witnesses": {},
+      "passed": true
+    },
+    {
+      "name": "obligation_frontiers-tests",
+      "arguments": [
+        "test",
+        "spec/obligation_frontiers.qnt",
+        "--backend=rust",
+        "--max-samples=1"
+      ],
+      "started_at": "2026-11-02T09:01:31.979601+00:00",
+      "returncode": 0,
+      "log_sha256": "075ec259b29596ab954bab15bfea5d959c1ceb69a38b858085b322fcf70245f1",
+      "witnesses": {},
+      "tests_passed": 26,
+      "passed": true
+    },
+    {
+      "name": "controller_handoff-types",
+      "arguments": [
+        "typecheck",
+        "spec/controller_handoff.qnt"
+      ],
+      "started_at": "2026-11-02T09:01:34.641951+00:00",
+      "returncode": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "witnesses": {},
+      "passed": true
+    },
+    {
+      "name": "controller_handoff-tests",
+      "arguments": [
+        "test",
+        "spec/controller_handoff.qnt",
+        "--backend=rust",
+        "--max-samples=1"
+      ],
+      "started_at": "2026-11-02T09:01:35.789821+00:00",
+      "returncode": 0,
+      "log_sha256": "d0437dfd260fe59c0becc6deace0e762c3489b9577abd7076e3dc67394598d85",
+      "witnesses": {},
+      "tests_passed": 37,
+      "passed": true
+    },
+    {
+      "name": "wal-failures",
+      "arguments": [
+        "run",
+        "spec/writer_handoff.qnt",
+        "--backend=rust",
+        "--init=init",
+        "--step=step",
+        "--invariant=safety",
+        "--max-samples=1000",
+        "--max-steps=150",
+        "--seed=20261102",
+        "--witnesses",
+        "reachedNewEpoch",
+        "completedTransfers",
+        "releasedHistory",
+        "reinitializedReplica",
+        "--verbosity=1"
+      ],
+      "started_at": "2026-11-02T09:01:38.317234+00:00",
+      "returncode": 0,
+      "log_sha256": "d1ac19c3e588ab62365f6df00f8a47f86f1cd7185a3f325dc43ee3cb267f8e8e",
+      "witnesses": {
+        "reachedNewEpoch": {
+          "witnessed": 1,
+          "traces": 1000
+        },
+        "completedTransfers": {
+          "witnessed": 0,
+          "traces": 1000
+        },
+        "releasedHistory": {
+          "witnessed": 14,
+          "traces": 1000
+        },
+        "reinitializedReplica": {
+          "witnessed": 2,
+          "traces": 1000
+        }
+      },
+      "passed": true
+    },
+    {
+      "name": "wal-healthy",
+      "arguments": [
+        "run",
+        "spec/writer_handoff.qnt",
+        "--backend=rust",
+        "--init=init",
+        "--step=healthyStep",
+        "--invariant=safety",
+        "--max-samples=1000",
+        "--max-steps=200",
+        "--seed=20261103",
+        "--witnesses",
+        "reachedNewEpoch",
+        "completedTransfers",
+        "releasedHistory",
+        "--verbosity=1"
+      ],
+      "started_at": "2026-11-02T09:01:44.897847+00:00",
+      "returncode": 0,
+      "log_sha256": "462598ad40d71eefbad059c44ac62f9e6c841daf6634b4b7868afbcfd8945865",
+      "witnesses": {
+        "reachedNewEpoch": {
+          "witnessed": 940,
+          "traces": 1000
+        },
+        "completedTransfers": {
+          "witnessed": 824,
+          "traces": 1000
+        },
+        "releasedHistory": {
+          "witnessed": 292,
+          "traces": 1000
+        }
+      },
+      "passed": true
+    },
+    {
+      "name": "frontiers-failures",
+      "arguments": [
+        "run",
+        "spec/obligation_frontiers.qnt",
+        "--backend=rust",
+        "--init=init",
+        "--step=step",
+        "--invariant=safety",
+        "--max-samples=300",
+        "--max-steps=120",
+        "--seed=20261102",
+        "--witnesses",
+        "repeatedHandoff",
+        "offlineProgress",
+        "collectedHistory",
+        "rejoined",
+        "--verbosity=1"
+      ],
+      "started_at": "2026-11-02T09:02:05.764317+00:00",
+      "returncode": 0,
+      "log_sha256": "7fb4fe2f7b13197dabf01e76c0ebe66090db25c2d29d3ea1b981da3a5210e295",
+      "witnesses": {
+        "repeatedHandoff": {
+          "witnessed": 0,
+          "traces": 300
+        },
+        "offlineProgress": {
+          "witnessed": 0,
+          "traces": 300
+        },
+        "collectedHistory": {
+          "witnessed": 104,
+          "traces": 300
+        },
+        "rejoined": {
+          "witnessed": 248,
+          "traces": 300
+        }
+      },
+      "passed": true
+    },
+    {
+      "name": "frontiers-progress",
+      "arguments": [
+        "run",
+        "spec/obligation_frontiers.qnt",
+        "--backend=rust",
+        "--init=offlineInit",
+        "--step=progressStep",
+        "--invariant=safety",
+        "--max-samples=300",
+        "--max-steps=160",
+        "--seed=20261103",
+        "--witnesses",
+        "repeatedHandoff",
+        "offlineProgress",
+        "collectedHistory",
+        "--verbosity=1"
+      ],
+      "started_at": "2026-11-02T09:02:57.946506+00:00",
+      "returncode": 0,
+      "log_sha256": "9f1cac28660b17b7bbf45b5166b72d21519d6e66f081114af1eb0590984295ba",
+      "witnesses": {
+        "repeatedHandoff": {
+          "witnessed": 149,
+          "traces": 300
+        },
+        "offlineProgress": {
+          "witnessed": 268,
+          "traces": 300
+        },
+        "collectedHistory": {
+          "witnessed": 0,
+          "traces": 300
+        }
+      },
+      "passed": true
+    },
+    {
+      "name": "controller-failures",
+      "arguments": [
+        "run",
+        "spec/controller_handoff.qnt",
+        "--backend=rust",
+        "--init=init",
+        "--step=step",
+        "--invariant=safety",
+        "--max-samples=1500",
+        "--max-steps=300",
+        "--seed=20261104",
+        "--witnesses",
+        "repeatedHandoff",
+        "returnedWriter",
+        "topologyDuringHandoff",
+        "restartedDuringHandoff",
+        "commitWhileControllerDown",
+        "completedAcrossRevision",
+        "--verbosity=1"
+      ],
+      "started_at": "2026-11-02T09:04:09.100389+00:00",
+      "returncode": 0,
+      "log_sha256": "e689134c19d17efa1dc7da1caca7a01a966e6cddbc92bca97d7e25d28393988d",
+      "witnesses": {
+        "repeatedHandoff": {
+          "witnessed": 123,
+          "traces": 1500
+        },
+        "returnedWriter": {
+          "witnessed": 42,
+          "traces": 1500
+        },
+        "topologyDuringHandoff": {
+          "witnessed": 631,
+          "traces": 1500
+        },
+        "restartedDuringHandoff": {
+          "witnessed": 432,
+          "traces": 1500
+        },
+        "commitWhileControllerDown": {
+          "witnessed": 265,
+          "traces": 1500
+        },
+        "completedAcrossRevision": {
+          "witnessed": 214,
+          "traces": 1500
+        }
+      },
+      "passed": true,
+      "required_witnesses": [
+        "repeatedHandoff",
+        "returnedWriter",
+        "topologyDuringHandoff",
+        "restartedDuringHandoff",
+        "commitWhileControllerDown",
+        "completedAcrossRevision"
+      ]
+    },
+    {
+      "name": "tlc-boundedStep",
+      "arguments": [
+        "verify",
+        "spec/obligation_frontiers.qnt",
+        "--backend=tlc",
+        "--step=boundedStep",
+        "--invariant=safety",
+        "--tlc-config=spec/tlc.json",
+        "--server-endpoint=localhost:18822",
+        "--verbosity=3"
+      ],
+      "started_at": "2026-11-02T09:04:27.506102+00:00",
+      "returncode": 0,
+      "log_sha256": "306b1cafe3b05d9f92c92e3ed0aa1e04730290ebcc1ab0700d9f4d4f014a9f75",
+      "witnesses": {},
+      "tlc_states": {
+        "generated": 931,
+        "distinct": 126,
+        "remaining": 0
+      },
+      "tlc_depth": 14,
+      "passed": true
+    },
+    {
+      "name": "tlc-boundedRepeatedStep",
+      "arguments": [
+        "verify",
+        "spec/obligation_frontiers.qnt",
+        "--backend=tlc",
+        "--step=boundedRepeatedStep",
+        "--invariant=safety",
+        "--tlc-config=spec/tlc.json",
+        "--server-endpoint=localhost:18822",
+        "--verbosity=3"
+      ],
+      "started_at": "2026-11-02T09:04:32.379785+00:00",
+      "returncode": 0,
+      "log_sha256": "20060103fdf6f5db39d28d50398e3c1328b79abd1fe42455390d3f819a9e28f1",
+      "witnesses": {},
+      "tlc_states": {
+        "generated": 261,
+        "distinct": 42,
+        "remaining": 0
+      },
+      "tlc_depth": 20,
+      "passed": true
+    },
+    {
+      "name": "tlc-handoff_exhaustive",
+      "arguments": [
+        "verify",
+        "spec/controller_handoff.qnt",
+        "--main=handoff_exhaustive",
+        "--backend=tlc",
+        "--invariant=safety",
+        "--tlc-config=spec/tlc.json",
+        "--server-endpoint=localhost:18822",
+        "--verbosity=3"
+      ],
+      "started_at": "2026-11-02T09:04:35.738664+00:00",
+      "returncode": 0,
+      "log_sha256": "2763509ee2dcb318b3489489ff176b66f374bfd923240c67578dc3d149db2b4e",
+      "witnesses": {},
+      "tlc_states": {
+        "generated": 47673225,
+        "distinct": 2088648,
+        "remaining": 0
+      },
+      "tlc_depth": 41,
+      "passed": true
+    },
+    {
+      "name": "tlc-handoff_three_node_exhaustive",
+      "arguments": [
+        "verify",
+        "spec/controller_handoff.qnt",
+        "--main=handoff_three_node_exhaustive",
+        "--backend=tlc",
+        "--invariant=safety",
+        "--tlc-config=spec/tlc.json",
+        "--server-endpoint=localhost:18822",
+        "--verbosity=3"
+      ],
+      "started_at": "2026-11-02T09:11:15.483163+00:00",
+      "returncode": 0,
+      "log_sha256": "b09e48551d13c0b96f7c4c66653d8ced48ab26663306b6e70a7486f98ad0b06c",
+      "witnesses": {},
+      "tlc_states": {
+        "generated": 433025457,
+        "distinct": 8500792,
+        "remaining": 0
+      },
+      "tlc_depth": 50,
+      "passed": true
+    }
+  ],
+  "passed": true
+}

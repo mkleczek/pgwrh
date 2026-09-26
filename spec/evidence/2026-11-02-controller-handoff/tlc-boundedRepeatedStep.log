@@ -1,0 +1,36 @@
+[TLC] Compiling to TLA+ (via Apalache)...
+[TLC] Running TLC model checker...
+
+TLC2 Version 2.19 of 08 August 2024
+Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
+(Use the -nowarning option to disable this warning.)
+Running breadth-first search Model-Checking with fp 106 and seed -846486318195954297 with 1 worker on 10 cores with 2048MB heap and 64MB offheap memory [pid: 78208] (Mac OS X 26.7.1 aarch64, Azul Systems, Inc. 21.0.11 x86_64, MSBDiskFPSet, DiskStateQueue).
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/quint-tlc-NK32ad/obligation_frontiers.tla
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/Integers.tla
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/Sequences.tla
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/FiniteSets.tla
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/TLC.tla
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/Apalache.tla
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/Variants.tla
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/Naturals.tla
+Semantic processing of module Naturals
+Semantic processing of module Integers
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module TLC
+Semantic processing of module Apalache
+Semantic processing of module Variants
+Semantic processing of module obligation_frontiers
+Starting... (2026-11-02 10:04:34)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-11-02 10:04:35.
+Model checking completed. No error has been found.
+  Estimates of the probability that TLC did not check all reachable states
+  because two distinct states had the same fingerprint:
+  calculated (optimistic):  val = 5.0E-16
+261 states generated, 42 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 20.
+The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 3 and the 95th percentile is 2).
+Finished in 00s at (2026-11-02 10:04:35)
+
+[ok] No violation found (1045ms).

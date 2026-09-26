@@ -1,0 +1,47 @@
+[TLC] Compiling to TLA+ (via Apalache)...
+# Usage statistics is OFF. We care about your privacy.
+# If you want to help our project, consider enabling statistics with config --enable-stats=true.
+
+Output directory: /Users/michal/.codex/worktrees/handoff-frontiers/pgwrh/_apalache-out/server/2026-11-02T08-07-58_17537029571127751891
+# APALACHE version: 0.56.1 | build: 70cdaf4                       I@08:07:58.815
+Starting checker server on port 18822...                          I@08:07:58.819
+The Apalache server is running on port 18822. Press Ctrl-C to stop.
+Nov 02, 2026 8:08:00 AM com.google.protobuf.GeneratedMessage warnPre22Gencode
+WARNING: Vulnerable protobuf generated type in use: io.grpc.reflection.v1alpha.ServerReflectionRequest
+As of 2022/09/29 (release 21.7) makeExtensionsImmutable should not be called from protobuf gencode. If you are seeing this message, your gencode is vulnerable to a denial of service attack. You should regenerate your code using protobuf 25.6 or later. Use the latest version that meets your needs. However, if you understand the risks and wish to continue with vulnerable gencode, you can set the system property `-Dcom.google.protobuf.use_unsafe_pre22_gencode` on the command line to silence this warning. You also can set `-Dcom.google.protobuf.error_on_unsafe_pre22_gencode` to throw an error instead. See security vulnerability: https://github.com/protocolbuffers/protobuf/security/advisories/GHSA-h4h5-3hr4-j3g2
+PASS #0: SanyParser                                               I@08:08:00.825
+[TLC] Running TLC model checker...
+
+TLC2 Version 2.19 of 08 August 2024
+Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
+(Use the -nowarning option to disable this warning.)
+Running breadth-first search Model-Checking with fp 32 and seed -8906547236185823895 with 1 worker on 10 cores with 2048MB heap and 64MB offheap memory [pid: 57030] (Mac OS X 26.7.1 aarch64, Azul Systems, Inc. 21.0.11 x86_64, MSBDiskFPSet, DiskStateQueue).
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/quint-tlc-niVvP4/obligation_frontiers.tla
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/Integers.tla
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/Sequences.tla
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/FiniteSets.tla
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/TLC.tla
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/Apalache.tla
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/Variants.tla
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/Naturals.tla
+Semantic processing of module Naturals
+Semantic processing of module Integers
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module TLC
+Semantic processing of module Apalache
+Semantic processing of module Variants
+Semantic processing of module obligation_frontiers
+Starting... (2026-11-02 08:08:01)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-11-02 08:08:02.
+Model checking completed. No error has been found.
+  Estimates of the probability that TLC did not check all reachable states
+  because two distinct states had the same fingerprint:
+  calculated (optimistic):  val = 5.0E-16
+261 states generated, 42 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 20.
+The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 3 and the 95th percentile is 2).
+Finished in 00s at (2026-11-02 08:08:02)
+
+[ok] No violation found (1173ms).

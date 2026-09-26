@@ -1,0 +1,260 @@
+{
+  "recorded_at": "2026-11-02T07:05:21.767039+00:00",
+  "quint": "0.32.0",
+  "backend": "rust",
+  "sources": {
+    "spec/writer_handoff.qnt": "9feffc07bc226e239178fdb03260cf49100dcabf7f6bbf54209bcaa880249185",
+    "spec/obligation_frontiers.qnt": "4906aee5f18ce94131f6730154b8adc4822a593e5a6fbbbcafc70e2af75ffdf6",
+    "spec/check.py": "b3f8bb6d786ba7d79547dba152ac9ec400b79f4687b95b477a8c7e033eda05d9",
+    "spec/tlc.json": "68f469c821d16c3760137d98a9958e89d20a618d0264850542f4962e3d0db51d"
+  },
+  "checks": [
+    {
+      "name": "writer_handoff-types",
+      "arguments": [
+        "typecheck",
+        "spec/writer_handoff.qnt"
+      ],
+      "started_at": "2026-11-02T07:05:21.767965+00:00",
+      "returncode": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "witnesses": {}
+    },
+    {
+      "name": "writer_handoff-tests",
+      "arguments": [
+        "test",
+        "spec/writer_handoff.qnt",
+        "--backend=rust",
+        "--max-samples=1"
+      ],
+      "started_at": "2026-11-02T07:05:22.578564+00:00",
+      "returncode": 0,
+      "log_sha256": "5b98b977c6458b3106f7d5cdb7a8ca7168d251328ff197278db3a7b2b97f322f",
+      "witnesses": {}
+    },
+    {
+      "name": "obligation_frontiers-types",
+      "arguments": [
+        "typecheck",
+        "spec/obligation_frontiers.qnt"
+      ],
+      "started_at": "2026-11-02T07:05:23.943191+00:00",
+      "returncode": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "witnesses": {}
+    },
+    {
+      "name": "obligation_frontiers-tests",
+      "arguments": [
+        "test",
+        "spec/obligation_frontiers.qnt",
+        "--backend=rust",
+        "--max-samples=1"
+      ],
+      "started_at": "2026-11-02T07:05:24.955826+00:00",
+      "returncode": 0,
+      "log_sha256": "f5b43155645154ab34dfc547d4345c2ca0e84e834529a4fedf67438283cb7939",
+      "witnesses": {}
+    },
+    {
+      "name": "wal-failures",
+      "arguments": [
+        "run",
+        "spec/writer_handoff.qnt",
+        "--backend=rust",
+        "--init=init",
+        "--step=step",
+        "--invariant=safety",
+        "--max-samples=1000",
+        "--max-steps=150",
+        "--seed=20261102",
+        "--witnesses",
+        "reachedNewEpoch",
+        "completedTransfers",
+        "releasedHistory",
+        "reinitializedReplica",
+        "--verbosity=1"
+      ],
+      "started_at": "2026-11-02T07:05:26.981904+00:00",
+      "returncode": 0,
+      "log_sha256": "da12d1b29e0adde1d74763500f3d35cc4275fe52015f5a70e67805c70246b4e8",
+      "witnesses": {
+        "reachedNewEpoch": {
+          "witnessed": 1,
+          "traces": 1000
+        },
+        "completedTransfers": {
+          "witnessed": 0,
+          "traces": 1000
+        },
+        "releasedHistory": {
+          "witnessed": 14,
+          "traces": 1000
+        },
+        "reinitializedReplica": {
+          "witnessed": 2,
+          "traces": 1000
+        }
+      }
+    },
+    {
+      "name": "wal-healthy",
+      "arguments": [
+        "run",
+        "spec/writer_handoff.qnt",
+        "--backend=rust",
+        "--init=init",
+        "--step=healthyStep",
+        "--invariant=safety",
+        "--max-samples=1000",
+        "--max-steps=200",
+        "--seed=20261103",
+        "--witnesses",
+        "reachedNewEpoch",
+        "completedTransfers",
+        "releasedHistory",
+        "--verbosity=1"
+      ],
+      "started_at": "2026-11-02T07:05:32.951666+00:00",
+      "returncode": 0,
+      "log_sha256": "84186572e0569724b816067f1d910904edd3b5e6eef873fede4f41ae897d401a",
+      "witnesses": {
+        "reachedNewEpoch": {
+          "witnessed": 940,
+          "traces": 1000
+        },
+        "completedTransfers": {
+          "witnessed": 824,
+          "traces": 1000
+        },
+        "releasedHistory": {
+          "witnessed": 292,
+          "traces": 1000
+        }
+      }
+    },
+    {
+      "name": "frontiers-failures",
+      "arguments": [
+        "run",
+        "spec/obligation_frontiers.qnt",
+        "--backend=rust",
+        "--init=init",
+        "--step=step",
+        "--invariant=safety",
+        "--max-samples=300",
+        "--max-steps=120",
+        "--seed=20261102",
+        "--witnesses",
+        "repeatedHandoff",
+        "offlineProgress",
+        "collectedHistory",
+        "rejoined",
+        "--verbosity=1"
+      ],
+      "started_at": "2026-11-02T07:05:50.973556+00:00",
+      "returncode": 0,
+      "log_sha256": "fea279a6814de738c8397e60b236822d23aa6de829e8cc11d301214400a2483d",
+      "witnesses": {
+        "repeatedHandoff": {
+          "witnessed": 0,
+          "traces": 300
+        },
+        "offlineProgress": {
+          "witnessed": 0,
+          "traces": 300
+        },
+        "collectedHistory": {
+          "witnessed": 104,
+          "traces": 300
+        },
+        "rejoined": {
+          "witnessed": 248,
+          "traces": 300
+        }
+      }
+    },
+    {
+      "name": "frontiers-progress",
+      "arguments": [
+        "run",
+        "spec/obligation_frontiers.qnt",
+        "--backend=rust",
+        "--init=offlineInit",
+        "--step=progressStep",
+        "--invariant=safety",
+        "--max-samples=300",
+        "--max-steps=160",
+        "--seed=20261103",
+        "--witnesses",
+        "repeatedHandoff",
+        "offlineProgress",
+        "collectedHistory",
+        "--verbosity=1"
+      ],
+      "started_at": "2026-11-02T07:06:33.811382+00:00",
+      "returncode": 0,
+      "log_sha256": "c657dfe88a3a8fe8bbbe148c565f974af04328d0696e42c1a588114e4809bc82",
+      "witnesses": {
+        "repeatedHandoff": {
+          "witnessed": 149,
+          "traces": 300
+        },
+        "offlineProgress": {
+          "witnessed": 268,
+          "traces": 300
+        },
+        "collectedHistory": {
+          "witnessed": 0,
+          "traces": 300
+        }
+      }
+    },
+    {
+      "name": "tlc-boundedStep",
+      "arguments": [
+        "verify",
+        "spec/obligation_frontiers.qnt",
+        "--backend=tlc",
+        "--step=boundedStep",
+        "--invariant=safety",
+        "--tlc-config=spec/tlc.json",
+        "--server-endpoint=localhost:18822",
+        "--verbosity=3"
+      ],
+      "started_at": "2026-11-02T07:07:50.444506+00:00",
+      "returncode": 0,
+      "log_sha256": "e2c8e4aaf465276833c3eecd1d6547c8f8547548b99c4a302daafc8a4f515da1",
+      "witnesses": {},
+      "tlc_states": {
+        "generated": 931,
+        "distinct": 126,
+        "remaining": 0
+      }
+    },
+    {
+      "name": "tlc-boundedRepeatedStep",
+      "arguments": [
+        "verify",
+        "spec/obligation_frontiers.qnt",
+        "--backend=tlc",
+        "--step=boundedRepeatedStep",
+        "--invariant=safety",
+        "--tlc-config=spec/tlc.json",
+        "--server-endpoint=localhost:18822",
+        "--verbosity=3"
+      ],
+      "started_at": "2026-11-02T07:07:56.699985+00:00",
+      "returncode": 0,
+      "log_sha256": "a2cb330f3bc499d79b38d1c2c04af92ff05de3bf13006a5f05ec34f7b0d1880d",
+      "witnesses": {},
+      "tlc_states": {
+        "generated": 261,
+        "distinct": 42,
+        "remaining": 0
+      }
+    }
+  ],
+  "passed": true
+}

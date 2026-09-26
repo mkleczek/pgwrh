@@ -1,0 +1,7 @@
+[ok] No violation found (40853ms at 7 traces/second).
+Witnesses:
+repeatedHandoff was witnessed in 0 trace(s) out of 300 explored (0.00%)
+offlineProgress was witnessed in 0 trace(s) out of 300 explored (0.00%)
+collectedHistory was witnessed in 104 trace(s) out of 300 explored (34.67%)
+rejoined was witnessed in 248 trace(s) out of 300 explored (82.67%)
+Use --seed=0x1418149 --backend=rust to reproduce.
