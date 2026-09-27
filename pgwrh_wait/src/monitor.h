@@ -9,4 +9,5 @@ extern Oid pgwrh_subscription(const char *name, bool require_ready);
 extern XLogRecPtr pgwrh_progress(Oid subid);
 extern ConditionVariable *pgwrh_progress_changed(void);
 extern void pgwrh_init_wait(void);
+extern void pgwrh_init_commit(void);
 #endif
