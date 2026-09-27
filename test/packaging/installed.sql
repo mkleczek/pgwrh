@@ -1,6 +1,7 @@
 \set ON_ERROR_STOP on
 -- The wait API must work on a plain PostgreSQL subscriber.
 CREATE EXTENSION pgwrh_wait;
+SELECT pgwrh.last_commit_lsn();
 DO $$
 BEGIN
     ASSERT (SELECT array_agg(extname ORDER BY extname) = ARRAY['pgwrh_wait']::name[]
@@ -95,6 +96,7 @@ SELECT * FROM pgwrh_fdw_get_connections();
 
 -- Removing the core must leave the independent wait API usable.
 DROP EXTENSION pgwrh CASCADE;
+SELECT pgwrh.last_commit_lsn();
 SELECT pgwrh.applied_lsn('packaging_probe');
 SELECT 'one' ||= ARRAY['one'];
 DROP EXTENSION pgwrh_gist_extra;
