@@ -33,7 +33,7 @@ PostgreSQL 19 preview:
 | --- | --- | --- |
 | `pgwrh` | Manages shard placement, replication and configuration rollouts | Controller and replicas |
 | `pgwrh_fdw` | Foreign data wrapper (FDW) for queries and connections between databases | Enabled automatically by `CREATE EXTENSION pgwrh CASCADE` |
-| `pgwrh_wait` | Lets a read wait until a specified write has been replicated | Optional, on subscribers serving reads that need this guarantee |
+| `pgwrh_wait` | Issues session commit tokens and waits for replicated writes | Optional, on the controller issuing tokens and subscribers serving guarded reads |
 | `pgwrh_ui` | Browser console for monitoring and managing the cluster | Optional, controller only |
 | `pgwrh_gist_extra` | Additional GiST operators for text-array searches | Optional, on databases using these indexes or shipping these operators |
 

@@ -82,7 +82,8 @@ Enable `pgwrh` in the controller and each replica database. In logical
 replication, the source is the publisher and the receiver is a subscriber; see
 [cluster concepts](overview.md) for these roles.
 
-On subscribers using the optional `pgwrh_wait` visibility API, append
+On the controller issuing commit tokens and subscribers using the optional
+`pgwrh_wait` visibility API, append
 `pgwrh_wait` to the existing `shared_preload_libraries` setting and restart
 PostgreSQL. Configure logical replication, including `wal_level = logical` on
 publishers and worker/slot capacity appropriate to the number of shards. See
@@ -97,9 +98,10 @@ CREATE EXTENSION pgwrh_wait;
 ```
 
 The first command also creates `pgwrh_fdw` and `pg_background`. The second
-enables the optional wait API. For a subscriber needing only that API, run only
-`CREATE EXTENSION pgwrh_wait;`; it has no extension dependencies, although the
-native package still includes the full bundle and installs its dependencies.
+enables the optional [commit-token and wait API](lsn-wait.md). For a database
+needing only that API, run only `CREATE EXTENSION pgwrh_wait;`; it has no
+extension dependencies, although the native package still includes the full
+bundle and installs its dependencies.
 Cluster membership and shard placement are configured separately.
 
 Enable the optional console only in the controller database, after enabling
