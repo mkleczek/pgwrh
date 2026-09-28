@@ -12,6 +12,7 @@ from .pgwrh_testkit import (
     MASTER_SEED_SQL,
     MasterHandle,
     PgwrhCluster,
+    PostgresInstallation,
     ReplicaSpec,
     quote_ident,
 )
@@ -100,10 +101,21 @@ def _build_cluster_factory(master: MasterHandle, postgres_node_factory):
 @pytest.fixture
 def postgres_node_factory():
     with ExitStack() as stack:
-        stack.enter_context(scoped_config(use_python_logging=True))
+        # testgres caches pg_config globally, without an installation key.
+        stack.enter_context(scoped_config(
+            use_python_logging=True, cache_pg_config=False, cache_initdb=False,
+        ))
 
-        def build(name: str, *, install_extension: bool = True, dbname: str | None = None):
-            node = get_new_node(name, bin_dir=os.environ.get(POSTGRES_BIN_DIR_ENV))
+        def build(
+            name: str,
+            *,
+            install_extension: bool = True,
+            dbname: str | None = None,
+            installation: PostgresInstallation | None = None,
+        ):
+            bin_dir = installation.bin_dir if installation else os.environ.get(POSTGRES_BIN_DIR_ENV)
+            extension_paths = installation.extension_root if installation else _extension_paths()
+            node = get_new_node(name, bin_dir=bin_dir)
             stack.enter_context(node)
             node.init(allow_logical=True)
             # Managed source identities always authenticate using SCRAM. Keep
@@ -116,7 +128,6 @@ def postgres_node_factory():
             node.append_conf("unix_socket_directories = " + _quote_conf_value(node.base_dir))
             for line in POSTGRES_CONF:
                 node.append_conf(line)
-            extension_paths = _extension_paths()
             if extension_paths:
                 node.append_conf(
                     "dynamic_library_path = "
@@ -127,6 +138,12 @@ def postgres_node_factory():
                     + _quote_conf_value(f"{extension_paths}:$system")
                 )
             node.start()
+            if installation is not None:
+                actual_major = int(node.execute("SHOW server_version_num")[0][0]) // 10000
+                assert actual_major == installation.major, (
+                    f"{name}: expected PostgreSQL {installation.major}, got {actual_major} "
+                    f"from {bin_dir}"
+                )
             if dbname is not None:
                 node.execute(f'CREATE DATABASE {quote_ident(dbname)}')
                 node = DatabaseNode(node, dbname)

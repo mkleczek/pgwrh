@@ -4,10 +4,32 @@
 publisher log sequence number (LSN). Read the [user contract](../lsn-wait.md)
 before changing the monitor or its transaction ordering.
 
+The preloaded library also captures writer tokens in backend-local state.
+`src/commit.c` copies PostgreSQL's `XactLastCommitEnd` at `XACT_EVENT_COMMIT`
+only when `GetTopTransactionIdIfAny()` is valid: `RecordTransactionCommit` then
+emitted a commit record, and the callback runs after ProcArray removal. A plain
+read normally leaves the core value alone, but no-XID transactions that emit
+maintenance WAL can also overwrite it without a commit record. Keeping our own
+value preserves the last actual commit across those reads as well as rollbacks.
+The callback performs no allocation, catalog access or SQL. PREPARE, abort and
+subtransaction events do not update the token; two-phase subscriptions remain
+unsupported. `last_commit_lsn()` is volatile and parallel unsafe because the
+value belongs to this backend. It requires preloading so that commits before
+the first function call are observed, and returns NULL before the first
+qualifying commit. Token capture does not depend on an active subscription.
+
+`test/pgwrh_wait/test_commit_lsn.py` covers session lifetime, concurrent writers,
+asynchronous commit, rollback/failed commit, subtransactions and WAL without an
+XID. The idle-subscriber test compares the token to the monitored apply commit
+end and contrasts it with an overshooting global WAL position. General wait
+tests use exact tokens without compensating heartbeats; filtered transactions
+retain coverage of the published-marker requirement.
+
 The preloaded library registers a transaction callback in every backend and
-filters for logical apply workers, excluding table synchronization workers and
-ordinary sessions. PRE_COMMIT captures the worker's own
-`replorigin_session_origin_lsn` and reserves a shared hash entry. Only
+filters for leader and parallel apply workers, excluding table and sequence
+synchronization workers and ordinary sessions. PRE_COMMIT captures the worker's own
+origin LSN (`replorigin_session_origin_lsn` on 18,
+`replorigin_xact_state.origin_lsn` on 19) and reserves a shared hash entry. Only
 XACT_EVENT_COMMIT publishes it, after `ProcArrayEndTransaction` has removed the
 applying transaction. The post-commit path does no allocation, catalog access,
 SQL execution, or error reporting. Aborted/prepared transactions do not publish.
@@ -42,10 +64,17 @@ watermark. Size this for subscription churn. Exhaustion does not stop apply;
 untracked subscribers report an explicit capacity error to readers. Increase the
 setting and restart to reclaim the table.
 
-This relies on PostgreSQL 18 internal worker structures and callback ordering.
-The build rejects other major versions until the implementation and tests have
-been audited for them. Relevant upstream code:
+This relies on PostgreSQL 18/19 internal worker structures and callback ordering.
+`src/compat.h` adapts origin state, shared-hash initialization, LSN soft-error
+parsing and table-readiness enumeration. The monitor and wait logic stay shared.
+PostgreSQL 19 sequence synchronization neither publishes table-read watermarks
+nor blocks a wait once all subscription tables are ready. The origin-setup commit
+still precedes the upstream connection, and COMMIT callbacks still follow
+ProcArray removal in `REL_19_BETA3`. Other majors are rejected until audited.
+Relevant upstream code:
 
+- [Commit record and XactLastCommitEnd handling on PostgreSQL 18](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/backend/access/transam/xact.c)
+- [Commit record and XactLastCommitEnd handling on PostgreSQL 19 Beta 3](https://github.com/postgres/postgres/blob/REL_19_BETA3/src/backend/access/transam/xact.c)
 - [CommitTransaction and ProcArray ordering](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/backend/access/transam/xact.c)
 - [Apply commit handling and origin setup](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/backend/replication/logical/worker.c)
 - [Parallel apply commit ordering](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/backend/replication/logical/applyparallelworker.c)

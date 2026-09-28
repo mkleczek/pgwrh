@@ -21,7 +21,7 @@
 CREATE OR REPLACE FUNCTION configure_controller(host text, port text, username text, password text, start_daemon boolean DEFAULT true, refresh_seconds real DEFAULT 20, dbname text DEFAULT current_database())
     RETURNS void
     SET SEARCH_PATH FROM CURRENT
-    SECURITY DEFINER
+    SECURITY INVOKER
     LANGUAGE plpgsql AS
 $$
 DECLARE
@@ -71,3 +71,7 @@ BEGIN
     END IF;
 END
 $$;
+
+-- Choosing the controller also trusts its metadata for administrator-run DDL.
+-- Peer logins and application readers must not be able to change that trust.
+REVOKE ALL ON FUNCTION configure_controller(text, text, text, text, boolean, real, text) FROM PUBLIC;

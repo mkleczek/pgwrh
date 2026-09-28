@@ -1,0 +1,35 @@
+name: Alpha field-test feedback
+description: Share installation results, workload feedback or a reproducible problem.
+title: "[alpha feedback] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Successful test reports are useful too. Remove credentials and sensitive data from logs and examples.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: pgwrh and PostgreSQL versions, OS, CPU architecture, installation method, and cluster layout.
+      placeholder: "pgwrh 1.0.0-alpha1; PostgreSQL 18.x; ..."
+    validations:
+      required: true
+  - type: textarea
+    id: scenario
+    attributes:
+      label: What did you test?
+      description: Describe the workload or operation and any steps needed to reproduce it.
+    validations:
+      required: true
+  - type: textarea
+    id: results
+    attributes:
+      label: Results
+      description: What happened? For a problem, include what you expected and relevant sanitized logs or errors.
+    validations:
+      required: true
+  - type: textarea
+    id: feedback
+    attributes:
+      label: Other feedback
+      description: What was confusing or missing? What would make pgwrh more useful for your workload?

@@ -1,8 +1,12 @@
 # Containers and the local demonstration cluster
 
 The image includes PostgreSQL 18, the four [pgwrh
-extensions](../README.md#components) at version 1.0.0, and their `pg_background`
+extensions](../README.md#components) at version 1.0.0-alpha1, and their `pg_background`
 dependency. It configures logical replication and preloads `pgwrh_wait`.
+
+Images built from the development branch additionally include the optional
+`pgwrh_gist_extra` extension. Enable it explicitly with
+`CREATE EXTENSION pgwrh_gist_extra CASCADE`; the image does not activate it.
 
 When initializing an empty volume, it enables `pgwrh` with its dependencies and
 `pgwrh_wait` in `POSTGRES_DB`. Existing volumes are not initialized again. The
@@ -13,7 +17,7 @@ replicas.
 ## Try sharding locally
 
 Install Docker with Compose and curl. From a repository checkout or unpacked
-1.0.0 source archive, run the command below. If the release image has not yet
+1.0.0-alpha1 source archive, run the command below. If the release image has not yet
 been published, [build a local image](#build-a-local-image) first.
 
 ```sh
@@ -54,12 +58,12 @@ reconciliation. To delete the demo data and start fresh, use `docker compose
 From the repository root:
 
 ```sh
-docker build -f packaging/container/Dockerfile -t pgwrh:1.0.0-local .
-PGWRH_IMAGE=pgwrh:1.0.0-local bash examples/compose/quickstart.sh
+docker build -f packaging/container/Dockerfile -t pgwrh:1.0.0-alpha1-local .
+PGWRH_IMAGE=pgwrh:1.0.0-alpha1-local bash examples/compose/quickstart.sh
 ```
 
 `PGWRH_IMAGE` also accepts an immutable image digest. The default
-`ghcr.io/mkleczek/pgwrh:1.0.0-pg18` reference becomes available when the release
+`ghcr.io/mkleczek/pgwrh:1.0.0-alpha1-pg18` reference becomes available when the release
 workflow publishes it; use the local build before then.
 
 The image follows the [official PostgreSQL
@@ -69,3 +73,17 @@ their own credentials, storage, resource limits, replication settings and
 network configuration. Overriding the image's command replaces its default
 PostgreSQL settings; preserve the required preload and logical-replication
 settings. See [native installation](packages.md).
+
+## PostgreSQL 19 preview
+
+From the development checkout, build a local PostgreSQL 19 Beta 3 image:
+
+```sh
+docker build -f packaging/container/Dockerfile --build-arg PG_MAJOR=19 \
+  --build-arg POSTGRES_IMAGE=postgres:19beta3-trixie -t pgwrh:pg19-preview .
+PGWRH_IMAGE=pgwrh:pg19-preview bash examples/compose/quickstart.sh
+```
+
+Use fresh demo volumes for the different server major. The release workflow
+prepares a separate `-pg19` image tag; the already published alpha1 tag remains
+unchanged. Both development images include pg_background 2.0.3 or newer.
