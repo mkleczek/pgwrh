@@ -23,6 +23,43 @@ The Nix environment stages the extensions and provides PostgreSQL and Python:
 nix-shell --run 'pgwrh-test test/pgwrh -q'
 ```
 
+## Heterogeneous PostgreSQL versions
+
+Run controllers and replicas on different majors in one pytest process:
+
+```sh
+nix develop .#tests-mixed --command bash test/run-mixed-versions.sh
+```
+
+The runner builds and stages both FDWs independently under
+`.build/mixed-versions/18` and `.build/mixed-versions/19`. Its eight tests cover
+all six heterogeneous triples of an 18/19 controller and two replicas, plus
+scale-out from two same-major replicas to a third replica on the other major
+in both directions. They check actual server majors, partition/bootstrap keys,
+initial copy, inserts/updates/deletes, typed row and aggregate results, and
+committed shard movement. Deterministic placement gives every replica local
+and remote shards; executed foreign scans verify that reads reach peers.
+Controller metadata FDW traffic and logical replication run across majors too.
+
+Without Nix, install each PostgreSQL major with its matching `pg_background`
+2.0.3 and the usual build/Python dependencies, then supply `PG_CONFIG_18`,
+`PG_CONFIG_19`, `PGWRH_TEST_BIN_DIR_18`, and `PGWRH_TEST_BIN_DIR_19` to the same
+runner. Binary directories must contain the complete server/client tools.
+The runner rejects missing installations or the wrong major before building.
+
+To rerun only the tests after staging, set `PGWRH_TEST_BIN_DIR_18/19` and
+`PGWRH_TEST_EXT_PATHS_18/19` to the corresponding binary/staging directories,
+then run `python3 -m pytest test/pgwrh/mixed_versions -v`. The per-major variables
+are literal names ending in `_18` and `_19`; single-major variables are never
+used as fallbacks. A wrong extension ABI fails when PostgreSQL loads it.
+
+This suite is excluded from recursive pytest discovery so single-major test
+environments still work. Selecting its directory explicitly requires both
+installations and fails if either is missing. Functional CI, including release
+source validation, runs it in a separate job and rejects skipped cases. This
+tests live heterogeneous clusters; it does not perform `pg_upgrade` or
+cross-major physical replication.
+
 ## Controller backup and restore
 
 `test/pgwrh/test_backup_restore.py` performs real `pg_dump`, `pg_dumpall` and

@@ -31,10 +31,18 @@
           tests = p: import ./nix/tests.nix {
             inherit (p) pkgs background; postgresql = p.server;
           };
+          postgres18 = p18.server.withPackages (ps: [ p18.background ]);
+          postgres19 = p19.server.withPackages (ps: [ p19.background ]);
         in {
           tests = tests p18;
           tests-18 = tests p18;
           tests-19 = tests p19;
+          tests-mixed = (tests p18).overrideAttrs (_: {
+            PG_CONFIG_18 = "${postgres18.pg_config}/bin/pg_config";
+            PGWRH_TEST_BIN_DIR_18 = "${postgres18}/bin";
+            PG_CONFIG_19 = "${postgres19.pg_config}/bin/pg_config";
+            PGWRH_TEST_BIN_DIR_19 = "${postgres19}/bin";
+          });
           default = p18.pkgs.mkShell {
             packages = [ p18.postgresql p18.postgresql.pg_config p18.pkgs.python3 ];
             inputsFrom = [ p18.pgwrh ];
