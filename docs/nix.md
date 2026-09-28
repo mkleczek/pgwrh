@@ -1,8 +1,12 @@
 # Nix and NixOS
 
-The default Nix package provides PostgreSQL 18, all four [pgwrh
-extensions](../README.md#components) at version 1.0.0, and their `pg_background`
+The development Nix package provides PostgreSQL 18, all five [pgwrh
+extensions](../README.md#components) at version 1.0.0-alpha1, and their `pg_background`
 dependency. Nix must have flakes enabled.
+
+The optional `pgwrh_gist_extra` files are included in development builds;
+enable the extension with `CREATE EXTENSION pgwrh_gist_extra CASCADE`.
+The tagged alpha1 package predates this addition.
 
 From a release checkout:
 
@@ -18,7 +22,7 @@ environment.
 For NixOS, add the release as an input to the system flake:
 
 ```nix
-inputs.pgwrh.url = "github:mkleczek/pgwrh/v1.0.0";
+inputs.pgwrh.url = "github:mkleczek/pgwrh/v1.0.0-alpha1";
 ```
 
 Import `inputs.pgwrh.nixosModules.default` into the host modules and set
@@ -39,7 +43,7 @@ its administrator:
 
 ```sql
 CREATE EXTENSION pgwrh CASCADE;
--- Optional, for subscribers using replication visibility barriers:
+-- Optional, for controller commit tokens and subscriber visibility barriers:
 CREATE EXTENSION pgwrh_wait;
 ```
 
@@ -54,3 +58,17 @@ This is a fresh installation release; it does not upgrade an existing pgwrh
 database. For custom PostgreSQL environments, use
 `postgresql_18.pkgs.callPackage ./nix/pgwrh.nix { }` and include the result
 together with `pg_background` in `postgresql_18.withPackages`.
+
+## PostgreSQL 19 preview
+
+The development checkout provides `postgresql-18`, `postgresql-19`, `pgwrh-18`
+and `pgwrh-19`. Default aliases and the NixOS module continue to select 18.
+Both bundles pin `pg_background` 2.0.3. The 19 bundle pins PostgreSQL 19 Beta 3.
+
+```sh
+nix build .#postgresql-19
+nix develop .#tests-19 --command bash test/run-functional.sh
+```
+
+The PostgreSQL major must match the data directory and compiled extensions.
+These outputs do not upgrade a PostgreSQL cluster.

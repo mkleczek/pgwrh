@@ -1,41 +1,17 @@
-# pgwrh_fdw extension build; regression tests live in ../test/pgwrh_fdw.
-
-MODULE_big = pgwrh_fdw
-OBJS = \
-	$(WIN32RES) \
-	connection.o \
-	credentials.o \
-	deparse.o \
-	join.o \
-	option.o \
-	transaction_context.o \
-	virtual.o \
-	pgwrh_fdw.o \
-	shippable.o
-PGFILEDESC = "pgwrh_fdw - foreign data wrapper for PostgreSQL"
-
-PG_CPPFLAGS = -I$(libpq_srcdir)
-SHLIB_LINK_INTERNAL = $(libpq)
-
-EXTENSION = pgwrh_fdw
-DATA = pgwrh_fdw--1.0.0.sql
-
+# Select the independently maintained FDW for the target server.
+.DEFAULT_GOAL := all
 PG_CONFIG ?= pg_config
-PGXS := $(shell $(PG_CONFIG) --pgxs)
-include $(PGXS)
-
-# Export only PostgreSQL loader/SQL entry points; helpers also have unique names.
-PG_CFLAGS += -fvisibility=hidden
-
-connection.o join.o option.o virtual.o pgwrh_fdw.o: virtual.h
-join.o pgwrh_fdw.o: join.h
-$(OBJS): pgwrh_fdw.h
-
+PG_MAJOR := $(shell $(PG_CONFIG) --version | sed -E 's/^PostgreSQL ([0-9]+).*/\1/')
+ifeq ($(filter $(PG_MAJOR),18 19),)
+$(error pgwrh_fdw requires PostgreSQL 18 or 19; check PG_CONFIG)
+endif
 STAGE_DIR ?= $(abspath ../.build/testgres-ext)
-stage: all
-	mkdir -p "$(STAGE_DIR)/extension"
-	cp $(DATA) "$(STAGE_DIR)/extension/"
-	sed 's|\$$libdir/pgwrh_fdw|pgwrh_fdw|' pgwrh_fdw.control > "$(STAGE_DIR)/extension/pgwrh_fdw.control"
-	cp $(shlib) "$(STAGE_DIR)/"
 
-.PHONY: stage
+# context_probe is a standalone regression helper, never a package payload.
+all install uninstall stage:
+	$(MAKE) -C $(PG_MAJOR) $@ PG_CONFIG="$(PG_CONFIG)" MODULES= STAGE_DIR="$(STAGE_DIR)"
+
+clean:
+	$(MAKE) -C $(PG_MAJOR) clean PG_CONFIG="$(PG_CONFIG)"
+
+.PHONY: all install uninstall clean stage

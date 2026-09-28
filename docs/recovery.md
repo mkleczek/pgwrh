@@ -4,7 +4,7 @@ The [controller](overview.md#controller-replicas-and-shards) holds source data
 and cluster configuration. Back up its application data and pgwrh metadata
 together. Replicas are derived copies; they do not replace a controller backup.
 Keep PostgreSQL configuration, credentials, TLS files, role definitions and the
-matching 1.0.0 extension packages alongside your database recovery plan.
+matching 1.0.0-alpha1 extension packages alongside your database recovery plan.
 
 ## Before an incident
 
@@ -41,7 +41,7 @@ replica daemons, and prevent clients or replicas from connecting to the new
 host. Never run two writable controllers for the same cluster. Keep the restored
 controller isolated until recovery checks and replica rebuilding are complete.
 
-1. Install PostgreSQL 18 and the same pgwrh 1.0.0 extension files and dependencies.
+1. Install PostgreSQL 18 and the same pgwrh 1.0.0-alpha1 extension files and dependencies.
    Apply the [server settings](packages.md), including wait preloading if used.
 2. Inspect `roles.sql`. Remove only the `CREATE ROLE` statement for a bootstrap
    administrator that already exists on the destination; retain its applicable
@@ -103,11 +103,11 @@ any: remove a stale slot only after fencing its old consumer. If other replicas
 cannot serve the required shards, keep reads paused until the replacement is
 ready.
 
-For a **physical controller failover**, use a tested PostgreSQL
-high-availability procedure that preserves the needed logical slots and WAL
-continuity. pgwrh does not elect or fence controllers. If continuity cannot be
-established, follow the replica rebuild path above instead of trusting
-pre-failover reports.
+For a **physical controller failover**, follow the [controller HA
+guide](controller-ha.md) to configure a streaming standby, synchronize logical
+slots and check readiness before promotion. pgwrh does not elect or fence
+controllers. If slot and WAL continuity cannot be established, follow the
+replica rebuild path above instead of trusting pre-failover reports.
 
 For an **interrupted rollout**, use the [readiness
 checks](overview.md#configuration-and-rollouts). Inspect

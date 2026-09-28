@@ -98,7 +98,7 @@ BEGIN
         OR
             pg_catalog.to_regprocedure(format('%I.pg_background_detach_v2(pg_catalog.int4, pg_catalog.int8)', bg_schema)) IS NULL
     THEN
-        RAISE EXCEPTION 'pgwrh requires pg_background 1.6+ with v2 API support';
+        RAISE EXCEPTION 'pgwrh requires the pg_background v2 API; install pg_background 2.0.3 or newer';
     END IF;
 
     EXECUTE format('GRANT USAGE ON TYPE %I.pg_background_handle TO %I', bg_schema, replica_role);

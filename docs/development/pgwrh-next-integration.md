@@ -1,7 +1,7 @@
 # pgwrh-next integration audit
 
 This records the integration work before the unified 1.0.0 release. The current
-tree ships only 1.0.0 installation scripts; the upgrade scripts and regression
+tree ships only 1.0.0-alpha1 installation scripts; the upgrade scripts and regression
 mentioned in the historical validation below have been removed. References to
 the "current" tree, flake or bookmarks below refer to that audit snapshot. For
 the maintained PostgreSQL 18 bundle, see [Nix installation](../nix.md).

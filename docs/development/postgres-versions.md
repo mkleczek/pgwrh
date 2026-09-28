@@ -1,0 +1,120 @@
+# PostgreSQL versions and the 19 preview
+
+pgwrh has one main branch and one extension version across PostgreSQL majors.
+Only `pgwrh_fdw` has a separate upstream and patched aggregate per major. Both
+aggregates share the same functional patch changes and feature groups, based on the latest common
+18/19 upstream ancestor recorded by `fdw_patch_base`; each aggregate holds its
+version-specific adaptations. Their exact patched trees are moved into
+`pgwrh_fdw/18/` and `pgwrh_fdw/19/` by separate
+jj changes bookmarked as `fdw_base_18` and `fdw_base_19`. Each move has its
+aggregate as its sole parent, and both moves are parents of `main`. `PG_CONFIG`
+selects the matching implementation. SQL, UI, wait and GiST extensions stay shared,
+with C API differences handled conditionally.
+See the [FDW workflow](../../pgwrh_fdw/UPSTREAM.md) for updating shared patches or one major.
+
+| Target | FDW source | Status |
+| --- | --- | --- |
+| PostgreSQL 18 | 18.3, unchanged | Default build |
+| PostgreSQL 19 | 19 Beta 3 | Development preview |
+
+Both use pg_background 2.0.3. Nix pins that exact upstream release; native
+packages require at least that version. This dependency is not forked in-tree.
+
+The published pgwrh 1.0.0-alpha1 tag and artifacts remain unchanged. Development
+sources keep their existing extension version until the next pgwrh release is
+chosen; do not overwrite the published alpha1 artifacts with this checkout.
+
+## Checking a major
+
+```sh
+nix develop .#tests-19 --command bash test/run-functional.sh
+nix develop .#tests-19 --command make test-fdw test-packaging
+nix build .#postgresql-19
+```
+
+Use `18` for the other major. Both run the same core, logical-replication wait,
+GiST and real PostgREST UI tests. Each FDW also runs its own retained upstream tests,
+SCRAM TAP tests and symbol isolation check. Native binaries are rebuilt for each
+server major; one major's library cannot be reused with another.
+
+The release matrix builds DEBs and container images for both majors, plus Nix
+bundles on Linux and macOS. PostgreSQL 19 RPM metadata is prepared, but that matrix
+entry is excluded until PGDG publishes `pg_background_19 >= 2.0.3`. PostgreSQL 18
+RPM builds remain required. This is an external packaging gap, not permission to
+skip the PostgreSQL 19 functional suites.
+
+## Before releasing against PostgreSQL 19 final
+
+1. Import the selected PostgreSQL 19 release and replace the upstream parent of
+   its aggregate, retaining the shared patch parents. Resolve version-specific
+   conflicts, verify the aggregate, then refresh its directory-move change with
+   `python3 pgwrh_fdw/tools/refresh-layout.py 19`.
+2. Update the source pin/hash in `nix/postgresql-19.nix`, the FDW CI source pin,
+   container base tag and this provenance documentation. Keep PostgreSQL 18's
+   aggregate and directory intact.
+3. Remove beta-specific APT/RPM repository settings once PGDG moves 19 into its
+   ordinary repositories. Enable the PostgreSQL 19 RPM matrix entry when its
+   pg_background package is available.
+4. Run both major-version suites and all artifact checks from the exact release
+   source archive. Choose the next pgwrh version and prepare a fresh tag; do not
+   retag alpha1. Follow [the release procedure](../releasing.md).
+
+These suites exercise clusters whose members use the same PostgreSQL major.
+Cross-major controller/replica combinations and rolling PostgreSQL major upgrades
+are not covered by this preparation.
+
+## Local validation, 2026-09-21
+
+The preparation was checked with PostgreSQL 18.6 and 19 Beta 3 on macOS arm64,
+using pg_background 2.0.3 for both:
+
+- Each major: 131 core/UI tests, including the real PostgREST HTTP tests, and
+  60 wait tests passed with no skips.
+- Each FDW: 104 context/routing tests, both upstream SQL regressions, the
+  isolation regression and prescribed-symbol export checks passed.
+- PostgreSQL 19: all 13 individual FDW patches compiled; all 9 SCRAM TAP tests
+  passed against matching upstream source. Its FDW suite also passed on Linux
+  arm64, including ELF export checks.
+- Installed Nix bundles, staged install/uninstall modes and the PostgreSQL 19
+  Ubuntu 24.04 DEB and Debian container installation checks passed.
+- The PostgreSQL 19 Compose demo passed initial and repeated setup, returned
+  100 rows from each replica and served the read-only console.
+- Release metadata, workflow lint, signed repository generation for both DEB
+  names, and synthetic upstream/integration update tests passed. The latter verify
+  that updating one imported directory preserves the other exactly.
+
+The expanded CI matrix remains responsible for the other operating-system and
+architecture combinations. No release tag or published artifact was changed.
+
+The later shared-patch history reorganization preserved both tested FDW trees
+byte for byte. All 13 shared patch revisions compiled with PostgreSQL 18's
+upstream C updates applied. A temporary shared-patch edit propagated to both
+aggregates; a PostgreSQL 19 upstream update left the PostgreSQL 18 aggregate
+unchanged. The upstream/integration maintenance tests passed with shared patch
+commits retained across the update.
+
+The subsequent switch to jj directory-move changes also preserved both tested
+source trees exactly. Tests cover refreshing shared edits, added and deleted
+files through both moves into `main`, updating one upstream without changing the
+other major, and preserving unrelated working edits. No Git subtree command is
+needed for this maintenance workflow.
+
+## Partial aggregate validation, 2026-09-23
+
+The shared partial-aggregate feature passed on PostgreSQL 18.6 and 19 Beta 3:
+13 dedicated cases (including every supported signature), 17 limit cases, 129
+context/routing/lookup cases, both upstream SQL regressions, isolation and symbol
+checks. The retained SCRAM TAP cases also pass (7 on 18, 9 on 19). The
+managed-shard case exercises both readers in a real two-host rollout. Integer
+averages are covered alongside count/sum/min/max, including unequal shard sizes,
+NULL and empty inputs, FILTER, mixed local/foreign states, and exact numeric
+results. Unsupported average signatures retain the existing execution path.
+The million-row reproduction returned 20 foreign partial rows instead of
+1,000,000 source rows on both majors, with identical ten-row final results for a
+query containing count, sum and integer average.
+See [the feature guide](../../pgwrh_fdw/18/PARTIAL_AGGREGATES.md) for signatures,
+fallback restrictions and reproduction commands.
+
+Removing the single feature parent from disposable copies of both aggregates
+restored their pre-feature trees byte for byte. Both existing directory moves
+were refreshed and checked for exact aggregate-tree identity.
