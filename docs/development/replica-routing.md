@@ -270,7 +270,7 @@ existing read transactions, joining replicas and replica restart during rotation
 Backup/restore tests preserve both preparing and switching generations. These are
 functional lifecycle tests.
 
-Version 1.0.0 is the only installable version of all four bundled extensions.
+Version 1.0.0-alpha1 is the only installable version of all four bundled extensions.
 Install the release files on every node and initialize a fresh database with
 `CREATE EXTENSION pgwrh CASCADE`. No migration or upgrade scripts are provided.
 Worker execution uses pg_background's cookie-protected v2 API; the integration

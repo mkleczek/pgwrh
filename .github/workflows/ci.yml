@@ -1,4 +1,4 @@
-name: Bundled extensions on PostgreSQL 18
+name: Bundled extensions on PostgreSQL 18 and 19
 on:
   push:
   pull_request:

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-name: FDW regressions on PostgreSQL 18
+name: FDW regressions on PostgreSQL 18 and 19
 on:
   workflow_call:
     inputs:
@@ -12,9 +12,15 @@ permissions:
   contents: read
 
 jobs:
-  pg18:
+  fdw:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {pg: 18, release: '18.3', commit: '62d6c7d3df6287f1bd83199c1a746e50d31571a0'}
+          - {pg: 19, release: '19 Beta 3', commit: '3638289fb57bdabec00deda98ee9624a35f5d66a'}
     steps:
       - uses: actions/checkout@v4
         if: inputs.source_artifact == ''
@@ -28,18 +34,20 @@ jobs:
       - name: Unpack the reviewed release source
         if: inputs.source_artifact != ''
         run: tar -xzf release-source/*.tar.gz --strip-components=1
+      - name: Verify the pristine upstream import workflow
+        run: python3 test/pgwrh_fdw/test_upstream_import.py
       - name: Fetch the pinned PostgreSQL release
         uses: actions/checkout@v4
         with:
           repository: postgres/postgres
-          ref: 62d6c7d3df6287f1bd83199c1a746e50d31571a0
+          ref: ${{ matrix.commit }}
           path: .ci/postgres-source
           persist-credentials: false
       - name: Install build and TAP dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bison flex zlib1g-dev libipc-run-perl
-      - name: Build PostgreSQL 18.3 and stock postgres_fdw
+      - name: Build PostgreSQL ${{ matrix.release }} and FDW test dependencies
         run: |
           cd .ci/postgres-source
           ./configure --prefix="$RUNNER_TEMP/pgsql" --without-icu --without-readline --enable-cassert
@@ -47,6 +55,7 @@ jobs:
           make install
           make -C contrib/auto_explain -j2 install
           make -C contrib/postgres_fdw -j2 install
+          make -C contrib/citext -j2 install
           echo "PG_CONFIG=$RUNNER_TEMP/pgsql/bin/pg_config" >> "$GITHUB_ENV"
           echo "PG_SOURCE=$GITHUB_WORKSPACE/.ci/postgres-source" >> "$GITHUB_ENV"
       - name: Build, stage, and uninstall the combined and SQL-only packages
@@ -59,12 +68,12 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: postgres-18-test-logs
+          name: postgres-${{ matrix.pg }}-test-logs
           path: |
-            test/pgwrh_fdw/regression.diffs
-            test/pgwrh_fdw/regression.out
-            test/pgwrh_fdw/results/
-            test/pgwrh_fdw/output_iso/
-            test/pgwrh_fdw/tmp_check/
-            test/pgwrh_fdw/log/
+            pgwrh_fdw/${{ matrix.pg }}/regression.diffs
+            pgwrh_fdw/${{ matrix.pg }}/regression.out
+            pgwrh_fdw/${{ matrix.pg }}/results/
+            pgwrh_fdw/${{ matrix.pg }}/output_iso/
+            pgwrh_fdw/${{ matrix.pg }}/tmp_check/
+            pgwrh_fdw/${{ matrix.pg }}/log/
             /tmp/pgwrh-fdw-*/postgres.log

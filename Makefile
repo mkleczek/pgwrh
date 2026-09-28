@@ -19,15 +19,19 @@
 PG_CONFIG ?= pg_config
 PYTHON ?= python3
 BUILD = .build
+PG_MAJOR = $(shell $(PG_CONFIG) --version | sed -E 's/^PostgreSQL ([0-9]+).*/\1/')
+FDW_DIR = pgwrh_fdw/$(PG_MAJOR)
 TESTGRES_EXT_ROOT = $(abspath $(BUILD)/testgres-ext)
 TEST_STAGE_ROOT = $(abspath $(BUILD)/test-stage)
 
 ifdef NO_PGXS
 WITH_LSN_WAIT ?= 0
 WITH_FDW ?= 0
+WITH_GIST_EXTRA ?= 0
 else
 WITH_LSN_WAIT ?= 1
 WITH_FDW ?= 1
+WITH_GIST_EXTRA ?= 1
 endif
 
 EXTENSIONS = pgwrh pgwrh_ui
@@ -43,6 +47,12 @@ $(error WITH_FDW=1 requires PGXS; omit NO_PGXS)
 endif
 EXTENSIONS += pgwrh_fdw
 endif
+ifeq ($(WITH_GIST_EXTRA),1)
+ifdef NO_PGXS
+$(error WITH_GIST_EXTRA=1 requires PGXS; omit NO_PGXS)
+endif
+EXTENSIONS += pgwrh_gist_extra
+endif
 
 ALL_TARGETS = $(addsuffix -all,$(EXTENSIONS))
 INSTALL_TARGETS = $(addsuffix -install,$(EXTENSIONS))
@@ -53,9 +63,6 @@ all: $(ALL_TARGETS)
 install: $(INSTALL_TARGETS)
 uninstall: $(UNINSTALL_TARGETS)
 clean: $(CLEAN_TARGETS)
-ifeq ($(WITH_FDW),1)
-	$(MAKE) -C test/pgwrh_fdw clean PG_CONFIG="$(PG_CONFIG)"
-endif
 	rm -rf $(BUILD)
 
 $(ALL_TARGETS):
@@ -89,6 +96,9 @@ test-stage: all
 ifeq ($(WITH_FDW),1)
 	$(MAKE) -C pgwrh_fdw stage PG_CONFIG="$(PG_CONFIG)" STAGE_DIR="$(TEST_STAGE_ROOT)"
 endif
+ifeq ($(WITH_GIST_EXTRA),1)
+	$(MAKE) -C pgwrh_gist_extra stage PG_CONFIG="$(PG_CONFIG)" STAGE_DIR="$(TEST_STAGE_ROOT)"
+endif
 
 test-wait: test-stage
 	$(PYTHON) -m pytest test/pgwrh_wait -v
@@ -105,12 +115,16 @@ test-ui: testgres-ext
 
 ifeq ($(WITH_FDW),1)
 test-fdw: pgwrh_fdw-all
-	PG_CONFIG="$(PG_CONFIG)" $(PYTHON) test/pgwrh_fdw/test_context.py
-	PG_CONFIG="$(PG_CONFIG)" $(PYTHON) test/pgwrh_fdw/run-upstream.py
-	$(PYTHON) test/pgwrh_fdw/check-symbols.py
+	PG_CONFIG="$(PG_CONFIG)" $(PYTHON) $(FDW_DIR)/test_limit_pushdown.py
+	PG_CONFIG="$(PG_CONFIG)" $(PYTHON) $(FDW_DIR)/test_context.py
+	@set -e; for suite in $(sort $(wildcard $(FDW_DIR)/test_feature_*.py)); do \
+		PG_CONFIG="$(PG_CONFIG)" $(PYTHON) "$$suite"; \
+	done
+	PG_CONFIG="$(PG_CONFIG)" $(PYTHON) $(FDW_DIR)/run-upstream.py
+	$(PYTHON) $(FDW_DIR)/check-symbols.py
 
 test-fdw-tap: pgwrh_fdw-all
-	PG_CONFIG="$(PG_CONFIG)" $(PYTHON) test/pgwrh_fdw/run-tap.py
+	PG_CONFIG="$(PG_CONFIG)" $(PYTHON) $(FDW_DIR)/run-tap.py
 else
 test-fdw test-fdw-tap:
 	$(error test-fdw requires WITH_FDW=1)
@@ -119,6 +133,23 @@ endif
 test-packaging:
 	PG_CONFIG="$(PG_CONFIG)" $(PYTHON) test/check-install.py
 
+ifeq ($(WITH_GIST_EXTRA),1)
+test-gist: pgwrh_gist_extra-all
+	$(MAKE) -C pgwrh_gist_extra stage PG_CONFIG="$(PG_CONFIG)" STAGE_DIR="$(TEST_STAGE_ROOT)"
+	$(PYTHON) -m pytest test/pgwrh_gist_extra -v
+ifeq ($(WITH_FDW),1)
+test-gist-integration: test-gist pgwrh_fdw-all
+	$(MAKE) -C pgwrh_fdw stage PG_CONFIG="$(PG_CONFIG)" STAGE_DIR="$(TEST_STAGE_ROOT)"
+	$(PYTHON) -m pytest test/pgwrh_gist_extra_integration -v
+else
+test-gist-integration:
+	$(error test-gist-integration requires WITH_FDW=1)
+endif
+else
+test-gist test-gist-integration:
+	$(error test-gist requires WITH_GIST_EXTRA=1)
+endif
+
 .PHONY: all install uninstall clean prepare testgres-ext test-stage \
-	test-pgwrh test-ui test-wait test-fdw test-fdw-tap test-packaging \
+	test-pgwrh test-ui test-wait test-fdw test-fdw-tap test-gist test-gist-integration test-packaging \
 	$(ALL_TARGETS) $(INSTALL_TARGETS) $(CLEAN_TARGETS) $(UNINSTALL_TARGETS)

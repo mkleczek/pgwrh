@@ -15,7 +15,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 relocatable = false
-default_version = '1.0.0'
+default_version = '1.0.0-alpha1'
 
 schema = pgwrh
 requires = 'pg_background,pgwrh_fdw'

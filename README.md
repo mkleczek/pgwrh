@@ -15,24 +15,40 @@ subscription has applied changes through a specified **log sequence number
 Start with the [local quickstart](#quickstart), then read [cluster concepts and
 rollouts](docs/overview.md).
 
+**1.0.0-alpha1 is a testing prerelease.** Try it with disposable or recoverable
+data and share feedback before 1.0.0. APIs and configuration may change, and an
+in-place upgrade to later releases is not promised. See the [alpha release
+notes](docs/releases/1.0.0-alpha1.md) for limitations and useful test scenarios.
+
+The development branch also prepares **PostgreSQL 19 Beta 3** support. See the
+[version and preview guide](docs/development/postgres-versions.md); published
+alpha1 artifacts remain PostgreSQL 18 builds.
+
 ## Components
 
-The pgwrh 1.0.0 distribution contains four PostgreSQL 18 extensions:
+The development bundle contains five extensions for PostgreSQL 18 and the
+PostgreSQL 19 preview:
 
 | Extension | Purpose | Where to enable it |
 | --- | --- | --- |
 | `pgwrh` | Manages shard placement, replication and configuration rollouts | Controller and replicas |
 | `pgwrh_fdw` | Foreign data wrapper (FDW) for queries and connections between databases | Enabled automatically by `CREATE EXTENSION pgwrh CASCADE` |
-| `pgwrh_wait` | Lets a read wait until a specified write has been replicated | Optional, on subscribers serving reads that need this guarantee |
+| `pgwrh_wait` | Issues session commit tokens and waits for replicated writes | Optional, on the controller issuing tokens and subscribers serving guarded reads |
 | `pgwrh_ui` | Browser console for monitoring and managing the cluster | Optional, controller only |
+| `pgwrh_gist_extra` | Additional GiST operators for text-array searches | Optional, on databases using these indexes or shipping these operators |
 
-The core also requires `pg_background` 1.6 or newer to run background tasks.
+The development bundle uses `pg_background` 2.0.3 to run background tasks on
+both PostgreSQL majors.
 Packages install it as a dependency; the container and Nix bundle include it.
 The console uses **PostgREST**, a separate web service that connects to the
 controller database. See [console setup](pgwrh_ui/README.md).
 
-`pgwrh_fdw` and `pgwrh_wait` can also be used independently of the core.
+`pgwrh_fdw`, `pgwrh_wait` and `pgwrh_gist_extra` can also be used independently of the core.
 PostgreSQL's stock `postgres_fdw` extension is not required.
+The GiST extension requires PostgreSQL's `btree_gist`; see its
+[installation and operator guide](pgwrh_gist_extra/README.md).
+Published alpha1 packages contain the original four extensions and predate
+`pgwrh_gist_extra`.
 
 ## Quickstart
 
@@ -48,12 +64,12 @@ distributes four example shards, and verifies that both replicas return the same
 100 rows. When it prints **Quickstart verified**, open [the
 console](http://localhost:13000/rpc/index?group_id=demo).
 
-The default image is `ghcr.io/mkleczek/pgwrh:1.0.0-pg18`. If it has not yet been
+The default image is `ghcr.io/mkleczek/pgwrh:1.0.0-alpha1-pg18`. If it has not yet been
 published, build and select a local image first:
 
 ```sh
-docker build -f packaging/container/Dockerfile -t pgwrh:1.0.0-local .
-PGWRH_IMAGE=pgwrh:1.0.0-local bash examples/compose/quickstart.sh
+docker build -f packaging/container/Dockerfile -t pgwrh:1.0.0-alpha1-local .
+PGWRH_IMAGE=pgwrh:1.0.0-alpha1-local bash examples/compose/quickstart.sh
 ```
 
 The demo uses fixed local credentials and loopback ports. See [the container
@@ -81,12 +97,13 @@ or removing the demo.
 Adding replicas can move shard copies. Placement favors retaining existing
 copies, but changes to copy counts, zone preferences or available hosts can
 require additional copying. Replication redundancy does not replace controller
-backups or a PostgreSQL high-availability plan.
+backups or a PostgreSQL high-availability plan. See [controller HA and
+failover](docs/controller-ha.md) for standby configuration and promotion checks.
 
 ## Installation
 
-The **1.0.0** bundle targets **PostgreSQL 18**. All four extensions share version
-1.0.0. This release supports fresh installation only; it includes no upgrade
+The **1.0.0-alpha1** bundle targets **PostgreSQL 18**. All four extensions share version
+1.0.0-alpha1. This release supports fresh installation only; it includes no upgrade
 scripts for earlier installations.
 
 | Environment | Guide |
@@ -120,10 +137,10 @@ Writes go to the controller. Use [replication visibility
 barriers](docs/lsn-wait.md) when a read must observe a known write. Queries
 spanning replicas do not have a single cluster-wide snapshot.
 
-Schema changes require operator coordination; version 1.0.0 has no coordinated
+Schema changes require operator coordination; version 1.0.0-alpha1 has no coordinated
 schema-change rollout facility. Placement rollouts do not make schema changes
 atomic across the cluster. Read the [recovery guide](docs/recovery.md) before
-deploying and the [release notes](docs/releases/1.0.0.md) for supported targets
+deploying and the [release notes](docs/releases/1.0.0-alpha1.md) for supported targets
 and limits.
 
 For source layout, tests and implementation details, see the [contributor

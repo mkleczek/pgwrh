@@ -10,10 +10,10 @@ def test_streaming_commit_and_abort(pair, streaming):
     publisher, subscriber = pair
     subscriber.execute(f"ALTER SUBSCRIPTION sub SET (streaming='{streaming}')")
     with block_apply(subscriber) as lock:
-        publisher.execute("""INSERT INTO data SELECT i, repeat(md5(i::text),100)
-            FROM generate_series(1,2000) i""")
-        target = publisher.execute("SELECT pg_current_wal_insert_lsn()::text")[0][0]
-        publisher.execute("UPDATE data SET value='heartbeat' WHERE id=0")
+        with publisher.connect(autocommit=True) as writer:
+            writer.execute("""INSERT INTO data SELECT i, repeat(md5(i::text),100)
+                FROM generate_series(1,2000) i""")
+            target = writer.execute("SELECT pgwrh.last_commit_lsn()::text")[0][0]
         apply_blocked(subscriber)
         if streaming == "parallel":
             eventually(lambda: subscriber.execute("""SELECT EXISTS(
@@ -94,8 +94,9 @@ def test_subscription_identity_does_not_follow_reused_name(pair):
 def test_unpublished_wal_does_not_advance_monitor(pair):
     publisher, subscriber = pair
     before = subscriber.execute("SELECT pgwrh.applied_lsn('sub')")[0][0]
-    publisher.execute("CREATE TABLE unrelated(id int); INSERT INTO unrelated VALUES(1)")
-    target = publisher.execute("SELECT pg_current_wal_insert_lsn()::text")[0][0]
+    with publisher.connect(autocommit=True) as writer:
+        writer.execute("CREATE TABLE unrelated(id int); INSERT INTO unrelated VALUES(1)")
+        target = writer.execute("SELECT pgwrh.last_commit_lsn()::text")[0][0]
     with pytest.raises(DatabaseError, match="timed out"):
         subscriber.execute(f"SELECT pgwrh.wait_for_lsn('sub','{target}',200)")
     assert subscriber.execute("SELECT pgwrh.applied_lsn('sub')")[0][0] == before
