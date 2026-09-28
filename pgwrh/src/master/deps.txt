@@ -12,3 +12,6 @@ implementation-views    snapshot
 helpers                 placement
 placement               snapshot
 tables                  monitoring
+tables                  structure
+structure               snapshot
+structure               api-replica

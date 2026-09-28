@@ -117,11 +117,26 @@ A typical rollout proceeds as follows, with management calls on the controller:
    again before accepting the configuration. Some replica cleanup and optional
    aggregation can continue afterward.
 
+Partition membership follows these rollout boundaries too. New partitions enter
+replicas when a rollout snapshots them. Dropping or detaching a partition on the
+controller keeps its existing replica copies and routes until a committed
+rollout retires it. A dropped source can no longer supply writes; those retained
+copies contain its last replicated data. pgwrh saves the partition tree with each
+configuration so missing controller catalog entries do not remove deployed
+partitions early. Existing partitions still follow live bound and parent changes.
+
 To abandon a rollout, call `pgwrh.rollback_rollout(group_id)`. Replicas restore
 current routes before copies needed by the abandoned target can be released.
 Wait for their acknowledgements before starting another rollout. An unavailable
 replica can delay commit or rollback cleanup; a timeout does not make its data
 safe to remove.
+
+Rollback also retains the abandoned target's partition metadata and publications
+until replicas acknowledge restored routes. Once released, obsolete attachments
+and subscriptions are removed. Publications keep sending changes until replicas
+report that they have unsubscribed. If a later rollout reuses an unsubscribed
+partition, replicas copy it again; an old publication name alone does not
+establish that its table is still subscribed.
 
 The [AZ example](az-affinity.md#example-prefer-az-a) shows pending policy
 changes. For a complete runnable setup, use the [Compose

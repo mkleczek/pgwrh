@@ -6,7 +6,7 @@ CREATE PUBLICATION pgwrh_controller_ping FOR TABLE ping WITH (PUBLISH = 'insert'
 SELECT add_ext_dependency('pg_publication', (SELECT oid FROM pg_publication WHERE pubname = 'pgwrh_controller_ping'));
 
 CREATE OR REPLACE FUNCTION sync_publications() RETURNS void
-SET SEARCH_PATH FROM CURRENT
+SET search_path = pg_catalog, "@extschema@", pg_temp
 LANGUAGE plpgsql AS
 $$DECLARE
     r record;
@@ -25,10 +25,11 @@ BEGIN
                 EXISTS (SELECT 1 FROM
                     shard
                         JOIN replication_group USING (replication_group_id)
+                        JOIN replication_group_config_lock USING (replication_group_id, version)
                     WHERE
                             (schema_name, table_name) = (nspname, relname)
                         AND
-                            version IN (current_version, target_version)
+                            (version IN (current_version, target_version) OR rollback_unlock IS NOT NULL)
                 )
             AND
                 NOT EXISTS (SELECT 1 FROM
@@ -43,7 +44,7 @@ BEGIN
         PERFORM add_ext_dependency('pg_publication', (SELECT oid FROM pg_publication WHERE pubname = r.pubname::text));
     END LOOP;
     FOR r IN
-        SELECT format('DROP PUBLICATION %I CASCADE',
+        SELECT format('DROP PUBLICATION IF EXISTS %I CASCADE',
                         pubname) stmt
         FROM
             pg_publication p
@@ -51,12 +52,20 @@ BEGIN
                 is_dependent_object('pg_publication', oid)
             AND
                 pubname NOT IN ('pgwrh_controller_ping')
+            -- Keep publishing until subscribers acknowledge removal, including
+            -- copies still in initial sync. An immediate rerollout can otherwise
+            -- reuse a ready pg_subscription_rel row that missed intervening WAL.
+            AND NOT EXISTS (
+                SELECT 1 FROM replication_group_member m
+                WHERE m.subscribed_publications ? p.pubname::text
+            )
             AND
                 NOT EXISTS (SELECT 1 FROM
                     shard s
                         JOIN replication_group USING (replication_group_id)
+                        JOIN replication_group_config_lock USING (replication_group_id, version)
                     WHERE
-                        version IN (current_version, target_version)
+                        (version IN (current_version, target_version) OR rollback_unlock IS NOT NULL)
                         AND pubname(schema_name, table_name) = p.pubname
                 )
     LOOP
@@ -67,12 +76,19 @@ END
 $$;
 
 CREATE OR REPLACE FUNCTION sync_publications_trigger() RETURNS TRIGGER
-SET SEARCH_PATH FROM CURRENT
+SECURITY DEFINER
+SET search_path = pg_catalog
 LANGUAGE plpgsql AS
 $$BEGIN
-    PERFORM sync_publications();
+    PERFORM "@extschema@".sync_publications();
     RETURN NULL;
 END$$;
 
 CREATE OR REPLACE TRIGGER sync_publications AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON replication_group
 FOR EACH STATEMENT EXECUTE FUNCTION sync_publications_trigger();
+
+CREATE TRIGGER sync_publications_on_release AFTER UPDATE OF subscribed_publications ON replication_group_member
+-- Recheck even unchanged reports: concurrent releases can each have observed
+-- the other's preceding report, conservatively retaining the publication.
+FOR EACH ROW
+EXECUTE FUNCTION sync_publications_trigger();

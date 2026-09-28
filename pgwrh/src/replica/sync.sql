@@ -640,29 +640,32 @@ scripts (async, transactional, description, commands) AS (
     GROUP BY c.root_rel_id
 
     UNION ALL
-    -- Subscriptions
+    -- Publication names survive a refresh that removes their table membership.
+    -- Only pg_subscription_rel proves that a shard is already being copied.
     SELECT
         FALSE,
         FALSE,
         format('Adding missing shards [%s] to subscription [%s]', string_agg((sc).reg_class::text, ', '), s.subname),
-        ARRAY[
-            format('TRUNCATE %s',
-                string_agg((sc).reg_class::text, ', ')
-            ),
-            format('ALTER SUBSCRIPTION %I ADD PUBLICATION %s WITH (copy_data = true)',
+        array_remove(ARRAY[
+            CASE WHEN count(*) FILTER (WHERE sr.srrelid IS NULL) > 0 THEN format('TRUNCATE %s',
+                string_agg((sc).reg_class::text, ', ') FILTER (WHERE sr.srrelid IS NULL)
+            ) END,
+            format('ALTER SUBSCRIPTION %I SET PUBLICATION %s WITH (copy_data = true)',
                 s.subname,
-                string_agg(quote_ident(sc.pubname), ', ')
+                (SELECT string_agg(quote_ident(name), ', ' ORDER BY name)
+                 FROM (SELECT DISTINCT unnest(s.subpublications || array_agg(sc.pubname)) AS name) pubs)
             )
-        ]
+        ], NULL)
     FROM
         local_shard sc JOIN owned_subscription s USING (subname)
+            LEFT JOIN pg_subscription_rel sr ON sr.srsubid = s.oid AND sr.srrelid = sc.reg_class
     WHERE
-        NOT EXISTS (
+        sr.srrelid IS NULL OR NOT EXISTS (
             SELECT 1 FROM unnest(s.subpublications) AS pub(name)
             WHERE pub.name = sc.pubname
         )
     GROUP BY
-        s.subname
+        s.subname, s.subpublications
 
     UNION ALL
     -- create missing indexes

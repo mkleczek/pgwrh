@@ -337,6 +337,7 @@ BEGIN
         WHERE replication_group_id = NEW.replication_group_id AND rollback_unlock;
         UPDATE "@extschema@".replication_group_config_lock SET rollback_unlock = NULL
         WHERE replication_group_id = NEW.replication_group_id AND rollback_unlock = FALSE;
+        PERFORM "@extschema@".sync_publications();
     END IF;
     RETURN NULL;
 END

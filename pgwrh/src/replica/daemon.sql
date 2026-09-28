@@ -264,7 +264,9 @@ BEGIN
                     END IF;
                 ELSE
                     FOREACH cmd IN ARRAY r.commands LOOP
-                        PERFORM "@extschema@".exec_script(cmd);
+                        -- A failed subscription change must not be followed by
+                        -- truncating a copy that is still subscribed.
+                        EXIT WHEN NOT "@extschema@".exec_script(cmd);
                     END LOOP;
                 END IF;
             END IF;

@@ -72,7 +72,8 @@ CREATE FOREIGN TABLE fdw_replica_state (
     users json,
     prepared_remote_shards json,
     serving_subtrees json,
-    credential_generation uuid
+    credential_generation uuid,
+    subscribed_publications jsonb
 ) SERVER replica_controller
 OPTIONS (table_name 'replica_state');
 

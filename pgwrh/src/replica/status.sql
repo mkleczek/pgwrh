@@ -151,6 +151,12 @@ BEGIN
     IF NOT pg_try_advisory_xact_lock(2895359559) THEN RETURN; END IF;
     UPDATE "@extschema@".fdw_replica_state
         SET
+            subscribed_publications = (
+                SELECT coalesce(jsonb_agg(DISTINCT name ORDER BY name), '[]'::jsonb)
+                FROM pg_subscription s JOIN "@extschema@".shard_subscription USING (subname),
+                    LATERAL unnest(s.subpublications) pubs(name)
+                WHERE s.subdbid = (SELECT oid FROM pg_database WHERE datname = current_database())
+            ),
             credential_generation = (
                 SELECT c.generation FROM "@extschema@".fdw_credential_state c
                 WHERE NOT EXISTS (

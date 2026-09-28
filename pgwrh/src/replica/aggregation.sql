@@ -43,14 +43,25 @@ WHERE EXISTS (
 );
 
 CREATE VIEW current_shard_attachment AS
-WITH structure AS MATERIALIZED (
+WITH RECURSIVE structure AS MATERIALIZED (
     SELECT DISTINCT * FROM shard_structure_r
-), managed AS (
+), seeds AS (
     SELECT root_rel_id, rel_id FROM structure
     UNION
     SELECT root_rel_id, slot_rel_id FROM structure WHERE level > 0
     UNION
     SELECT root_rel_id, rel_id FROM remote_node
+), managed AS (
+    SELECT * FROM seeds
+    UNION
+    -- Include actual owned descendants even after their logical node vanished
+    -- from the desired tree. Seed detached subtrees too, so stale leaves cannot
+    -- stay attached inside an old aggregate and block subscription cleanup.
+    SELECT m.root_rel_id, c.rel_id
+    FROM managed m JOIN rel p ON p.rel_id = m.rel_id
+        JOIN pg_inherits i ON i.inhparent = p.reg_class
+        JOIN rel c ON c.reg_class = i.inhrelid
+        JOIN owned_obj o ON o.classid = 'pg_class'::regclass AND o.objid = c.reg_class
 )
 SELECT m.root_rel_id, p.rel_id AS parent_rel_id, c.rel_id, c.reg_class,
        p.reg_class AS parent_reg_class, c.bound

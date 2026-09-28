@@ -126,6 +126,8 @@ CREATE TABLE  replication_group_member (
     serving_subtrees json NOT NULL DEFAULT '[]',
     users json NOT NULL DEFAULT '[]',
     credential_generation uuid,
+    -- Includes in-progress table copies, unlike subscribed_local_shards readiness.
+    subscribed_publications jsonb NOT NULL DEFAULT '[]',
 
     PRIMARY KEY (replication_group_id, availability_zone, host_id)
 );
@@ -286,6 +288,28 @@ CREATE TABLE shard (
     FOREIGN KEY (replication_group_id, version)
         REFERENCES replication_group_config_lock(replication_group_id, version)
         ON DELETE CASCADE
+);
+
+-- Persist names and DDL, rather than OIDs which disappear on controller DROP.
+CREATE TABLE shard_structure_snapshot (
+    replication_group_id text NOT NULL,
+    version config_version NOT NULL,
+    schema_name text NOT NULL,
+    table_name text NOT NULL,
+    level int NOT NULL,
+    parent_schema_name text,
+    parent_table_name text,
+    bound text,
+    parent_partkeydef text,
+    node_partkeydef text,
+    is_leaf boolean NOT NULL,
+    root_column_clause text,
+    local_constraint_clause text,
+    root_schema_name text NOT NULL,
+    root_table_name text NOT NULL,
+    PRIMARY KEY (replication_group_id, version, schema_name, table_name),
+    FOREIGN KEY (replication_group_id, version)
+        REFERENCES replication_group_config_lock ON DELETE CASCADE
 );
 
 CREATE TABLE shard_assigned_host (

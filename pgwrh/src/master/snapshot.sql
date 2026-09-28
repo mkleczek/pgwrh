@@ -1,5 +1,5 @@
 -- name: master-snapshot
--- requires: master-implementation-views master-placement
+-- requires: master-implementation-views master-placement master-structure
 
 -- pgwrh
 -- Copyright (C) 2024  Michal Kleczek
@@ -66,5 +66,8 @@ $$
             CROSS JOIN LATERAL "@extschema@".select_shard_hosts(
                 s.replication_group_id, s.version, s.sharding_key_value, s.replica_count,
                 s.min_replica_count_per_availability_zone,
-                s.min_replica_count_after_az_failure, s.az_affinity) h
+                s.min_replica_count_after_az_failure, s.az_affinity) h;
+    INSERT INTO shard_structure_snapshot
+    SELECT * FROM live_shard_structure
+    WHERE replication_group_id = _replication_group_id AND version = _version
 $$;
