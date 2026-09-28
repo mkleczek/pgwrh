@@ -87,6 +87,25 @@ changes. For a complete runnable setup, use the [Compose
 quickstart](containers.md). Its [seed SQL](../examples/compose/seed.sql) and
 [rollout script](../examples/compose/bootstrap.sh) demonstrate the SQL API.
 
+Run `pgwrh.configure_controller(...)` as a database administrator. Choosing a
+controller trusts its metadata for subscription setup and replica DDL. The
+function is not executable by PUBLIC and runs with the caller's privileges;
+granting EXECUTE alone does not grant the administrative privileges it needs.
+
+Installing updated extension files does not change functions in databases where
+pgwrh is already installed. To apply this restriction to an existing installation
+with the seven-argument API, run the following as an administrator in every
+controller and replica database:
+
+```sql
+BEGIN;
+ALTER FUNCTION pgwrh.configure_controller(text, text, text, text, boolean, real, text)
+    SECURITY INVOKER;
+REVOKE ALL ON FUNCTION pgwrh.configure_controller(text, text, text, text, boolean, real, text)
+    FROM PUBLIC;
+COMMIT;
+```
+
 ## Read consistency and recovery
 
 Readiness means a replica has met the rollout's requirements. It is not a
