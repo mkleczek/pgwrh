@@ -43,7 +43,7 @@ its administrator:
 
 ```sql
 CREATE EXTENSION pgwrh CASCADE;
--- Optional, for subscribers using replication visibility barriers:
+-- Optional, for controller commit tokens and subscriber visibility barriers:
 CREATE EXTENSION pgwrh_wait;
 ```
 

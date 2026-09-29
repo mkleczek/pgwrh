@@ -23,6 +23,53 @@ The Nix environment stages the extensions and provides PostgreSQL and Python:
 nix-shell --run 'pgwrh-test test/pgwrh -q'
 ```
 
+## Heterogeneous PostgreSQL versions
+
+Run controllers and replicas on different majors in one pytest process:
+
+```sh
+nix develop .#tests-mixed --command bash test/run-mixed-versions.sh
+```
+
+The runner builds and stages both FDWs independently under
+`.build/mixed-versions/18` and `.build/mixed-versions/19`. Its eight topology tests cover
+all six heterogeneous triples of an 18/19 controller and two replicas, plus
+scale-out from two same-major replicas to a third replica on the other major
+in both directions. They check actual server majors, partition/bootstrap keys,
+initial copy, inserts/updates/deletes, typed row and aggregate results, and
+committed shard movement. Deterministic placement gives every replica local
+and remote shards; executed foreign scans verify that reads reach peers.
+Controller metadata FDW traffic and logical replication run across majors too.
+
+Without Nix, install each PostgreSQL major with its matching `pg_background`
+2.0.3 and the usual build/Python dependencies, then supply `PG_CONFIG_18`,
+`PG_CONFIG_19`, `PGWRH_TEST_BIN_DIR_18`, and `PGWRH_TEST_BIN_DIR_19` to the same
+runner. Binary directories must contain the complete server/client tools.
+The runner rejects missing installations or the wrong major before building.
+
+To rerun only the tests after staging, set `PGWRH_TEST_BIN_DIR_18/19` and
+`PGWRH_TEST_EXT_PATHS_18/19` to the corresponding binary/staging directories,
+then run `python3 -m pytest test/pgwrh/mixed_versions -v`. The per-major variables
+are literal names ending in `_18` and `_19`; single-major variables are never
+used as fallbacks. A wrong extension ABI fails when PostgreSQL loads it.
+
+This suite is excluded from recursive pytest discovery so single-major test
+environments still work. Selecting its directory explicitly requires both
+installations and fails if either is missing. Functional CI, including release
+source validation, runs it in a separate job and rejects skipped cases. This
+tests live heterogeneous clusters and the maintenance cases below; it does not
+test cross-major physical replication.
+
+`test_upgrade.py` adds real 18-to-19 `pg_upgrade` operations for a replica and
+controller, and fresh-node replacement for both roles. Continuous read oracles,
+subscription/origin and slot checks, and copy-worker logs distinguish read
+availability and replication continuity from reconciliation. All four paths must
+pass. The replica daemon must return while subscriptions are still disabled,
+without a wake-up ping or test-only marker repair. See the
+[upgrade analysis](upgrade-reconciliation.md) for the original failure evidence
+and the implemented registry/supervisor design. Focused lifecycle checks live in
+`test_managed_objects.py` and `test_daemon_supervisor.py`.
+
 ## Controller backup and restore
 
 `test/pgwrh/test_backup_restore.py` performs real `pg_dump`, `pg_dumpall` and
@@ -109,7 +156,13 @@ nix develop .#tests-18 --command python3 test/pgwrh_fdw/test_jj_layout.py
 ```
 
 No Python packages are required: tests use Python 3's standard library and the
-selected installation's libpq. Run as an ordinary OS user, not root:
+selected installation's libpq. Install the matching PostgreSQL contrib modules
+`postgres_fdw` (coexistence and shippability comparisons), `citext` (lookup
+equality versus partition-routing semantics), and `auto_explain` (actual remote
+parallel-worker checks). The Nix test environments include all three; source
+builds need `make -C contrib/postgres_fdw install`, `make -C contrib/citext install`,
+and `make -C contrib/auto_explain install` from the PostgreSQL source directory.
+Run as an ordinary OS user, not root:
 
 ```sh
 export PG_CONFIG=/path/to/postgresql-18/bin/pg_config
@@ -138,7 +191,10 @@ setting. It runs on both majors through `make test-fdw`.
 The [lookup-join suite](../../pgwrh_fdw/docs/lookup-joins.md) exercises remote
 INNER/SEMI matching, retained values, generic executions, overflow, pruning,
 local leaves, virtual routing, savepoints, cancellation and conservative
-fallbacks. It runs through `make test-fdw` on both majors. After staging with
+fallbacks. Type coverage compares with stock postgres_fdw WHERE pushdown,
+including built-ins, extension types, nested array/composite transport,
+noninteger partition routing and safe broadcast when equality does not match
+the partition operator family. It runs through `make test-fdw` on both majors. After staging with
 `make testgres-ext`, run managed lookup/routing coverage with:
 
 ```sh

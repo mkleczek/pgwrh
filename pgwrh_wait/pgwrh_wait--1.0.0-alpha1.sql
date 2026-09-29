@@ -1,3 +1,11 @@
+CREATE FUNCTION last_commit_lsn()
+RETURNS pg_lsn
+AS 'MODULE_PATHNAME', 'pgwrh_last_commit_lsn'
+LANGUAGE C VOLATILE PARALLEL UNSAFE;
+
+COMMENT ON FUNCTION last_commit_lsn() IS
+'Commit-end LSN of this session''s last successful WAL-logged transaction; NULL before one commits. Retrieve after COMMIT on the same physical connection. Read-only transactions and rollbacks preserve the previous token.';
+
 CREATE FUNCTION applied_lsn(subscription_name text)
 RETURNS pg_lsn
 AS 'MODULE_PATHNAME', 'pgwrh_applied_lsn'

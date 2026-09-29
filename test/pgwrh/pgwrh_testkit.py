@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -123,6 +124,35 @@ def assert_shard_hosting_replica_count(
 
 
 @dataclass(frozen=True, slots=True)
+class PostgresInstallation:
+    """A server and its ABI-matched extension staging directory."""
+
+    major: int
+    bin_dir: str
+    extension_root: str
+
+    @classmethod
+    def from_env(cls, major: int) -> "PostgresInstallation":
+        names = (f"PGWRH_TEST_BIN_DIR_{major}", f"PGWRH_TEST_EXT_PATHS_{major}")
+        missing = [name for name in names if not os.environ.get(name)]
+        if missing:
+            raise RuntimeError(
+                "Mixed-version tests require " + ", ".join(missing)
+                + "; run bash test/run-mixed-versions.sh with both installations configured"
+            )
+        bin_dir, extension_root = (str(Path(os.environ[name]).resolve()) for name in names)
+        for executable in ("postgres", "initdb", "pg_ctl", "psql", "pg_upgrade"):
+            path = Path(bin_dir) / executable
+            if not path.is_file() or not os.access(path, os.X_OK):
+                raise RuntimeError(f"PostgreSQL {major}: missing executable {path}")
+        for extension in ("pgwrh", "pgwrh_fdw"):
+            path = Path(extension_root) / "extension" / f"{extension}.control"
+            if not path.is_file():
+                raise RuntimeError(f"PostgreSQL {major}: missing staged extension {path}")
+        return cls(major, bin_dir, extension_root)
+
+
+@dataclass(frozen=True, slots=True)
 class ReplicaSpec:
     name: str
     availability_zone: str = "default"
@@ -130,6 +160,7 @@ class ReplicaSpec:
     refresh_seconds: float = 0.1
     member_role: str | None = None
     dbname: str | None = None
+    installation: PostgresInstallation | None = None
 
     @property
     def login_role(self) -> str:
@@ -414,7 +445,12 @@ class PgwrhCluster:
     replicas: list[ReplicaHandle] = field(default_factory=list)
 
     def add_replica(self, replica: ReplicaSpec) -> ReplicaHandle:
-        node = self.node_factory(replica.name, **({'dbname': replica.dbname} if replica.dbname is not None else {}))
+        options = {}
+        if replica.dbname is not None:
+            options["dbname"] = replica.dbname
+        if replica.installation is not None:
+            options["installation"] = replica.installation
+        node = self.node_factory(replica.name, **options)
         handle = self.master.register_replica(replica, node)
         self.replicas.append(handle)
         return handle

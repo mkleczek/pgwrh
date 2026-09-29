@@ -5,11 +5,10 @@ from conftest import eventually
 
 
 def token(publisher, ident=1):
-    """Sample after COMMIT; a following published heartbeat covers any WAL gap."""
-    publisher.execute(f"INSERT INTO data VALUES ({ident}, 'write-{ident}')")
-    target = publisher.execute("SELECT pg_current_wal_insert_lsn()::text")[0][0]
-    publisher.execute("UPDATE data SET value = value || '.' WHERE id=0")
-    return target
+    """Obtain the write's exact commit end on the same physical connection."""
+    with publisher.connect(autocommit=True) as writer:
+        writer.execute(f"INSERT INTO data VALUES ({ident}, 'write-{ident}')")
+        return writer.execute("SELECT pgwrh.last_commit_lsn()::text")[0][0]
 
 
 def barrier(conn, target, subscription="sub", timeout=5000):

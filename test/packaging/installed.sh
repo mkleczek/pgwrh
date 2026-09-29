@@ -12,7 +12,7 @@ initdb -D "$test_root/data" -U postgres -A trust --no-locale >/dev/null
 cat >> "$test_root/data/postgresql.conf" <<CONF
 listen_addresses = ''
 unix_socket_directories = '$test_root'
-shared_preload_libraries = 'pgwrh_wait'
+shared_preload_libraries = 'pgwrh,pgwrh_wait'
 wal_level = logical
 max_worker_processes = 32
 CONF

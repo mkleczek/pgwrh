@@ -1,6 +1,6 @@
 EXTENSION = pgwrh_wait
 MODULE_big = pgwrh_wait
-OBJS = src/monitor.o src/wait.o
+OBJS = src/monitor.o src/wait.o src/commit.o
 DATA = pgwrh_wait--1.0.0-alpha1.sql
 
 PG_CONFIG ?= pg_config

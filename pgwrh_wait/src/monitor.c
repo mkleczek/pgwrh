@@ -251,6 +251,7 @@ _PG_init(void)
 	pgwrh_init_wait();
 	if (!process_shared_preload_libraries_in_progress)
 		return;
+	pgwrh_init_commit();
 	DefineCustomIntVariable("pgwrh.max_tracked_subscriptions",
 							"Maximum subscription identities tracked until restart.",
 							NULL, &max_subscriptions, 256, 1, 65536,
