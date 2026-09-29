@@ -32,7 +32,7 @@ nix develop .#tests-mixed --command bash test/run-mixed-versions.sh
 ```
 
 The runner builds and stages both FDWs independently under
-`.build/mixed-versions/18` and `.build/mixed-versions/19`. Its eight tests cover
+`.build/mixed-versions/18` and `.build/mixed-versions/19`. Its eight topology tests cover
 all six heterogeneous triples of an 18/19 controller and two replicas, plus
 scale-out from two same-major replicas to a third replica on the other major
 in both directions. They check actual server majors, partition/bootstrap keys,
@@ -57,8 +57,18 @@ This suite is excluded from recursive pytest discovery so single-major test
 environments still work. Selecting its directory explicitly requires both
 installations and fails if either is missing. Functional CI, including release
 source validation, runs it in a separate job and rejects skipped cases. This
-tests live heterogeneous clusters; it does not perform `pg_upgrade` or
-cross-major physical replication.
+tests live heterogeneous clusters and the maintenance cases below; it does not
+test cross-major physical replication.
+
+`test_upgrade.py` adds real 18-to-19 `pg_upgrade` operations for a replica and
+controller, and fresh-node replacement for both roles. Continuous read oracles,
+subscription/origin and slot checks, and copy-worker logs distinguish read
+availability and replication continuity from reconciliation. All four paths must
+pass. The replica daemon must return while subscriptions are still disabled,
+without a wake-up ping or test-only marker repair. See the
+[upgrade analysis](upgrade-reconciliation.md) for the original failure evidence
+and the implemented registry/supervisor design. Focused lifecycle checks live in
+`test_managed_objects.py` and `test_daemon_supervisor.py`.
 
 ## Controller backup and restore
 

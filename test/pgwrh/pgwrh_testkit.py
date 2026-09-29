@@ -141,7 +141,7 @@ class PostgresInstallation:
                 + "; run bash test/run-mixed-versions.sh with both installations configured"
             )
         bin_dir, extension_root = (str(Path(os.environ[name]).resolve()) for name in names)
-        for executable in ("postgres", "initdb", "pg_ctl", "psql"):
+        for executable in ("postgres", "initdb", "pg_ctl", "psql", "pg_upgrade"):
             path = Path(bin_dir) / executable
             if not path.is_file() or not os.access(path, os.X_OK):
                 raise RuntimeError(f"PostgreSQL {major}: missing executable {path}")
