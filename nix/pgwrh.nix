@@ -1,13 +1,13 @@
 { lib, postgresql, postgresqlBuildExtension, openssl, libkrb5 }:
 
-assert lib.versions.major postgresql.version == "18";
+assert builtins.elem (lib.versions.major postgresql.version) [ "18" "19" ];
 postgresqlBuildExtension {
   pname = "pgwrh";
-  version = "1.0.0";
+  version = "1.0.0-alpha1";
   src = lib.fileset.toSource {
     root = ../.;
     fileset = lib.fileset.intersection
-      (lib.fileset.unions [ ../Makefile ../LICENSE ../pgwrh ../pgwrh_ui ../pgwrh_fdw ../pgwrh_wait ])
+      (lib.fileset.unions [ ../Makefile ../LICENSE ../pgwrh ../pgwrh_ui ../pgwrh_fdw ../pgwrh_wait ../pgwrh_gist_extra ])
       (lib.fileset.fileFilter
         (file: !(lib.any file.hasExt [ "o" "so" "dylib" "bc" ]) && file.name != ".DS_Store")
         ../.);
@@ -18,12 +18,13 @@ postgresqlBuildExtension {
   enableParallelBuilding = true;
   postInstall = ''
     install -Dm644 LICENSE "$out/share/doc/pgwrh/LICENSE"
-    install -Dm644 pgwrh_fdw/COPYRIGHT "$out/share/doc/pgwrh/FDW-COPYRIGHT"
+    install -Dm644 pgwrh_fdw/${lib.versions.major postgresql.version}/COPYRIGHT "$out/share/doc/pgwrh/FDW-COPYRIGHT"
+    install -Dm644 pgwrh_gist_extra/LICENSE "$out/share/doc/pgwrh/GIST-EXTRA-LICENSE"
   '';
   meta = {
-    description = "Sharding and replica read consistency for PostgreSQL 18";
+    description = "Sharding and replica read consistency for PostgreSQL 18 and 19";
     homepage = "https://github.com/mkleczek/pgwrh";
-    license = [ lib.licenses.agpl3Plus lib.licenses.agpl3Only lib.licenses.postgresql lib.licenses.bsd0 ];
+    license = [ lib.licenses.agpl3Plus lib.licenses.agpl3Only lib.licenses.gpl3Only lib.licenses.postgresql lib.licenses.bsd0 ];
     platforms = postgresql.meta.platforms;
   };
 }

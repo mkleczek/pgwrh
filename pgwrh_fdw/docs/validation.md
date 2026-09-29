@@ -3,7 +3,7 @@
 These historical records cover checks on 2026-09-14 and 2026-09-15 before the
 unified 1.0.0 release. Each section states its environment and scope; the initial
 Linux CI result does not cover later changes validated only locally.
-The current tree ships only `pgwrh_fdw--1.0.0.sql` and no upgrade scripts.
+The current tree ships only `pgwrh_fdw--1.0.0-alpha1.sql` and no upgrade scripts.
 
 ## Weighted routing and initial connection failover
 

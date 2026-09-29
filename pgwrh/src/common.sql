@@ -98,7 +98,7 @@ BEGIN
         OR
             pg_catalog.to_regprocedure(format('%I.pg_background_detach_v2(pg_catalog.int4, pg_catalog.int8)', bg_schema)) IS NULL
     THEN
-        RAISE EXCEPTION 'pgwrh requires pg_background 1.6+ with v2 API support';
+        RAISE EXCEPTION 'pgwrh requires the pg_background v2 API; install pg_background 2.0.3 or newer';
     END IF;
 
     EXECUTE format('GRANT USAGE ON TYPE %I.pg_background_handle TO %I', bg_schema, replica_role);
@@ -109,51 +109,8 @@ BEGIN
 END
 $$;
 
-CREATE OR REPLACE FUNCTION add_ext_dependency(_classid regclass, _objid oid) RETURNS void LANGUAGE sql AS
-$$
-    INSERT INTO pg_depend (classid, objid, refclassid, refobjid, deptype, objsubid, refobjsubid)
-    SELECT _classid, _objid, 'pg_extension'::regclass, e.oid, 'n', 0 ,0
-    FROM pg_extension e WHERE e.extname = 'pgwrh'
-$$;
-
 CREATE OR REPLACE FUNCTION select_add_ext_dependency(_classid regclass, oidexpr text) RETURNS text LANGUAGE sql AS
 $$SELECT format('SELECT "@extschema@".add_ext_dependency(%L, %s)', _classid, oidexpr)$$;
 
 CREATE OR REPLACE FUNCTION select_add_ext_dependency(_classid regclass, name_attr text, name text) RETURNS text LANGUAGE sql AS
 $$SELECT format('SELECT "@extschema@".add_ext_dependency(%1$L, (SELECT oid FROM %1$s WHERE %I = %L))', _classid, name_attr, name)$$;
-
-CREATE OR REPLACE FUNCTION is_dependent_object(_classid regclass, _objid oid) RETURNS boolean STABLE LANGUAGE sql AS
-$$
-    SELECT EXISTS (SELECT 1 FROM
-        pg_depend
-            JOIN pg_extension e ON refclassid = 'pg_extension'::regclass AND refobjid = e.oid
-        WHERE
-            e.extname = 'pgwrh'
-        AND
-            classid = _classid
-        AND
-            objid = _objid
-    )
-$$;
-
-CREATE VIEW owned_obj AS
-    SELECT
-        classid,
-        objid
-    FROM
-        pg_depend d JOIN pg_extension e ON
-                refclassid = 'pg_extension'::regclass
-            AND refobjid = e.oid
-    WHERE
-            d.deptype = 'n'
-        AND e.extname = 'pgwrh'
-;
-
-CREATE VIEW owned_server AS
-    SELECT
-        s.*
-    FROM
-        pg_foreign_server s JOIN owned_obj ON
-                classid = 'pg_foreign_server'::regclass
-            AND objid = s.oid
-;

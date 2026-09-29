@@ -20,12 +20,13 @@ EXTVERSION = $(shell grep default_version pgwrh.control | \
                sed -e "s/default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/")
 BUILD = ../.build/pgwrh
 DATA_built = $(BUILD)/pgwrh--$(EXTVERSION).sql
-EXTRA_CLEAN = $(BUILD)
+EXTRA_CLEAN = $(BUILD) .build
 
 MASTER = $(shell tsort src/master/deps.txt | sed -e 's/^/src\/master\//' -e 's/$$/\.sql/'  | xargs echo)
 REPLICA = $(shell tsort src/replica/deps.txt | sed -e 's/^/src\/replica\//' -e 's/$$/\.sql/'  | xargs echo)
 
 PG_CONFIG ?= pg_config
+PG_MAJOR := $(shell $(PG_CONFIG) --version | sed -E 's/^PostgreSQL ([0-9]+).*/\1/')
 
 ifdef NO_PGXS
 # Simple install for systems without pgxs
@@ -47,12 +48,27 @@ uninstall:
 
 else # NO_PGXS
 # Standard pgxs makefile
+MODULE_big = pgwrh
+OBJS = .build/$(PG_MAJOR)/supervisor.o .build/$(PG_MAJOR)/ownership.o
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 
+.build/$(PG_MAJOR)/%.o: src/%.c
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -fPIC -c $< -o $@
+
+.build/$(PG_MAJOR)/%.bc: src/%.c
+	mkdir -p $(dir $@)
+	$(COMPILE.c.bc) -o $@ $<
+
+# The SQL build directory is shared by mixed-major test builds. Relink against
+# the selected major's object even when another major was staged most recently.
+$(shlib): FORCE
+.PHONY: FORCE
+
 endif # NO_PGXS
 
-$(BUILD)/pgwrh--$(EXTVERSION).sql: src/common.sql $(MASTER) $(REPLICA) | prepare
+$(BUILD)/pgwrh--$(EXTVERSION).sql: src/common.sql src/ownership.sql $(MASTER) $(REPLICA) | prepare
 	cat $^ > $@
 
 all: pgwrh.control $(DATA_built)
@@ -64,5 +80,8 @@ STAGE_DIR ?= $(abspath ../.build/testgres-ext)
 stage: all
 	mkdir -p "$(STAGE_DIR)/extension"
 	cp pgwrh.control $(DATA_built) "$(STAGE_DIR)/extension/"
+ifndef NO_PGXS
+	cp $(shlib) "$(STAGE_DIR)/"
+endif
 
 .PHONY: all prepare stage

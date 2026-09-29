@@ -306,7 +306,7 @@ CREATE TRIGGER after_insert AFTER INSERT ON replication_group_config_clone
 CREATE FUNCTION make_sure_daemon_started_on_ping_trigger() RETURNS TRIGGER LANGUAGE plpgsql AS
 $$
 BEGIN
-    PERFORM "@extschema@".start_sync_daemon(tg_argv[0]::real);
+    PERFORM "@extschema@".supervise_sync_daemon();
     RETURN NEW;
 END
 $$;

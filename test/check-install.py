@@ -11,7 +11,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 pg_config = shutil.which(os.environ.get("PG_CONFIG", "pg_config"))
 if pg_config is None:
-    sys.exit("Set PG_CONFIG to a PostgreSQL 18 pg_config executable")
+    sys.exit("Set PG_CONFIG to a PostgreSQL 18 or 19 pg_config executable")
 PG_CONFIG = str(Path(pg_config).resolve())
 
 
@@ -44,7 +44,7 @@ def check_install(stage, log, extensions, options):
     for extension in extensions:
         control = (sharedir / (extension + ".control")).read_text()
         version = re.search(r"^default_version\s*=\s*'([^']+)'", control, re.M)[1]
-        assert version == "1.0.0", (extension, version)
+        assert version == "1.0.0-alpha1", (extension, version)
         sql.add(f"{extension}--{version}.sql")
     assert {p.name for p in sharedir.glob("*.sql")} == sql
 
@@ -81,20 +81,22 @@ def main():
         # creates nested bitcode directories. Exercise LLVM with normal RPM
         # staging paths, and test DESTDIR quoting separately without bitcode.
         check_install(directory / "combined-stage", log,
-                      ["pgwrh", "pgwrh_ui", "pgwrh_fdw", "pgwrh_wait"], [])
+                      ["pgwrh", "pgwrh_ui", "pgwrh_fdw", "pgwrh_wait", "pgwrh_gist_extra"], [])
         check_install(directory / "wait-stage", log, ["pgwrh", "pgwrh_ui", "pgwrh_wait"],
-                      ["WITH_FDW=0"])
+                      ["WITH_FDW=0", "WITH_GIST_EXTRA=0"])
         check_install(directory / "fdw-stage", log, ["pgwrh", "pgwrh_ui", "pgwrh_fdw"],
-                      ["WITH_LSN_WAIT=0"])
-        check_install(directory / "sql pgxs stage", log, ["pgwrh", "pgwrh_ui"],
+                      ["WITH_LSN_WAIT=0", "WITH_GIST_EXTRA=0"])
+        check_install(directory / "gist-stage", log, ["pgwrh", "pgwrh_ui", "pgwrh_gist_extra"],
                       ["WITH_LSN_WAIT=0", "WITH_FDW=0"])
+        check_install(directory / "sql pgxs stage", log, ["pgwrh", "pgwrh_ui"],
+                      ["WITH_LSN_WAIT=0", "WITH_FDW=0", "WITH_GIST_EXTRA=0"])
         check_install(directory / "sql no-pgxs stage", log, ["pgwrh", "pgwrh_ui"],
                       ["NO_PGXS=1"])
-        for extension in ("pgwrh", "pgwrh_ui", "pgwrh_wait", "pgwrh_fdw"):
+        for extension in ("pgwrh", "pgwrh_ui", "pgwrh_wait", "pgwrh_fdw", "pgwrh_gist_extra"):
             check_install(directory / (extension + "-standalone-stage"), log,
                           [extension], ["-C", str(ROOT / extension)])
         check_install(directory / "combined space stage", log,
-                      ["pgwrh", "pgwrh_ui", "pgwrh_fdw", "pgwrh_wait"], ["with_llvm=no"])
+                      ["pgwrh", "pgwrh_ui", "pgwrh_fdw", "pgwrh_wait", "pgwrh_gist_extra"], ["with_llvm=no"])
         # Source-built PostgreSQL without PL/Python exports an empty PYTHON
         # through PGXS. Rebuild the assets so an earlier build cannot hide it.
         make(log, "-C", str(ROOT / "pgwrh_ui"), "clean")

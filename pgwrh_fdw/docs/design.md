@@ -4,6 +4,38 @@ This contributor guide describes how `pgwrh_fdw` propagates transaction settings
 and how to maintain its PostgreSQL fork. Read the [user contract](../README.md)
 first; [virtual-server internals](virtual-server-internals.md) covers routing.
 
+## Remote lookup joins
+
+`lookup_join.c` chains the join-path hook and offers a costed CustomPath beside
+the ordinary INNER/SEMI paths. Eligibility requires an independent local scan,
+a strict same-integer-type key equality, supported partition metadata and
+shippability of every remote condition. The existing virtual join hook retains
+its behavior. No user query is executed to construct the plan.
+
+The CustomScan stores only copyable planner nodes. Its children include the
+lookup scan, ordinary shard scans for fallback, and generated ForeignScans over
+parameterized `ROWS FROM (pg_catalog.unnest(...))` relations. Custom expression
+and scan target lists let PostgreSQL perform normal parameter/Var rewriting.
+Synthetic array placeholders in the plan are replaced by executor-owned values
+at cursor creation; cached plans contain no materialized lookup data.
+
+Execution first consumes the local lookup into a spillable spool and a bounded
+row-occurrence index. It builds all parallel arrays from those same rows, using
+the FDW's transmission settings and type output machinery. PostgreSQL partition
+bound helpers assign rows to eligible destinations. Stable row IDs reconnect
+remote INNER results with retained local output columns; SEMI SQL uses EXISTS
+and needs no IDs. Remote matching is never repeated locally on this path.
+
+Foreign children initialize with connection acquisition deferred. Only selected
+destinations enter the normal FDW Begin/Iterate/End lifecycle, preserving
+effective users, actual/virtual routing and transaction context. If the actual
+row/index/payload budget overflows, the node uses the saved ordinary scans and
+local qualification against the spool before returning any results. Local leaves
+use that same qualification path. Rescans reset foreign cursors and reuse the
+materialization unless executor parameters changed. The node advertises neither
+ordering nor parallel/async behavior. See [lookup joins](lookup-joins.md) for
+the SQL contract, bounds, supported topology and EXPLAIN example.
+
 ## Contract
 
 Capture all supported custom parameters on the first configured remote
@@ -75,7 +107,7 @@ per-connection propagation flag can become stale after rollback.
 
 ## Upstream strategy
 
-pgwrh_fdw shares SQL extension and module version `1.0.0` with the pgwrh release.
+pgwrh_fdw shares SQL extension and module version `1.0.0-alpha1` with the pgwrh release.
 This is the only installable version, with no upgrade scripts.
 The initial SQL install script directly defines the final upstream function
 signatures rather than replaying postgres_fdw's historical upgrades. The C
@@ -83,20 +115,24 @@ entry point `pgwrh_fdw_get_connections_1_2` retains its upstream API suffix;
 that suffix is not a pgwrh_fdw release version. Future upstream SQL changes
 must be adapted to pgwrh_fdw's installation script.
 
-This is a **Git subtree in pgwrh**, imported with the existing fork's full history.
-`upstream/postgres_fdw` retains history filtered to `contrib/postgres_fdw`, with
-that directory at the upstream branch's root. The working component lives at
-`pgwrh_fdw/` in pgwrh and keeps its own PGXS Makefile and SQL extension identity.
-The source release and original full-repository commit are recorded separately.
+`upstream/postgres_fdw` and `upstream/postgres_fdw_19` retain unmodified filtered
+PostgreSQL history for their respective majors. One shared graph of functional
+jj changes starts at `fdw_patch_base`, their common upstream ancestor, and keeps
+that standalone layout. Each aggregate has the same functional changes and its
+own pristine upstream tip as parents. Version-specific API adaptations and merge
+resolutions live in the aggregates. Each `fdw_base_MAJOR` bookmarks a separate
+directory-move change whose sole parent is its aggregate (`fdw_base_MAJOR-`).
+The move puts that exact tree, including its tests, under `pgwrh_fdw/MAJOR/`, and
+both moves are parents of `main`. A common build wrapper selects the
+matching directory using `PG_CONFIG`.
 
-The initial history extraction uses Git's `filter-branch --subdirectory-filter`
-on a disposable local clone. It is equivalent in scope to `git subtree split`;
-it efficiently visits the commits affecting this directory. Never run this on
-the original PostgreSQL repository or on the working fork. Future releases use
-the same deterministic extraction, fetch its branch, verify ancestry and merge
-using `git subtree merge --prefix=pgwrh_fdw upstream/postgres_fdw` from the pgwrh root.
-The import helper is `pgwrh_fdw/tools/import-upstream.py`; see
-[UPSTREAM.md](../UPSTREAM.md). No separate fork repository is required.
+The import helper advances only the pristine upstream bookmark and its
+provenance tag. Replace only the aggregate's upstream parent, retain its shared
+patch parents, resolve compatibility conflicts, and test before refreshing its
+directory move with `pgwrh_fdw/tools/refresh-layout.py`. jj then rebases the
+integration. Another major reuses the shared patches with its
+own upstream parent and compatibility resolutions. See [upstream
+maintenance](../UPSTREAM.md) for the update and porting workflow.
 
 Keep pristine upstream history, mechanical namespace/PGXS changes, and behavior
 changes separate. Preserve the upstream PostgreSQL notices; pgwrh_fdw additions
@@ -105,4 +141,4 @@ release merge, audit connection initialization and
 retry, snapshot-taking callers, transaction/subtransaction callbacks, exported
 symbols, new GUCs/SQL objects, and transfer settings. Port upstream fixes before
 claiming the new release tested. Run integration, upstream SQL/isolation, TAP,
-and export checks on PostgreSQL 18, including Linux for ELF coexistence.
+and export checks on each supported PostgreSQL major, including Linux for ELF coexistence.

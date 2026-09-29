@@ -7,6 +7,7 @@
  */
 #include "postgres.h"
 #include "access/xact.h"
+#include "access/htup_details.h"
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_subscription_rel.h"
 #include "fmgr.h"
@@ -23,10 +24,7 @@
 #include "utils/pg_lsn.h"
 #include "utils/syscache.h"
 #include "monitor.h"
-
-#if PG_VERSION_NUM < 180000 || PG_VERSION_NUM >= 190000
-#error "pgwrh_wait supports PostgreSQL 18; use WITH_LSN_WAIT=0 for SQL-only pgwrh"
-#endif
+#include "compat.h"
 
 PG_MODULE_MAGIC;
 PG_FUNCTION_INFO_V1(pgwrh_applied_lsn);
@@ -84,7 +82,7 @@ startup_shared_memory(void)
 	memset(&ctl, 0, sizeof(ctl));
 	ctl.keysize = sizeof(ProgressKey);
 	ctl.entrysize = sizeof(ProgressEntry);
-	progress_table = ShmemInitHash("pgwrh_wait progress", max_subscriptions,
+	progress_table = pgwrh_init_progress_hash("pgwrh_wait progress",
 								  max_subscriptions, &ctl,
 								  HASH_ELEM | HASH_BLOBS | HASH_FIXED_SIZE);
 	progress_lock = &GetNamedLWLockTranche("pgwrh_wait")[0].lock;
@@ -102,9 +100,10 @@ transaction_callback(XactEvent event, void *arg)
 		pending_entry = NULL;
 		pending_bootstrap = false;
 		if (!MyLogicalRepWorker || !MySubscription ||
-			am_tablesync_worker() ||
+			/* Table and sequence synchronization do not establish read watermarks. */
+			!(am_leader_apply_worker() || am_parallel_apply_worker()) ||
 			MySubscription->twophasestate != LOGICALREP_TWOPHASE_STATE_DISABLED ||
-			replorigin_session_origin == InvalidRepOriginId)
+			!pgwrh_has_current_origin())
 			return;
 
 		/*
@@ -122,7 +121,7 @@ transaction_callback(XactEvent event, void *arg)
 			pending_bootstrap = true;
 		}
 		else
-			pending_lsn = replorigin_session_origin_lsn;
+			pending_lsn = pgwrh_current_origin_lsn();
 
 		/* Spooling and worker housekeeping are not applied data commits. */
 		if (!pending_bootstrap && !TransactionIdIsValid(GetTopTransactionIdIfAny()))
@@ -201,7 +200,7 @@ pgwrh_subscription(const char *name, bool require_ready)
 		ereport(ERROR, (errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 						errmsg("cannot wait on a subscription with a pending skipped transaction")));
 	ReleaseSysCache(tuple);
-	if (require_ready && GetSubscriptionRelations(subid, true) != NIL)
+	if (require_ready && pgwrh_has_unready_tables(subid))
 		ereport(ERROR, (errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 						errmsg("subscription \"%s\" has tables that are not ready", name),
 						errhint("Finish initial table synchronization before waiting for a read watermark.")));

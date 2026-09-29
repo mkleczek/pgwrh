@@ -6,6 +6,12 @@ Files: *
 Copyright: 2024-2026 Michal Kleczek
 License: AGPL-3+
 
+Files: pgwrh_gist_extra/*
+Copyright: 2024-2026 Michal Kleczek
+License: GPL-3
+ On Debian systems, the complete GNU General Public License version 3
+ can be found in /usr/share/common-licenses/GPL-3.
+
 Files: pgwrh_ui/vendor/*
 Copyright: none stated in the upstream license
 License: 0BSD

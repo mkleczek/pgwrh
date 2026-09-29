@@ -1,13 +1,13 @@
 EXTENSION = pgwrh_wait
 MODULE_big = pgwrh_wait
 OBJS = src/monitor.o src/wait.o
-DATA = pgwrh_wait--1.0.0.sql
+DATA = pgwrh_wait--1.0.0-alpha1.sql
 
 PG_CONFIG ?= pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 
-$(OBJS): src/monitor.h
+$(OBJS): src/monitor.h src/compat.h
 
 STAGE_DIR ?= $(abspath ../.build/test-stage)
 stage: all
