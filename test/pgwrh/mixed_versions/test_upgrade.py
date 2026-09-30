@@ -179,7 +179,9 @@ def upgrade(old, new, tmp_path, oracle):
                '--old-bindir', old.bin_dir, '--new-bindir', new.bin_dir,
                '--old-datadir', old.data_dir, '--new-datadir', new.data_dir,
                '--old-port', str(old.port), '--new-port', str(new.port),
-               '--socketdir', str(tmp_path)]
+               # pytest's per-test directory can exceed the Unix socket path
+               # limit in CI. The node already uses its shorter private base.
+               '--socketdir', new.base_dir]
     result = subprocess.run(command, cwd=tmp_path, text=True, capture_output=True, timeout=120)
     (tmp_path / 'pg_upgrade.log').write_text(result.stdout + result.stderr)
     assert result.returncode == 0, result.stdout + result.stderr
