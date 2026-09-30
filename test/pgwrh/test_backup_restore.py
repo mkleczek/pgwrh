@@ -18,11 +18,18 @@ def run(node, tool, *args):
 
 
 def snapshot(node):
-    # Include every extension configuration table, not just the policy API.
-    tables = node.execute("""SELECT c::regclass::text FROM pg_extension,
-        unnest(extconfig) c WHERE extname = 'pgwrh' ORDER BY 1""")
-    return {table: node.execute(f"SELECT to_jsonb(t)::text FROM {table} t ORDER BY 1")
-            for (table,) in tables}
+    # Include all extension configuration, including identity sequence state.
+    relations = node.execute("""SELECT c.oid::regclass::text, c.relkind
+        FROM pg_extension e, unnest(e.extconfig) config(oid)
+        JOIN pg_class c ON c.oid = config.oid
+        WHERE extname = 'pgwrh' ORDER BY 1""")
+    return {
+        relation: node.execute(
+            f"SELECT to_jsonb(t)::text FROM (SELECT last_value, is_called FROM {relation}) t"
+            if kind == 'S' else f"SELECT to_jsonb(t)::text FROM {relation} t ORDER BY 1"
+        )
+        for relation, kind in relations
+    }
 
 
 @pytest.mark.parametrize("phase", ["committed", "pending", "in_flight", "credentials_preparing", "credentials_switching"])
@@ -84,6 +91,8 @@ def test_controller_dump_restore(postgres_node_factory, tmp_path, phase):
                 WHERE c.member_role = m.member_role)""")
         assert source.execute("SELECT count(*) FROM pgwrh.credential_generation") == [(2,)]
 
+    # A non-default value proves pg_dump preserves the next job identity too.
+    source.execute("SELECT setval('pgwrh.index_build_job_job_id_seq', 42, true)")
     before = snapshot(source)
     if phase == "in_flight":
         assert before["pgwrh.shard_assigned_host"]
@@ -107,6 +116,7 @@ def test_controller_dump_restore(postgres_node_factory, tmp_path, phase):
         "--section=post-data", "--no-publications", "--no-subscriptions", str(archive))
     target.execute("SELECT pgwrh.sync_publications()")
     assert snapshot(target) == before
+    assert target.execute("SELECT nextval('pgwrh.index_build_job_job_id_seq')") == [(43,)]
     assert target.execute("SELECT * FROM pgwrh.replication_group_lock ORDER BY 1") == locks
     assert target.execute("SELECT * FROM data.events") == [(1, "restored controller data")]
     assert target.execute("""SELECT pubname, schemaname, tablename FROM pg_publication_tables ORDER BY 1, 2, 3""") == source.execute(
