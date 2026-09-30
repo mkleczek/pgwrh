@@ -70,6 +70,28 @@ without a wake-up ping or test-only marker repair. See the
 and the implemented registry/supervisor design. Focused lifecycle checks live in
 `test_managed_objects.py` and `test_daemon_supervisor.py`.
 
+## Concurrent replica indexes
+
+Run `test/pgwrh/test_concurrent_indexes.py` in both `tests-18` and `tests-19`
+after staging the matching extensions. Tests reserve more jobs than capacity
+across two databases, hold launcher transactions and writer waits, and exercise
+cancellation, termination, server restart and exhausted background-worker slots.
+They check invalid-index recovery, unrelated-name protection and partitioned
+layouts. The rollout test adds indexes to serving shards and compares replica
+rows with a publisher oracle after inserts, updates and deletes while a build
+remains active.
+
+`index_build.c` executes each CREATE/DROP CONCURRENTLY in a top-level portal.
+A worker-local object-creation hook records ownership in the first index
+catalog transaction, before PostgreSQL commits its invalid index entry. Thus
+even an interrupted build has durable provenance; no reconciliation pass
+adopts an object merely because its name matches a queued job. Final status
+bookkeeping is a separate transaction and can be repeated after interruption.
+Named DSM stores only live reservations, with generation fencing for delayed
+workers. Durable job intent and retry diagnostics are extension configuration
+data and survive upgrade or restore. The admission mechanism also works without
+the supervisor preload.
+
 ## Controller backup and restore
 
 `test/pgwrh/test_backup_restore.py` performs real `pg_dump`, `pg_dumpall` and

@@ -49,7 +49,7 @@ uninstall:
 else # NO_PGXS
 # Standard pgxs makefile
 MODULE_big = pgwrh
-OBJS = .build/$(PG_MAJOR)/supervisor.o .build/$(PG_MAJOR)/ownership.o
+OBJS = .build/$(PG_MAJOR)/supervisor.o .build/$(PG_MAJOR)/ownership.o .build/$(PG_MAJOR)/index_build.o
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 

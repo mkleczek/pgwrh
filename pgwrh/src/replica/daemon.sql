@@ -343,7 +343,15 @@ BEGIN
                 END IF;
             END IF;
         END LOOP;
-        RETURN FOUND;
+        -- Index admission is separate from the synchronous plan: an active or
+        -- capacity-limited build must not keep the pass loop busy or suppress
+        -- reports about healthy shards. The launcher commits durable intent
+        -- before its workers start catalog work.
+        DECLARE had_commands boolean := FOUND;
+        BEGIN
+            PERFORM "@extschema@".bg_exec_wait('SELECT "@extschema@".schedule_index_builds()::text');
+            RETURN had_commands;
+        END;
     ELSE
         RETURN FALSE;
     END IF;
@@ -359,9 +367,14 @@ $$;
 CREATE OR REPLACE PROCEDURE sync_replica_worker() LANGUAGE plpgsql AS
 $$
 BEGIN
-    WHILE "@extschema@".bg_query_bool('SELECT "@extschema@".sync_step()') LOOP
+    LOOP
+        DECLARE again boolean;
+        BEGIN
+            again := "@extschema@".bg_query_bool('SELECT "@extschema@".sync_step()');
+            PERFORM "@extschema@".bg_exec_wait('SELECT ''ignored'' FROM "@extschema@".report_state()');
+            EXIT WHEN NOT again;
+        END;
     END LOOP;
-    PERFORM "@extschema@".bg_exec_wait('SELECT ''ignored'' FROM "@extschema@".report_state()');
     PERFORM "@extschema@".bg_exec_wait('SELECT ''ignored'' FROM "@extschema@".cleanup_analyzed_pg_class()');
 END
 $$;

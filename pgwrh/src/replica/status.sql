@@ -88,6 +88,8 @@ CREATE VIEW local_shard_index AS
             JOIN pg_index i ON i.indrelid = ls.reg_class
             JOIN rel ic ON ic.reg_class = i.indexrelid
     WHERE
+        i.indisvalid AND
+        EXISTS (SELECT FROM owned_obj o WHERE o.classid = 'pg_class'::regclass AND o.objid = i.indexrelid) AND
         NOT EXISTS (SELECT 1 FROM
             pg_constraint
             WHERE conindid = i.indexrelid
@@ -95,7 +97,7 @@ CREATE VIEW local_shard_index AS
 ;
 COMMENT ON VIEW local_shard_index IS
 $$
-Indexes on local shards except constraint indexes.
+Valid, completed indexes on local shards except constraint indexes.
 $$;
 
 -- Advertise only complete, physically local partition trees. Subscription

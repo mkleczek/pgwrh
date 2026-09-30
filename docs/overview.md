@@ -117,6 +117,26 @@ A typical rollout proceeds as follows, with management calls on the controller:
    again before accepting the configuration. Some replica cleanup and optional
    aggregation can continue afterward.
 
+Replica index templates are built with `CREATE INDEX CONCURRENTLY` on physical
+shards, including the leaves of partitioned layouts. Routing parents are not
+recursively indexed. Existing copies continue serving reads and applying
+replication during the build; rollout readiness requires valid completed
+indexes. PostgreSQL can still wait for old writers or snapshots during a
+concurrent build.
+
+The server admits at most `max_worker_processes / 2` managed indexing tasks
+across all its databases, with one task per physical table. Reservations cover
+startup, lock waits, scans, validation and cleanup. Failed launches and exited
+workers release capacity. A failed build's owned invalid index is dropped
+concurrently and rebuilt; an unrelated same-named object is never adopted or
+removed. Retries use exponential backoff capped at 60 seconds.
+
+On a replica, administrators can inspect `pgwrh.index_build_status` for the
+table and index names, worker PID, PostgreSQL phase, current locker and blocking
+PIDs, attempt count, last SQLSTATE/message and next retry time.
+`pgwrh.index_build_tasks()` lists reservations across the server, including
+admitted jobs that have not reached PostgreSQL's progress view yet.
+
 Partition membership follows these rollout boundaries too. New partitions enter
 replicas when a rollout snapshots them. Dropping or detaching a partition on the
 controller keeps its existing replica copies and routes until a committed
