@@ -1,6 +1,6 @@
 # Replica writes and safe shard handoff: change plan
 
-Status: proposed implementation plan, updated 2026-09-27. This document plans changes;
+Status: proposed implementation plan, updated 2026-11-02. This document plans changes;
 it does not create the jj graph or claim that the protocol has been verified.
 
 GitHub tracking: [Replica writes and safe shard handoff](https://github.com/users/mkleczek/projects/1).
@@ -74,6 +74,31 @@ requiring independently committed database participants are rejected.
   a global commit journal, and a physical/logical backup format are design
   options, not prescribed implementations. Synchronous replication is not a
   substitute for independently durable recovery history.
+
+## Evaluated evidence and retention abstraction (2026-11-02)
+
+[The frontier evaluation](coordination-frontiers.md) and
+[companion Quint model](../../spec/obligation_frontiers.qnt) assess a common
+representation for authority certificates, durable coverage and retention
+obligations. The original WAL/slot model remains a separate regression model;
+[the evaluation record](../../spec/frontier-evaluation.md) states exact checks,
+source hashes, reached scenarios and remaining refinement obligations.
+
+This is an evaluated design candidate for F01/F02/F08/F09/F12/F14/F15, not a
+runtime implementation or a change to the transaction/durability contract.
+Use immutable scoped facts, componentwise advancement within certified histories,
+and conservative frontiers over all outstanding obligations. Transfer durable
+destination protection before releasing source protection. Different shards
+and unlinked writer histories cannot be collapsed by comparing numeric LSNs.
+
+Preserve explicit writer closure/activation, ordered row apply, local mapping
+and slot mechanics, controlled membership, synchronous durability and recovery
+lineage. No controller registry of every subscriber's live cursor is required;
+local holders can aggregate scoped evidence. CRDT merge laws do not authorize
+conflicting writers, prove that a command persisted, or reconstruct lost history.
+The follow-up work is to refine these abstractions into the F05/F07/F08 runtime
+mechanics and extend their formal models; do not silently replace them with a
+library merge call. The antichain library and pg_dbsp remain optional mechanisms.
 
 ## jj organization
 

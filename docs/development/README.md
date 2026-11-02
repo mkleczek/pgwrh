@@ -21,6 +21,12 @@ records.
 - [FDW virtual-server routing](../../pgwrh_fdw/docs/virtual-server-internals.md).
 - [FDW upstream provenance](../../pgwrh_fdw/UPSTREAM.md).
 
+## Proposed protocols and formal models
+
+- [Replica writes and safe shard handoff plan](replica-writes-plan.md).
+- [Evidence and retention frontier evaluation](coordination-frontiers.md).
+- [Quint model scopes, checks and reproduction](../../spec/README.md).
+
 ## Historical records
 
 These records describe the revisions and environments named in each document;
@@ -51,5 +57,6 @@ shell.nix       PostgreSQL 18 integration-test environment
 nix/            Supporting Nix expressions
 packaging/      RPM, DEB, container, and signed repository build tooling
 examples/compose/  Controller and two-replica demonstration
+spec/           Proposed protocol models, reproducible checks and bounded evidence
 docs/           Project documentation
 ```

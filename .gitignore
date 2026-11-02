@@ -12,3 +12,4 @@ result
 *.bc.tmp
 __pycache__/
 .pytest_cache/
+/_apalache-out/

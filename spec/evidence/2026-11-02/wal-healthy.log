@@ -1,0 +1,6 @@
+[ok] No violation found (17304ms at 58 traces/second).
+Witnesses:
+reachedNewEpoch was witnessed in 940 trace(s) out of 1000 explored (94.00%)
+completedTransfers was witnessed in 824 trace(s) out of 1000 explored (82.40%)
+releasedHistory was witnessed in 292 trace(s) out of 1000 explored (29.20%)
+Use --seed=0x17b47b7 --backend=rust to reproduce.

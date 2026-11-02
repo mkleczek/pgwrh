@@ -1,5 +1,42 @@
 # Writer handoff specification
 
+This directory now has two complementary models. Both describe proposed
+behavior, not the current pgwrh runtime. The original WAL/slot model is restored
+unchanged from historical commit `f400101554339da722a5abf5776915b1725900f2`.
+
+| Model | Scope |
+| --- | --- |
+| `writer_handoff.qnt` | Original one-shard, three-node, one-handoff model with separate commit/flush/feedback, local WAL addresses, slots, mappings and inherited retention. |
+| `obligation_frontiers.qnt` | Two shards, four nodes, up to four writer epochs (A→B→C→A), explicit obligations/pins, generation-scoped receipts and antichain compression. D can remain offline through every handoff. |
+
+The companion checks a candidate evidence/retention abstraction. Its durable
+local transitions, ordered apply and controlled admission are stronger atomic
+abstractions than PostgreSQL provides directly. The models have **not** been
+compositionally proved equivalent. See [the evaluation and bounds](frontier-evaluation.md)
+and [the design candidate](../docs/development/coordination-frontiers.md).
+
+Run the combined pinned gate from the repository root:
+
+```sh
+# Install @informalsystems/quint@0.32.0 in an explicit tool environment first.
+QUINT=/path/to/quint python3 spec/check.py
+# Optional focused exhaustive checks; Java 21+ must be on PATH.
+QUINT=/path/to/quint python3 spec/check.py --verify
+```
+
+The runner defaults to Quint's native evaluator. `QUINT_BACKEND=typescript`
+selects the slower reference evaluator. `--output DIR` chooses the log and
+source-hash manifest directory; the default is `.build/spec`. Quint can download
+its pinned native evaluator and checker on first use. `spec/tlc.json` bounds the
+TLC heap and worker count. Neither TLC schedule is the full asynchronous model:
+`boundedStep` checks one data-bearing handoff, evidence and old-pin collection;
+`boundedRepeatedStep` checks all three handoffs with one data transaction per
+epoch and fixed anchors. TLC exhausts each selected finite graph; random
+campaigns cover broader schedules. Do not describe those checks as a full
+protocol or liveness proof.
+
+## Original WAL and slot model
+
 `writer_handoff.qnt` is an executable Quint design model for moving shard writes
 off the controller. It describes a proposed protocol, not the current pgwrh
 implementation. It deliberately precedes a decision about apply-worker hooks.
