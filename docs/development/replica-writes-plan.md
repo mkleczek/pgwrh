@@ -1,15 +1,17 @@
 # Replica writes and safe shard handoff: change plan
 
-Status: proposed implementation plan, updated 2026-11-02. This document plans changes;
-it does not create the jj graph or claim that the protocol has been verified.
+Status: proposed implementation plan, reconciled with bounded model results on
+2026-11-02. The authority model has finite safety evidence; PostgreSQL refinement,
+model composition, unbounded safety and liveness remain open. This document does
+not create the jj graph or claim that the production protocol is verified.
 
 GitHub tracking: [Replica writes and safe shard handoff](https://github.com/users/mkleczek/projects/1).
-Feature issues F01–F20 group the 122 implementation and formal-specification
+Feature issues F01–F20 group the 126 implementation and formal-specification
 sub-issues; native dependency links track the integration prerequisites.
 
 The target is a controller that remains the sole application write entry point
-but need not retain application shards. It forwards writes to the highest-ranked
-eligible replica for each shard. Replicas preserve enough data and history for
+but need not retain application shards. WRH selects each shard's desired writer;
+the controller forwards writes to its durably authorized active writer. Replicas preserve enough data and history for
 safe writer changes and for disconnected subscribers to resume. Transactions
 requiring independently committed database participants are rejected.
 
@@ -23,6 +25,17 @@ requiring independently committed database participants are rejected.
   migration between logical replicas, and a distributed lease service are out
   of scope. Restart recovery of that controller is in scope. Existing physical
   controller HA remains subject to its external single-primary guarantee.
+- Keep WRH as the desired-assignment policy. The handoff safety contract must
+  hold for any authorized candidate, independently of rank. Capture the
+  candidate and immutable placement revision in durable intent; a newer desired
+  revision does not retarget an operation after closure has started. Complete
+  that operation, then reconcile the newer revision.
+- Persist the handoff phases `writing → planned → closing → sealed → opening →
+  writing`. Cancellation is allowed only in `planned`, before CLOSE can escape.
+  Persist controller activation before emitting OPEN; publish the new route only
+  after the successor grant/BEGIN is durable. Restart recovers journal authority
+  and phase, never the latest desired WRH assignment. Closed-epoch fences survive
+  logical-copy removal; compacting authority metadata needs its own proof.
 - Planned handoff must preserve all completed commits and settle in-flight
   work. Failure after a durable terminal epoch record can be recoverable without
   the old writer. Failure before a terminal prefix can be established blocks
@@ -100,6 +113,67 @@ The follow-up work is to refine these abstractions into the F05/F07/F08 runtime
 mechanics and extend their formal models; do not silently replace them with a
 library merge call. The antichain library and pg_dbsp remain optional mechanisms.
 
+The [selection-independent controller model](../../spec/controller-handoff.md)
+adds separate durable handoff phases, outstanding remote transactions, delayed
+commands, arbitrary candidate requests, topology changes and controller restart.
+Its bounded TLC instances explore the full asynchronous relation; the original
+WAL and frontier checks remain complementary, without a composition proof.
+Recovery uses durable journal authority, not the latest WRH result. Closed-epoch
+tombstones survive logical-copy removal so stale commands cannot reopen writers.
+The linked protocol records exact verification bounds and runtime refinements.
+
+## Bounded baseline and remaining gates
+
+The [accepted controller protocol](../../spec/controller-handoff.md) and its
+[source-hashed evidence manifest](../../spec/evidence/2026-11-02-controller-handoff/summary.json)
+record **74 directed scenarios** (11 WAL, 26 frontier, 37 controller) and
+**4,100 seeded traces**, all passing. These include negative/guard scenarios;
+the incorrect actions are excluded from exploration schedules.
+
+| Full asynchronous TLC instance | Explicit bounds | Distinct states | Remaining |
+| --- | --- | --- | --- |
+| `handoff_exhaustive` | Two nodes, three epochs, two transaction admissions, one placement revision, one controller crash | 2,088,648 | 0 |
+| `handoff_three_node_exhaustive` | Three nodes, four epochs, **zero application transactions**, one placement revision, one controller crash | 8,500,792 | 0 |
+
+Both graphs complete without an invariant violation, subject to TLC's recorded
+fingerprint-collision probability. Node crash/restart and command/stream
+interleavings are unrestricted within those finite instances. The three-node
+case checks authority mechanics without payloads. Four-node simulations and
+directed A→B→C→A scenarios use broader bounds; they are not exhaustive proofs.
+The two existing focused retention graphs also pass (126 and 42 distinct states).
+
+WRH is an input policy; the authority model admits any candidate authorized by
+the captured placement revision. Later desired revisions do not retarget a
+closing operation. The model checks durable phase recovery, stale-command
+rejection and prefix/retention contracts, while abstracting PostgreSQL commit,
+apply, certificate discovery and pin installation. Storage survives modeled
+crashes. The three models have **no composition/refinement proof**. Unbounded
+safety, liveness, permanent storage loss, new incarnations, synchronous-policy
+changes, actual FDW participant admission, multi-shard transaction composition,
+schema readiness and PITR remain unproved here. Exclusive controller authority
+is an external assumption; consensus and all controller/shard election remain
+out of scope.
+
+| Remaining obligation | Tracked tasks | Required evidence before calling it complete |
+| --- | --- | --- |
+| Compose authority, WAL and retention | F01.6 [#48](https://github.com/mkleczek/pgwrh/issues/48), F01.7 [#225](https://github.com/mkleczek/pgwrh/issues/225) | Executable abstraction/assume-guarantee relations; replace operational ghost ordinals and globally visible facts with implementable identities and locally obtainable evidence. Split atomic actions at real persistence/reply boundaries. |
+| Generalize safety beyond finite bounds | F01.8 [#226](https://github.com/mkleczek/pgwrh/issues/226) | A machine-checked inductive theorem with stated node/epoch/history/revision/restart scope and validated reductions. Larger simulations or finite graphs do not close this task. |
+| Establish progress and application availability | F01.9 [#227](https://github.com/mkleczek/pgwrh/issues/227), F17.3 [#141](https://github.com/mkleczek/pgwrh/issues/141) | Fairness/eventual-stability assumptions, temporal progress properties, queue/error/uncertain-COMMIT behavior and a measurable planned-handoff pause/latency contract. Possible progress is not eventual completion. |
+| Refine writer closure and FDW pins | F06.2 [#71](https://github.com/mkleczek/pgwrh/issues/71), F10.2 [#93](https://github.com/mkleczek/pgwrh/issues/93), F10.5 [#96](https://github.com/mkleczek/pgwrh/issues/96), F12.3 [#108](https://github.com/mkleczek/pgwrh/issues/108) | A PostgreSQL writer-side barrier over surviving backends, late dispatch and actual participant/epoch pins, including earlier reads and savepoints. Unknown connection/COMMIT outcomes cannot certify drain or trigger automatic replay. |
+| Refine journal, certificates and grant ordering | F03.2 [#57](https://github.com/mkleczek/pgwrh/issues/57), F12.2 [#107](https://github.com/mkleczek/pgwrh/issues/107), F12.4 [#109](https://github.com/mkleczek/pgwrh/issues/109), F13.2–3 [#114](https://github.com/mkleczek/pgwrh/issues/114)/[#115](https://github.com/mkleczek/pgwrh/issues/115) | Concrete catalog/WAL transactions and locks, discoverable durable END/acceptance/BEGIN evidence, journal activation before OPEN, durable successor grant before route publication, and restart reconciliation without desired-rank promotion. |
+| Refine commit, apply and durable feedback | F05.1–2 [#66](https://github.com/mkleczek/pgwrh/issues/66)/[#67](https://github.com/mkleczek/pgwrh/issues/67), F07.1 [#75](https://github.com/mkleczek/pgwrh/issues/75), F07.3/5 [#77](https://github.com/mkleczek/pgwrh/issues/77)/[#79](https://github.com/mkleczek/pgwrh/issues/79) | Reproducible probes on both supported PostgreSQL majors; row effects, original marker and cursor committed together; separate commit/flush/feedback crash windows; ordered deduplicated replay and correct origin filtering. |
+| Refine replay promises and physical retention | F08.1/3/5/6 [#80](https://github.com/mkleczek/pgwrh/issues/80)/[#82](https://github.com/mkleczek/pgwrh/issues/82)/[#84](https://github.com/mkleczek/pgwrh/issues/84)/[#85](https://github.com/mkleczek/pgwrh/issues/85), F12.5–6 [#110](https://github.com/mkleczek/pgwrh/issues/110)/[#111](https://github.com/mkleczek/pgwrh/issues/111) | Durable successor pin/slot/mapping installation before source release, original-to-local LSN translation, checkpoint-safe slot mutation, decoder/catalog retention and aggregation over every shard sharing a slot. A snapshot alone supplies no earlier replay history. |
+| Expand identity and failure contracts | F01.3/5 [#45](https://github.com/mkleczek/pgwrh/issues/45)/[#47](https://github.com/mkleczek/pgwrh/issues/47), F11.1 [#99](https://github.com/mkleczek/pgwrh/issues/99), F13.1/4 [#113](https://github.com/mkleczek/pgwrh/issues/113)/[#116](https://github.com/mkleczek/pgwrh/issues/116) | New node/storage/resource incarnations, permanent storage loss, protected-success prefixes and required-follower policy transitions. Availability or a high rank cannot replace a valid closure/recovery certificate. |
+| Prove authority-metadata compaction | F12.8 [#228](https://github.com/mkleczek/pgwrh/issues/228) | Preserve stale-command rejection and recovery when deleting/compacting journal, command, certificate and tombstone history; keep compaction disabled until its contract is proved. This is separate from data/WAL and disaster-recovery retention. |
+| Verify the remaining composition boundaries | F01.4 [#46](https://github.com/mkleczek/pgwrh/issues/46), F09.1 [#87](https://github.com/mkleczek/pgwrh/issues/87), F15.1 [#126](https://github.com/mkleczek/pgwrh/issues/126), F16.3 [#137](https://github.com/mkleczek/pgwrh/issues/137), F18–F20 [#154](https://github.com/mkleczek/pgwrh/issues/154)–[#156](https://github.com/mkleczek/pgwrh/issues/156) | Actual single-participant admission and co-located shard transactions, snapshot/bootstrap, schema compatibility, multi-position visibility and consistent disaster recovery each need their own contracts and checks. The handoff baseline does not discharge them. |
+| Connect formal evidence to production gates | F17.1 [#139](https://github.com/mkleczek/pgwrh/issues/139), F13.6 [#118](https://github.com/mkleczek/pgwrh/issues/118), F17.2 [#140](https://github.com/mkleczek/pgwrh/issues/140) | Pinned CI checks and source/log hashes, nonvacuous witnesses, an invariant-to-code/test matrix, and deterministic PostgreSQL 18/19 failures at every command/commit/flush/feedback/slot boundary. Keep runtime issues open until their implementation gates pass. |
+
+Start concrete closure/journal and decoding/apply/slot probes now, while formal
+composition and fault-contract work proceeds in parallel. Proof-input links
+above do not introduce backwards runtime-integration dependencies or change the
+existing shared FDW patch graph. The bounded baseline advances formal evidence;
+it does not close the production, synchronous-durability or F18–F20 recovery gates.
+
 ## jj organization
 
 There are two review levels: **feature grouping changes** and their **small
@@ -167,23 +241,28 @@ dependent runtime implementations are committed to an unsuitable design.
 
 ## F01 — Protocol contract and formal foundations
 
-Goal: replace the current single-handoff draft with an explicit contract and
-reusable executable models. Start from [the existing specification](../../spec/README.md),
-preserving its useful scenarios and recording which assumptions change.
+Goal: refine the evaluated models into implementable, composable contracts and
+explicit proofs. Preserve [the specification's](../../spec/README.md) scenarios,
+source-hashed evidence and declared bounds; record which assumptions change.
 
 | Change | Goal and scope |
 | --- | --- |
 | F01.1 — Fix the scope | Write the transaction, durability, single-controller, and failure contracts above. Remove the draft's proposed 2PC implementation boundary from the active design. Define supported operations and deliberate rejection behavior. |
-| F01.2 — Pin the specification toolchain | Add reproducible Quint tooling, type checks, deterministic scenarios, bounded checks, seeded simulation, and saved counterexamples. Report explored bounds and handoff coverage separately; a passing shallow check is not a proof. |
+| F01.2 — Pin the specification toolchain | Preserve the accepted Quint 0.32.0 runner, type checks, 74 directed scenarios, 4,100 seeded traces and completed bounded graphs. Integrate pinned CI checks, source/log hashes and required reachability witnesses; report each graph's bounds and zero unexplored states. Tooling evidence does not discharge runtime or unbounded proof tasks. |
 | F01.3 — Model identities and repeated epochs | Replace operational dependence on ghost transaction ordinals with implementable source-stream ordering and epoch predecessor certificates. Model shard/node incarnations, repeated A→B→C→A changes, and changing ranks. Keep ghost history only for assertions. |
 | F01.4 — Specify transaction admission | Add a separate formal model of actual participants, reads before writes, local durable effects, savepoints, route pins, and abort. Prove/check that no accepted writable transaction can commit effects through independent participants. |
 | F01.5 — Specify crash boundaries | Distinguish received, locally committed, flushed, replication-acknowledged, client-acknowledged, and checkpointed state. Add permanent storage loss, synchronous follower sets, controller restart, delayed commands, unknown remote COMMIT, and old backends. State exactly when promotion must block. |
-| F01.6 — Add the refinement ledger | Map every model action and invariant to its future WAL record, SQL transaction, lock, worker, and test. Record unproved assumptions, required fairness for progress, and capability decisions from F05. |
+| F01.6 — Add the refinement ledger | Extend the controller protocol's action/invariant ledger into concrete WAL records, SQL transactions, locks, workers, local evidence and tests. Mark bounded-checked, assumed and unproved obligations separately; record F05 capabilities and the #225–#228 proof work. |
+| F01.7 — Compose authority, WAL and retention model refinements | [#225](https://github.com/mkleczek/pgwrh/issues/225): define and check abstraction/assume-guarantee relations between all three models, remove operational reliance on ghost knowledge, and split atomic actions at actual persistence/message boundaries. |
+| F01.8 — Establish an inductive safety proof beyond finite handoff bounds | [#226](https://github.com/mkleczek/pgwrh/issues/226): state a parameterized theorem and prove inductive strengthening/generalization over identities, nodes, epochs, histories, revisions and restarts; retain explicit gaps until proved. |
+| F01.9 — Specify conditional handoff liveness and application availability | [#227](https://github.com/mkleczek/pgwrh/issues/227): verify temporal progress under explicit fairness and stability assumptions; define queued request, uncertain-COMMIT and planned-handoff availability contracts separately from safety. |
 
 Gate: executable scenarios reach repeated handoff and the critical crash windows.
 Expected-bad variants fail for early acknowledgment, forgotten retention,
 overlapping writers, and a second commit participant. All later formal changes
 extend this ledger; none is allowed to silently weaken the safety contract.
+The recorded finite authority graphs satisfy their bounded safety gates. They
+do not complete F01.3–F01.9 or establish a composed PostgreSQL protocol proof.
 
 ## F02 — Replicated control metadata and scoped feedback
 
@@ -214,9 +293,9 @@ Goal: represent placement, write authority, and history eligibility separately.
 | Change | Goal and scope |
 | --- | --- |
 | F03.1 — Persist rank order | Expose deterministic per-shard ranks over assigned holders, including tie-breaking and placement revision. Keep existing AZ/copy-count selection separate from ordering the selected holders. |
-| F03.2 — Represent active ownership | Add shard incarnation, writer epoch, desired writer, active writer, transition ID, and phase. Changing a weight or desired assignment creates a transition request instead of immediately changing the write route. |
+| F03.2 — Represent active ownership | Persist shard incarnation, writer epoch, WRH desired writer, active writer, immutable operation/revision and phase. Recover authority from the durable journal; changing weights or desired assignment creates a request, not a route change. Keep a closing operation frozen until completion. |
 | F03.3 — Track eligibility | Distinguish data-ready, schema-ready, writable, donor-ready, and history baseline. A reachable high-ranked copy may still be ineligible; an eligible lower-ranked holder is used only after an authorized handoff. |
-| F03.4 — Reconcile membership safely | Plan predecessor streams across current/target revisions. Serialize overlapping changes for a shard and retain outgoing sources/resources until readers and history consumers can leave them. |
+| F03.4 — Reconcile membership safely | Plan predecessor streams across current/target revisions. Serialize operations per shard; permit cancellation only before closure, complete frozen intent despite newer desired revisions, and retain outgoing copies/streams until authority, readers and history consumers can leave them. |
 
 Gate: rank changes, ties, offline members, and new replicas cannot create two
 active writers or prematurely remove a required donor.
@@ -413,13 +492,14 @@ Goal: safely move write authority, including when another replica is offline.
 
 | Change | Goal and scope |
 | --- | --- |
-| F12.1 — Refine the complete handoff model | Specify the durable phases, retry/rollback boundaries, repeated handoffs, concurrent placement changes, and inherited retention. Model the exact transition from rank streams to historical catch-up and back. |
-| F12.2 — Persist transition intent | Record operation ID, old/new writers, expected epoch, placement revision, and phase before issuing remote commands. Make commands and reports idempotent and reconcile observed state instead of assuming command success. |
-| F12.3 — Pause, drain, and seal | Close controller admission, wait for controller pins and writer-side transactions, then commit and flush `END_EPOCH` with terminal watermark and frozen retention obligations. A disconnected FDW connection is not proof of remote drain. |
-| F12.4 — Qualify and activate the successor | Require the terminal prefix, compatible schema, retained history, and the new durability policy's required followers. Persist successor acceptance, commit/protect `BEGIN_EPOCH` linked to END, publish the active route, and only then reopen admission. |
+| F12.1 — Refine the complete handoff model | Preserve the selection-independent bounded phase/restart baseline. Compose it with the WAL/frontier contracts in #225; refine actual command/reply loss, discovered certificates, inherited slots and rank-stream → historical-repair → ordinary-stream boundaries. The three separate models are not a composition proof. |
+| F12.2 — Persist transition intent | Persist operation ID, predecessor epoch, source/target, captured placement revision and phase before commands. Cancel only in `planned`, before CLOSE can escape; after closure begins complete frozen intent before newer revisions. Reconcile durable evidence and retries rather than assuming replies prove persistence. |
+| F12.3 — Pause, drain, and seal | Durably close controller admission; enforce a real writer-side barrier over surviving transactions, late dispatch, participant/epoch pins and earlier-read transactions. Only after settlement commit/flush `END_EPOCH` with its terminal watermark and frozen retention obligations. Neither connection loss nor restart-local lock loss proves remote drain. |
+| F12.4 — Qualify and activate the successor | Require terminal data/replay coverage, schema and required durability followers. Persist successor acceptance and retention protection; durably record controller activation before OPEN; commit/protect the successor grant/`BEGIN_EPOCH` linked to END before publishing its route and reopening admission. Refine every intervening crash/reply window. |
 | F12.5 — Install replacement subscriber slots | Pause/drain the old stream and read its durable cursor Q. Clone the successor's existing history anchor, advance to the mapped Q boundary, and durably install a uniquely identified replacement stream with `origin=any`. |
 | F12.6 — Finish catch-up and transfer obligations | Apply through the predecessor END, then switch the same stream to ordinary origin filtering at a verified transaction boundary. Acknowledge durable installation separately; retain the inherited floor until its obligations are covered. |
-| F12.7 — Retire old resources | Drop old subscriptions/slots and release copies only after their data, routing, and retention obligations have replacements. Define cancellation before sealing and completion/recovery after sealing; never undo a committed epoch by reverting metadata alone. Preserve F19 recovery coverage when retiring a former source; live subscriber catch-up does not discharge backup-history obligations. |
+| F12.7 — Retire old resources | Drop old subscriptions/slots and release copies only after data, routing and history obligations have durable replacements. Cancellation ends before closure starts; never undo a committed epoch by reverting metadata alone. Preserve closed-epoch authority metadata across copy deletion pending F12.8. Preserve F19 coverage: live subscriber catch-up does not discharge backup-history obligations. |
+| F12.8 — Specify safe authority-metadata retention and compaction | [#228](https://github.com/mkleczek/pgwrh/issues/228): prove when journal entries, command identities, certificates and tombstones can be compacted while rejecting late commands across restart, writer reuse, copy removal and node/storage incarnation changes. Separate this from data/WAL retention. |
 
 Gate: A→B→C→A succeeds with one subscriber disconnected through several
 epochs and later catching up. No new write is admitted before the successor is
@@ -433,9 +513,9 @@ required before production enablement, not optional hardening after handoff.
 
 | Change | Goal and scope |
 | --- | --- |
-| F13.1 — Refine recovery formally | Add crash/restart at each handoff phase, independent command and reply loss, stale worker generations, slot rollback after checkpoint, and old remote backends surviving controller restart. Check safety and conditional progress separately. |
-| F13.2 — Recover controller admission | Reconstruct transition state and keep affected shards closed until remote state is reconciled. Finish or terminate-and-verify surviving remote transactions through writer-side barriers before sealing; expired sessions/timeouts alone are insufficient. |
-| F13.3 — Recover writer and apply workers | Restore durable epochs/cursors, resume indexing and slot installation, and reject obsolete commands. A recovering former writer must remain closed after its epoch was sealed. |
+| F13.1 — Refine recovery formally | Extend the bounded journal/restart model with real persistence/discovery/reply boundaries, stale worker/resource incarnations, checkpoint rollback, permanent storage loss and protected-success recovery. Compose via #225; track unbounded safety #226 and conditional progress #227 separately. |
+| F13.2 — Recover controller admission | Recover from durable journal authority and phase, not desired rank. Restore routing only in `writing`/`planned` with a valid grant; resume `closing`/`sealed`/`opening` without prematurely reopening admission. Reconcile unknown COMMIT and surviving backends through writer-side barriers; sessions/timeouts alone are insufficient. |
+| F13.3 — Recover writer and apply workers | Restore durable epochs/cursors and closed-epoch fences, resume indexing/slots and reject obsolete commands. A sealed former writer stays closed after restart or logical-copy removal/re-addition. Specify new storage/node incarnation admission separately; the current crash model preserves storage. |
 | F13.4 — Classify failed-writer cases | Continue from a valid durable END, or a formally specified synchronous-recovery certificate covering all protected successes and closing old admission. Reconcile possible in-flight commits and survivor evidence. Otherwise wait for authoritative recovery; never select the next ranked replica just on connection failure. |
 | F13.5 — Recover partial resource operations | Reconcile crashes during slot creation, cloning, advancement, attachment, acknowledgment, and drop. Identify objects by generation and operation ID; safely replay or clean up orphans without deleting a live obligation. |
 | F13.6 — Exercise real failure schedules | Translate model counterexamples into integration tests covering kill/restart, delayed packets/feedback, storage restart, ambiguous COMMIT, and missing slots. Verify previously returned commits under the stated durability policy. |

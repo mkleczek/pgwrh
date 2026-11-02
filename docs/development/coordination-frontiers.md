@@ -10,6 +10,12 @@ now separate physical WAL/slot mechanics from repeated handoff and evidence
 composition. The recorded checks and their limits are in
 [the evaluation record](../../spec/frontier-evaluation.md).
 
+The later [controller handoff specification](../../spec/controller-handoff.md)
+extends authority modeling independently of writer selection, including
+controller restart and topology changes. It retains WRH for desired assignment
+and adds no election/consensus protocol. Its verification record is separate
+from the fixed-rotation frontier evaluation below.
+
 ## Assessment
 
 The candidate is feasible at the bounded abstract-model level. A common model

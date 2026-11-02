@@ -25,6 +25,7 @@ records.
 
 - [Replica writes and safe shard handoff plan](replica-writes-plan.md).
 - [Evidence and retention frontier evaluation](coordination-frontiers.md).
+- [Selection-independent controller handoff specification](../../spec/controller-handoff.md).
 - [Quint model scopes, checks and reproduction](../../spec/README.md).
 
 ## Historical records
