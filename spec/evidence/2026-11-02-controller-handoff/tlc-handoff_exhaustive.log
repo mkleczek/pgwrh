@@ -1,0 +1,44 @@
+[TLC] Compiling to TLA+ (via Apalache)...
+[TLC] Running TLC model checker...
+
+TLC2 Version 2.19 of 08 August 2024
+Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
+(Use the -nowarning option to disable this warning.)
+Running breadth-first search Model-Checking with fp 16 and seed -6437328113921234158 with 1 worker on 10 cores with 2048MB heap and 64MB offheap memory [pid: 78475] (Mac OS X 26.7.1 aarch64, Azul Systems, Inc. 21.0.11 x86_64, MSBDiskFPSet, DiskStateQueue).
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/quint-tlc-s0cLvd/handoff_exhaustive.tla
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/Integers.tla
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/Sequences.tla
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/FiniteSets.tla
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/TLC.tla
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/Apalache.tla
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/Variants.tla
+Parsing file /private/var/folders/rr/z47yyn0x12s8621d201y63wh0000gn/T/Naturals.tla
+Semantic processing of module Naturals
+Semantic processing of module Integers
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module TLC
+Semantic processing of module Apalache
+Semantic processing of module Variants
+Semantic processing of module handoff_exhaustive
+Starting... (2026-11-02 10:04:38)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-11-02 10:04:38.
+Progress(10) at 2026-11-02 10:04:41: 442,385 states generated (442,385 s/min), 36,837 distinct states found (36,837 ds/min), 18,663 states left on queue.
+Progress(22) at 2026-11-02 10:05:42: 11,024,229 states generated (10,581,844 s/min), 550,000 distinct states found (513,163 ds/min), 53,847 states left on queue.
+Progress(25) at 2026-11-02 10:06:42: 19,296,319 states generated (8,272,090 s/min), 995,860 distinct states found (445,860 ds/min), 155,222 states left on queue.
+Progress(27) at 2026-11-02 10:07:42: 26,393,350 states generated (7,097,031 s/min), 1,307,276 distinct states found (311,416 ds/min), 162,400 states left on queue.
+Progress(29) at 2026-11-02 10:08:42: 32,213,735 states generated (5,820,385 s/min), 1,530,330 distinct states found (223,054 ds/min), 134,742 states left on queue.
+Progress(31) at 2026-11-02 10:09:42: 38,430,684 states generated (6,216,949 s/min), 1,754,759 distinct states found (224,429 ds/min), 84,090 states left on queue.
+Progress(36) at 2026-11-02 10:10:42: 44,956,786 states generated (6,526,102 s/min), 2,004,821 distinct states found (250,062 ds/min), 46,774 states left on queue.
+Model checking completed. No error has been found.
+  Estimates of the probability that TLC did not check all reachable states
+  because two distinct states had the same fingerprint:
+  calculated (optimistic):  val = 5.2E-6
+  based on the actual fingerprints:  val = 7.7E-8
+47673225 states generated, 2088648 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 41.
+The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 13 and the 95th percentile is 3).
+Finished in 06min 36s at (2026-11-02 10:11:15)
+
+[ok] No violation found (396865ms).

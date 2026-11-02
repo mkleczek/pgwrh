@@ -1,0 +1,9 @@
+[ok] No violation found (16667ms at 90 traces/second).
+Witnesses:
+repeatedHandoff was witnessed in 123 trace(s) out of 1500 explored (8.20%)
+returnedWriter was witnessed in 42 trace(s) out of 1500 explored (2.80%)
+topologyDuringHandoff was witnessed in 631 trace(s) out of 1500 explored (42.07%)
+restartedDuringHandoff was witnessed in 432 trace(s) out of 1500 explored (28.80%)
+commitWhileControllerDown was witnessed in 265 trace(s) out of 1500 explored (17.67%)
+completedAcrossRevision was witnessed in 214 trace(s) out of 1500 explored (14.27%)
+Use --seed=0x21ccbeb --backend=rust to reproduce.

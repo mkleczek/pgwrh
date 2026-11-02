@@ -13,7 +13,7 @@ import sys
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--verify', action='store_true', help='also exhaust focused finite graphs with TLC')
+    parser.add_argument('--verify', action='store_true', help='also exhaust bounded controller and focused retention graphs with TLC')
     parser.add_argument('--output', type=Path, help='log/manifest directory (default .build/spec)')
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
@@ -26,7 +26,8 @@ def main():
     version = subprocess.check_output([quint, '--version'], text=True).strip()
     if version != '0.32.0':
         parser.error(f'expected Quint 0.32.0, found {version!r}')
-    models = ['spec/writer_handoff.qnt', 'spec/obligation_frontiers.qnt']
+    models = ['spec/writer_handoff.qnt', 'spec/obligation_frontiers.qnt',
+              'spec/controller_handoff.qnt']
     files = models + ['spec/check.py', 'spec/tlc.json']
     manifest = {
         'recorded_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -50,6 +51,9 @@ def main():
          ['repeatedHandoff', 'offlineProgress', 'collectedHistory', 'rejoined']),
         ('frontiers-progress', models[1], 'offlineInit', 'progressStep', 300, 160, 20261103,
          ['repeatedHandoff', 'offlineProgress', 'collectedHistory']),
+        ('controller-failures', models[2], 'init', 'step', 1500, 300, 20261104,
+         ['repeatedHandoff', 'returnedWriter', 'topologyDuringHandoff',
+          'restartedDuringHandoff', 'commitWhileControllerDown', 'completedAcrossRevision']),
     ]
     for label, model, init, step, samples, steps, seed, witnesses in campaigns:
         commands.append((label, ['run', model, f'--backend={backend}', f'--init={init}',
@@ -59,6 +63,10 @@ def main():
         for step in ['boundedStep', 'boundedRepeatedStep']:
             commands.append((f'tlc-{step}', ['verify', models[1], '--backend=tlc',
                 f'--step={step}', '--invariant=safety', '--tlc-config=spec/tlc.json',
+                '--server-endpoint=localhost:18822', '--verbosity=3']))
+        for main in ['handoff_exhaustive', 'handoff_three_node_exhaustive']:
+            commands.append((f'tlc-{main}', ['verify', models[2], f'--main={main}',
+                '--backend=tlc', '--invariant=safety', '--tlc-config=spec/tlc.json',
                 '--server-endpoint=localhost:18822', '--verbosity=3']))
     failed = False
     for label, command in commands:
@@ -80,8 +88,27 @@ def main():
         counts = re.search(r'(\d+) states generated, (\d+) distinct states found, (\d+) states left', text)
         if counts:
             record['tlc_states'] = dict(zip(['generated', 'distinct', 'remaining'], map(int, counts.groups())))
+        depth = re.search(r'depth of the complete state graph search is (\d+)', text)
+        if depth:
+            record['tlc_depth'] = int(depth.group(1))
+        tests = re.search(r'(\d+) passing', text)
+        if tests:
+            record['tests_passed'] = int(tests.group(1))
+        # A successful CLI exit alone must not masquerade as an exhausted graph
+        # or a campaign that actually reached its advertised controller cases.
+        exhausted = (command[0] != 'verify' or
+                     (record.get('tlc_states', {}).get('remaining') == 0 and
+                      'Model checking completed. No error has been found.' in text))
+        required = (['repeatedHandoff', 'returnedWriter', 'topologyDuringHandoff',
+                     'restartedDuringHandoff', 'commitWhileControllerDown', 'completedAcrossRevision']
+                    if label == 'controller-failures' else [])
+        coverage = all(record['witnesses'].get(name, {}).get('witnessed', 0) > 0
+                       for name in required)
+        record['passed'] = result.returncode == 0 and exhausted and coverage
+        if required:
+            record['required_witnesses'] = required
         manifest['checks'].append(record)
-        failed = failed or result.returncode != 0
+        failed = failed or not record['passed']
         manifest['passed'] = not failed
         (output / 'summary.json').write_text(json.dumps(manifest, indent=2) + '\n')
         print(text, end='', flush=True)
